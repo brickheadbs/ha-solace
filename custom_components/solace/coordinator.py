@@ -319,6 +319,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                 manual_switch=bool(saved.get("manual_switch", False)),
                 manual_touched=bool(saved.get("manual_touched", False)),
                 manual_since=saved.get("manual_since"),
+                ambience_open=bool(saved.get("ambience_open", False)),
             )
 
     @callback
@@ -344,6 +345,13 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                     triggers.append(value)
                 elif value:
                     triggers.extend(value)
+            # Zone presence too. The tick READS these (per-zone diminish) but nothing
+            # subscribed to them, so a zone sensor that is not also an area sensor moved
+            # nothing until the next poll. Currently masked on this house — both kitchen
+            # zone sensors are also area sensors — which is exactly why it needed finding
+            # by reading rather than by watching.
+            for zone in subentry.data.get(CONF_ZONES) or ():
+                triggers.extend(zone.get("presence") or ())
         for key in (CONF_SLEEP_TOGGLE, CONF_ALARM_ENTITY):
             if extra := (self.config_entry.options.get(key) or self.config_entry.data.get(key)):
                 triggers.append(extra)
@@ -374,6 +382,10 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                 "manual_switch": room.manual_switch,
                 "manual_touched": room.manual_touched,
                 "manual_since": room.manual_since,
+                # Hysteretic state: without it a restart resets to "bright", and a
+                # restart at dusk with lux between the two thresholds (50-80) leaves the
+                # glow suppressed until lux falls all the way past the *falling* edge.
+                "ambience_open": room.ambience_open,
             }
         await self._store.async_save(payload)
 
@@ -557,9 +569,14 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
 
         for subentry in self._subentries():
             room = self.rooms.get(subentry.subentry_id)
-            settings = self.room_settings(subentry)
-            if room is None or room.is_manual(settings.manual_hold_minutes, dt_util.utcnow().timestamp()):
+            if room is None:
                 continue
+            # ⚠️ **Manual does NOT stop colour.** Owner's spec: "In manual ALL lighting
+            # automation stops (the color sync control keeps working)." Skipping the
+            # colour tick here froze a manual room at whatever Kelvin it happened to
+            # hold, so an evening spent on a manual level stayed at midday white while
+            # the rest of the house warmed. Brightness is still frozen — that is what
+            # manual means — and `_async_apply_light` is where that is enforced.
             for entity_id in subentry.data.get(CONF_LIGHTS, []):
                 state = self.hass.states.get(entity_id)
                 if state is None or state.state != STATE_ON:
@@ -636,7 +653,25 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         alarm = dt_util.parse_datetime(state.state)
         if alarm is None:
             return False
-        return dt_util.utcnow() >= alarm - timedelta(minutes=house.alarm_lead_minutes)
+        now = dt_util.utcnow()
+        lead = timedelta(minutes=house.alarm_lead_minutes)
+
+        # ⚠️ **BOUNDED ON BOTH SIDES.** `now >= alarm - lead` alone is True forever once
+        # the alarm is in the past, and `sensor.pixel_8a_next_alarm` DOES go stale: the
+        # phone only republishes it after an alarm fires (measured 2026-08-13 — the
+        # 06:00 value was still being reported at 06:47). On any night with no alarm set
+        # for tomorrow it holds yesterday's time indefinitely.
+        #
+        # The consequence is the exact failure the latch exists to prevent: he falls
+        # asleep, the latch engages, the stale alarm unlatches it on the very next tick,
+        # and at 3 am the engine recomputes from a pitch-dark lux reading and lights
+        # every occupied room at full demand.
+        #
+        # So an alarm older than `alarm_stale_minutes` is not a wake-up, it is a leftover.
+        # Night mode then ends on lux at dawn, which is the correct fallback.
+        if alarm < now - timedelta(minutes=house.alarm_stale_minutes):
+            return False
+        return now >= alarm - lead
 
     def _update_night_latch(self, asleep: bool, lux: float, house: HouseSettings) -> None:
         """Night mode is LATCHED. This is the correction that matters most.

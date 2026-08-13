@@ -103,6 +103,14 @@ class HouseSettings:
     returns normal logic instead of holding the house at the night level all morning."""
     alarm_lead_minutes: float = 30.0
     """Night mode also ends this long before the next alarm, whichever comes first."""
+    alarm_stale_minutes: float = 120.0
+    """How far in the PAST an alarm may be and still count as a wake-up.
+
+    ``sensor.pixel_8a_next_alarm`` only republishes after an alarm fires (measured: the
+    06:00 value was still being reported at 06:47), so on a night with no alarm set it
+    holds yesterday's time forever. Unbounded, that unlatches night mode the instant he
+    falls asleep — and at 3 am the house lights at full demand. Beyond this, the alarm is
+    a leftover and night mode ends on lux at dawn instead."""
     ambience_level: int = 0
     """Step 9. A low-light *floor* while awake and the gate reads dark. 0 ⇒ feature off."""
     ambience_ignores_occupancy: bool = True
@@ -187,6 +195,10 @@ class HouseSettings:
     """The morning colour release used to be a **step** from night to day Kelvin. Now a
     glide of this length. 0 restores the old snap, and is a setting rather than a
     constant so "never jump" stays the user's call, not the code's."""
+    evening_axis_hour: float = 15.0
+    """Where the evening ramp's axis starts. Any ramp point EARLIER than this is silently
+    read as daytime and contributes nothing — so this must sit before the earliest ramp
+    point you ever want, including midwinter. Was a hardcoded 18.0."""
     ramp_onset_minutes: float = 30.0
     """The evening ramp used to **step** onto its first point. Now it eases in over this
     long. 0 restores the step."""

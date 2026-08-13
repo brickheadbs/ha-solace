@@ -186,7 +186,9 @@ HOUSE_SETTINGS: tuple[Setting, ...] = (
     Setting("colour_rate_safety", "Colour rate safety", 1, 5, 0.05, 1.5, "x", "mdi:shield-half-full"),
     # -- Smoothness (AuDHD rule: never jump) ---------------------------------------
     Setting("morning_glide_minutes", "Morning colour glide", 0, 240, 1, 90, "min", "mdi:weather-sunset-up"),
+    Setting("evening_axis_hour", "Evening starts at", 0, 23.75, 0.25, 15, "h", "mdi:clock-start"),
     Setting("ramp_onset_minutes", "Evening ramp onset", 0, 240, 1, 30, "min", "mdi:ray-start-arrow"),
+    Setting("alarm_stale_minutes", "Ignore alarms older than", 5, 720, 1, 120, "min", "mdi:alarm-off"),
     Setting("demand_floor_level", "Dimmest level while dark", 1, 254, 1, 1, None, "mdi:arrow-collapse-down"),
     # Display only
     Setting("gamma", "Gamma (display only)", 1, 4, 0.01, 2.39, None, "mdi:chart-bell-curve"),

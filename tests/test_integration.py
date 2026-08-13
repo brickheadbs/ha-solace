@@ -539,3 +539,47 @@ async def test_the_colour_clock_follows_the_step_size(hass: HomeAssistant, entry
     )
     await hass.async_block_till_done()
     assert coordinator._colour_interval() < coarse
+
+
+async def test_a_stale_alarm_does_not_unlatch_night_mode(hass: HomeAssistant, entry) -> None:
+    """⚠️ THE 3 AM BLASTER. Verified against the live sensor's own history: the phone
+    only republishes `next_alarm` after an alarm fires, so on a night with no alarm set
+    it holds yesterday's time. Unbounded, `_alarm_released` is then True forever — the
+    latch engages when he falls asleep and is released on the very next tick, and the
+    house lights at full demand the moment he gets up in the dark.
+    """
+    from custom_components.solace.const import CONF_ALARM_ENTITY
+
+    hass.states.async_set("sensor.next_alarm", "2020-01-01T06:00:00+00:00")
+    hass.config_entries.async_update_entry(
+        entry, options={**entry.options, CONF_ALARM_ENTITY: "sensor.next_alarm"}
+    )
+    assert await _setup(hass, entry)
+    coordinator = entry.runtime_data.coordinator
+
+    coordinator._update_night_latch(asleep=True, lux=0.0, house=coordinator.house)
+    assert coordinator._night_active() is True
+
+    coordinator._update_night_latch(asleep=False, lux=0.0, house=coordinator.house)
+    assert coordinator._night_active() is True, "a stale alarm unlatched night mode"
+
+
+async def test_a_real_upcoming_alarm_still_ends_night_mode(hass: HomeAssistant, entry) -> None:
+    """The bound must not break the feature it is protecting."""
+    from datetime import timedelta
+
+    from homeassistant.util import dt as dt_util
+
+    from custom_components.solace.const import CONF_ALARM_ENTITY
+
+    soon = dt_util.utcnow() + timedelta(minutes=10)
+    hass.states.async_set("sensor.next_alarm", soon.isoformat())
+    hass.config_entries.async_update_entry(
+        entry, options={**entry.options, CONF_ALARM_ENTITY: "sensor.next_alarm"}
+    )
+    assert await _setup(hass, entry)
+    coordinator = entry.runtime_data.coordinator
+
+    coordinator._update_night_latch(asleep=True, lux=0.0, house=coordinator.house)
+    coordinator._update_night_latch(asleep=False, lux=0.0, house=coordinator.house)
+    assert coordinator._night_active() is False, "the alarm lead-in stopped working"

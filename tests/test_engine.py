@@ -780,3 +780,27 @@ def test_the_bedroom_transitions_from_dark_to_the_night_level_on_waking(light):
         _input(lux=5.0, occupied=True, night_active=True, asleep=False),
     )
     assert awake.level == 68
+
+
+def test_a_ramp_point_before_the_old_18_00_anchor_is_not_discarded(light):
+    """⚠️ Midwinter. At 54°N sunset is 16:05 and civil dusk 16:50, so a 16:30 ramp point
+    is reasonable — and under the old hardcoded 18:00 axis it wrapped to 22.5, sorted
+    after the morning release, and was read as daytime: zero stops, no error, no log.
+    """
+    house = HouseSettings(
+        ramp=(RampPoint(hour=16.5, stops=-1.0), RampPoint(hour=22.0, stops=-2.0)),
+        ramp_onset_minutes=0.0,
+    )
+    assert ramp_bias(16.5, house) == -1.0
+    assert ramp_bias(22.0, house) == -2.0
+    # ...and still nothing at lunchtime.
+    assert ramp_bias(12.0, house) == 0.0
+
+
+def test_the_axis_anchor_is_a_setting_not_a_literal(light):
+    """Moving the anchor must move which points are reachable, or it is decoration."""
+    ramp = (RampPoint(hour=16.5, stops=-1.0),)
+    reachable = HouseSettings(ramp=ramp, evening_axis_hour=15.0, ramp_onset_minutes=0.0)
+    discarded = HouseSettings(ramp=ramp, evening_axis_hour=18.0, ramp_onset_minutes=0.0)
+    assert ramp_bias(16.5, reachable) == -1.0
+    assert ramp_bias(16.5, discarded) == 0.0

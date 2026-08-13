@@ -165,13 +165,21 @@ def mode_for(night_active: bool) -> Mode:
     return Mode.NIGHT if night_active else Mode.NORMAL
 
 
-def _evening_axis(hour: float) -> float:
+def _evening_axis(hour: float, anchor: float) -> float:
     """Map a clock hour onto an evening-relative axis so midnight is not a cliff.
 
-    ``(clock - 18) % 24`` puts 18:00 at 0, 22:30 at 4.5, 02:00 at 8, 06:30 at 12.5 —
-    monotonic across midnight, which a raw decimal clock is not.
+    ``(clock - anchor) % 24`` makes the evening monotonic across midnight, which a raw
+    decimal clock is not: with the 15:00 anchor, 20:00 is 5, 22:30 is 7.5, 02:00 is 11
+    and the 06:30 release is 15.5.
+
+    ⚠️ **The anchor was the literal 18.0 until 2026-08-13, and that silently discarded
+    ramp points earlier than 18:00.** Any point before the anchor wraps to ~23, which
+    sorts *after* the morning release and is read as daytime — zero stops, no error. At
+    54°N midwinter, sunset is 16:05 and civil dusk 16:50, so a perfectly sensible 16:30
+    ramp point vanished. It is a setting now, and the default moved to 15:00 so the
+    darkest evenings of the year fit inside it.
     """
-    return (hour - 18.0) % 24.0
+    return (hour - anchor) % 24.0
 
 
 def ramp_bias(hour: float, house: HouseSettings) -> float:
@@ -186,13 +194,14 @@ def ramp_bias(hour: float, house: HouseSettings) -> float:
     if not house.ramp:
         return 0.0
 
-    axis = _evening_axis(hour)
-    release = _evening_axis(house.morning_release_hour)
+    anchor = house.evening_axis_hour
+    axis = _evening_axis(hour, anchor)
+    release = _evening_axis(house.morning_release_hour, anchor)
     if axis >= release:
         return 0.0
 
     points = sorted(
-        (RampPoint(hour=_evening_axis(p.hour), stops=p.stops) for p in house.ramp),
+        (RampPoint(hour=_evening_axis(p.hour, anchor), stops=p.stops) for p in house.ramp),
         key=lambda p: p.hour,
     )
     onset = max(house.ramp_onset_minutes, 0.0) / 60.0
