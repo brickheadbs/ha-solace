@@ -124,3 +124,7 @@ brightness fade for 420 s against a clean control. Solace serialises them on tha
   surface and write the same config entry the panel will.
 * **Cutover.** Removing the live blueprint automations is a behaviour change to a working
   house and is gated on an explicit go-ahead.
+
+## Licence
+
+MIT — see [LICENSE](LICENSE).
