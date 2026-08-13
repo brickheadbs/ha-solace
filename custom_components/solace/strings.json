@@ -1,0 +1,63 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Solace",
+        "description": "Solace calculates lighting for the whole house from one outdoor lux sensor. Add rooms afterwards.",
+        "data": {
+          "lux_sensor": "Outdoor illuminance sensor",
+          "dnd_entity": "Do Not Disturb (means asleep)"
+        },
+        "data_description": {
+          "lux_sensor": "The one illuminance sensor. There are no indoor lux sensors; per-room daylight is estimated.",
+          "dnd_entity": "When this is on, Solace treats the house as asleep and switches to night mode."
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "Solace is already set up."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Solace settings",
+        "description": "Every value here is live — a change takes effect immediately, not on the next poll."
+      }
+    }
+  },
+  "config_subentries": {
+    "room": {
+      "title": "Room",
+      "step": {
+        "user": {
+          "title": "Add a room",
+          "description": "Pick the lights and sensors for this room. Light groups appear as single entities.",
+          "data": {
+            "name": "Room name",
+            "lights": "Lights",
+            "presence": "Presence sensor",
+            "near_presence": "Near sub-zone sensor (kitchen only)",
+            "bias_stops": "Room bias",
+            "zone_bias_stops": "Zone bias",
+            "diminish_pct": "Diminish when the near sub-zone is clear",
+            "manual_hold_minutes": "Manual hold after a touch"
+          },
+          "data_description": {
+            "diminish_pct": "A reduction that stays — never an off. 0 disables it.",
+            "manual_hold_minutes": "How long a hand touch holds the room before auto resumes."
+          }
+        },
+        "lights": {
+          "title": "Per-light adjustments",
+          "description": "Bias is an offset added to the house, room and zone biases. The clamp is applied last and survives every other stage."
+        }
+      },
+      "entry_type": "Room",
+      "initiate_flow": {
+        "user": "Add a room",
+        "reconfigure": "Reconfigure this room"
+      }
+    }
+  }
+}

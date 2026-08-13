@@ -1,0 +1,139 @@
+"""Constants and the settings schema.
+
+The settings table below is the **single definition** of every tunable. The number
+platform, the config flow and the panel are all generated from it, so adding a knob is
+one row here rather than four edits that drift apart.
+
+⚠️ **The domain is `solace`, never `sol`.** Two independent reasons:
+
+1. OpenAI ships a top-tier agent called Sol — don't take the name.
+2. ``sol_*`` and ``solar_*`` entity IDs are already live in this house and unrelated
+   (away-mode automations, 10 heating entities). A ``sol_`` prefix would collide with
+   working, non-lighting automations.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from homeassistant.const import Platform
+
+DOMAIN = "solace"
+
+PLATFORMS: list[Platform] = [
+    Platform.BINARY_SENSOR,
+    Platform.NUMBER,
+    Platform.SENSOR,
+    Platform.SWITCH,
+]
+
+SUBENTRY_TYPE_ROOM = "room"
+
+# -- Config keys -------------------------------------------------------------------
+CONF_LUX_SENSOR = "lux_sensor"
+CONF_DND_ENTITY = "dnd_entity"
+CONF_LIGHTS = "lights"
+CONF_PRESENCE = "presence"
+CONF_NEAR_PRESENCE = "near_presence"
+CONF_PER_LIGHT = "per_light"
+CONF_RAMP = "ramp"
+
+# The one illuminance sensor in the house. There are no indoor lux sensors; per-room
+# daylight is estimated, never measured.
+DEFAULT_LUX_SENSOR = "sensor.entry_exterior_illuminance"
+
+# Adaptive update interval bounds (seconds). Scale to how fast the world is moving:
+# tuning ⇒ immediate, lux volatile ⇒ ~30 s, stable+occupied ⇒ 2-5 min, empty ⇒ 10 min.
+DEFAULT_MIN_INTERVAL_S = 30
+DEFAULT_MAX_INTERVAL_S = 600
+
+# HA context ids cap at 36 characters, so the prefix has to be short.
+CONTEXT_PREFIX = "solace"
+
+# Attribute deltas above which a change is treated as a HUMAN touch rather than our own
+# echo. Bulbs echo back values that differ slightly from what was commanded, so exact
+# comparison flags every echo as manual. Adaptive Lighting's measured thresholds.
+MANUAL_BRIGHTNESS_THRESHOLD = 25
+MANUAL_KELVIN_THRESHOLD = 100
+
+
+@dataclass(frozen=True, slots=True)
+class Setting:
+    """One tunable, rendered as a `number` entity and a config-flow field."""
+
+    key: str
+    name: str
+    minimum: float
+    maximum: float
+    step: float
+    default: float
+    unit: str | None = None
+    icon: str | None = None
+    scope: str = "house"
+
+
+#: House-wide settings. Order is the order they appear in the UI.
+HOUSE_SETTINGS: tuple[Setting, ...] = (
+    # Ambient gate
+    Setting("gate_start_lux", "Gate start lux", 0, 2000, 1, 50, "lx", "mdi:weather-sunset-down"),
+    Setting("gate_stop_lux", "Gate stop lux", 0, 2000, 1, 80, "lx", "mdi:weather-sunset-up"),
+    Setting("gate_debounce_falling_s", "Gate debounce falling", 0, 900, 1, 0, "s", "mdi:timer-sand"),
+    Setting("gate_debounce_rising_s", "Gate debounce rising", 0, 900, 1, 0, "s", "mdi:timer-sand"),
+    # Demand
+    Setting("lux_full", "Demand full lux", 0.1, 500, 0.1, 1, "lx", "mdi:brightness-7"),
+    Setting("lux_window", "Demand window", 1, 5000, 1, 539, "lx", "mdi:arrow-expand-horizontal"),
+    # Bias
+    Setting("bias_stops", "House bias", -4, 4, 0.05, 0, "stops", "mdi:tune"),
+    # Levels
+    Setting("night_level", "Night level", 0, 254, 1, 3, None, "mdi:weather-night"),
+    Setting("ambience_level", "Ambience floor", 0, 254, 1, 0, None, "mdi:lightbulb-night"),
+    Setting("min_cutoff", "Minimum cutoff", 0, 254, 1, 1, None, "mdi:arrow-collapse-down"),
+    Setting("rate_limit_step", "Rate limit", 0, 254, 1, 0, None, "mdi:speedometer-slow"),
+    Setting("dead_zone", "Dead zone", 0, 50, 1, 2, None, "mdi:circle-off-outline"),
+    # Transitions — every command sends one explicitly; omitting it inherits a hidden 4 s.
+    Setting("transition_on_s", "Transition on", 0, 60, 0.1, 2, "s", "mdi:transition"),
+    Setting("transition_off_s", "Transition off", 0, 60, 0.1, 4, "s", "mdi:transition"),
+    Setting("transition_mode_s", "Transition mode change", 0, 300, 1, 10, "s", "mdi:transition"),
+    Setting("transition_setting_s", "Transition while tuning", 0, 5, 0.1, 0.5, "s", "mdi:gesture-swipe"),
+    # Colour
+    Setting("day_kelvin", "Day colour", 2000, 9000, 10, 4000, "K", "mdi:white-balance-sunny"),
+    Setting("night_kelvin", "Night colour", 2000, 9000, 10, 2200, "K", "mdi:weather-night"),
+    Setting("colour_glide_minutes", "Colour glide", 1, 240, 1, 90, "min", "mdi:transition"),
+    Setting("colour_trim_kelvin", "Colour trim", -1000, 1000, 10, 0, "K", "mdi:tune-vertical"),
+    Setting("colour_step_mired", "Colour step size", 1, 50, 1, 5, "mired", "mdi:stairs"),
+    Setting(
+        "colour_step_transition_s",
+        "Colour step fade",
+        1,
+        30,
+        0.5,
+        4,
+        "s",
+        "mdi:transition",
+    ),
+    # Timing
+    Setting("morning_release_hour", "Morning release", 0, 23.75, 0.25, 6.5, "h", "mdi:weather-sunny"),
+    # Display only
+    Setting("gamma", "Gamma (display only)", 1, 4, 0.01, 2.39, None, "mdi:chart-bell-curve"),
+)
+
+#: Per-room settings, one set per subentry.
+ROOM_SETTINGS: tuple[Setting, ...] = (
+    Setting("bias_stops", "Room bias", -4, 4, 0.05, 0, "stops", "mdi:tune", scope="room"),
+    Setting("zone_bias_stops", "Zone bias", -4, 4, 0.05, 0, "stops", "mdi:tune", scope="room"),
+    Setting("diminish_pct", "Diminish", 0, 100, 1, 0, "%", "mdi:arrow-down-circle", scope="room"),
+    Setting(
+        "manual_hold_minutes",
+        "Manual hold",
+        0,
+        1440,
+        5,
+        30,
+        "min",
+        "mdi:hand-back-right",
+        scope="room",
+    ),
+)
+
+HOUSE_DEFAULTS = {s.key: s.default for s in HOUSE_SETTINGS}
+ROOM_DEFAULTS = {s.key: s.default for s in ROOM_SETTINGS}

@@ -1,0 +1,238 @@
+"""Config flow — one entry for the house, one **subentry** per room.
+
+Subentries are the intended way to let a user add N of something inside a single
+integration. The alternative an agent reaches for from memory — hand-rolling a
+``.storage`` file, or one config entry per room — is neither, and neither survives a
+core upgrade well.
+
+Constraints worth knowing before designing around them:
+
+* Subentry flows support only ``user`` and ``reconfigure`` steps — no discovery, no reauth.
+* Since 2026-07-21 a device belongs to one config entry and at most one subentry.
+* The parent entry holds everything global.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+import voluptuous as vol
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigFlow,
+    ConfigFlowResult,
+    ConfigSubentryFlow,
+    OptionsFlow,
+    SubentryFlowResult,
+)
+from homeassistant.core import callback
+from homeassistant.data_entry_flow import section
+from homeassistant.helpers.selector import (
+    EntitySelector,
+    EntitySelectorConfig,
+    NumberSelector,
+    NumberSelectorConfig,
+    NumberSelectorMode,
+)
+
+from .const import (
+    CONF_DND_ENTITY,
+    CONF_LIGHTS,
+    CONF_LUX_SENSOR,
+    CONF_NEAR_PRESENCE,
+    CONF_PER_LIGHT,
+    CONF_PRESENCE,
+    DEFAULT_LUX_SENSOR,
+    DOMAIN,
+    HOUSE_SETTINGS,
+    ROOM_SETTINGS,
+    SUBENTRY_TYPE_ROOM,
+    Setting,
+)
+
+
+def _number(setting: Setting) -> NumberSelector:
+    return NumberSelector(
+        NumberSelectorConfig(
+            min=setting.minimum,
+            max=setting.maximum,
+            step=setting.step,
+            mode=NumberSelectorMode.BOX,
+            unit_of_measurement=setting.unit,
+        )
+    )
+
+
+class SolaceConfigFlow(ConfigFlow, domain=DOMAIN):
+    """The house-level flow. One entry per installation."""
+
+    VERSION = 1
+
+    async def async_step_user(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        await self.async_set_unique_id(DOMAIN)
+        self._abort_if_unique_id_configured()
+
+        if user_input is not None:
+            return self.async_create_entry(title="Solace", data=user_input)
+
+        return self.async_show_form(
+            step_id="user",
+            data_schema=vol.Schema(
+                {
+                    # There is exactly one illuminance sensor in this house, and no
+                    # indoor ones — per-room daylight is estimated, never measured.
+                    vol.Required(
+                        CONF_LUX_SENSOR, default=DEFAULT_LUX_SENSOR
+                    ): EntitySelector(
+                        EntitySelectorConfig(domain=["sensor"], device_class="illuminance")
+                    ),
+                    # DND is the definition of "asleep": Brandon's watch turns it on
+                    # automatically when he falls asleep. One signal, three uses.
+                    vol.Optional(CONF_DND_ENTITY): EntitySelector(
+                        EntitySelectorConfig(domain=["binary_sensor", "input_boolean", "switch"])
+                    ),
+                }
+            ),
+        )
+
+    @classmethod
+    @callback
+    def async_get_supported_subentry_types(
+        cls, config_entry: ConfigEntry
+    ) -> dict[str, type[ConfigSubentryFlow]]:
+        return {SUBENTRY_TYPE_ROOM: RoomSubentryFlowHandler}
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
+        return SolaceOptionsFlow()
+
+
+class SolaceOptionsFlow(OptionsFlow):
+    """House-wide tunables.
+
+    ⚠️ Plain ``OptionsFlow``, and ``self.config_entry`` is **only read, never assigned**.
+    Assigning it raises ``AttributeError: property 'config_entry' … has no setter`` — it
+    is a read-only property, and that exact line broke HACS, LocalTuya and
+    better_thermostat when it landed.
+
+    Deliberately *not* ``OptionsFlowWithReload``: this integration wants a **refresh** on
+    a settings change, not a teardown-and-rebuild. The two are mutually exclusive.
+    """
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        if user_input is not None:
+            return self.async_create_entry(data={**self.config_entry.options, **user_input})
+
+        current = self.config_entry.options
+        schema = {
+            vol.Required(
+                setting.key, default=current.get(setting.key, setting.default)
+            ): _number(setting)
+            for setting in HOUSE_SETTINGS
+        }
+        return self.async_show_form(step_id="init", data_schema=vol.Schema(schema))
+
+
+class RoomSubentryFlowHandler(ConfigSubentryFlow):
+    """Add a room: pick its lights and sensors, then dial in each light."""
+
+    def __init__(self) -> None:
+        self._room: dict[str, Any] = {}
+
+    async def async_step_user(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        if user_input is not None:
+            self._room = dict(user_input)
+            return await self.async_step_lights()
+
+        return self.async_show_form(
+            step_id="user",
+            data_schema=vol.Schema(
+                {
+                    vol.Required("name"): str,
+                    # Groups appear here as single entities — a group is a real lock, so
+                    # its members must never be addressed independently.
+                    vol.Required(CONF_LIGHTS): EntitySelector(
+                        EntitySelectorConfig(domain="light", multiple=True)
+                    ),
+                    vol.Optional(CONF_PRESENCE): EntitySelector(
+                        EntitySelectorConfig(domain="binary_sensor")
+                    ),
+                    # Kitchen only. The *near* sub-zone reading clear is what triggers
+                    # diminish — a reduction that stays, never an off.
+                    vol.Optional(CONF_NEAR_PRESENCE): EntitySelector(
+                        EntitySelectorConfig(domain="binary_sensor")
+                    ),
+                    **{
+                        vol.Required(s.key, default=s.default): _number(s)
+                        for s in ROOM_SETTINGS
+                    },
+                }
+            ),
+        )
+
+    async def async_step_lights(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Per-light overrides, one row per light chosen in the previous step.
+
+        The schema is built in Python from those choices — a dynamic per-entity list is
+        ordinary code, not a missing framework feature.
+
+        The overrides are **additive offsets**, not absolute values: ``house + room +
+        zone + light``. Absolute per-light values would make the room dial dead.
+        """
+        lights: list[str] = self._room.get(CONF_LIGHTS, [])
+
+        if user_input is not None:
+            per_light: dict[str, dict[str, float]] = {}
+            for entity_id in lights:
+                slug = entity_id.replace(".", "_")
+                block = user_input.get(f"light_{slug}", {})
+                per_light[entity_id] = {
+                    "bias_stops": float(block.get("bias_stops", 0.0)),
+                    "clamp_min": int(block.get("clamp_min", 0)),
+                    "clamp_max": int(block.get("clamp_max", 254)),
+                }
+            title = self._room.pop("name")
+            return self.async_create_entry(
+                title=title, data={**self._room, CONF_PER_LIGHT: per_light}
+            )
+
+        schema: dict[Any, Any] = {}
+        for entity_id in lights:
+            slug = entity_id.replace(".", "_")
+            schema[vol.Required(f"light_{slug}")] = section(
+                vol.Schema(
+                    {
+                        vol.Required("bias_stops", default=0.0): NumberSelector(
+                            NumberSelectorConfig(
+                                min=-4, max=4, step=0.05, mode=NumberSelectorMode.SLIDER
+                            )
+                        ),
+                        # The clamp is the LAST step of the pipeline and must survive
+                        # every upstream stage — that is what makes the living ceiling's
+                        # glare cap a hard rule rather than a suggestion.
+                        vol.Required("clamp_min", default=0): NumberSelector(
+                            NumberSelectorConfig(min=0, max=254, step=1)
+                        ),
+                        vol.Required("clamp_max", default=254): NumberSelector(
+                            NumberSelectorConfig(min=1, max=254, step=1)
+                        ),
+                    }
+                ),
+                {"collapsed": True},
+            )
+
+        return self.async_show_form(step_id="lights", data_schema=vol.Schema(schema))
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        return await self.async_step_user(user_input)

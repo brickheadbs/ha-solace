@@ -1,0 +1,12 @@
+{
+  "domain": "solace",
+  "name": "Solace",
+  "codeowners": ["@brickheadbs"],
+  "config_flow": true,
+  "documentation": "https://github.com/brickheadbs/ha-solace",
+  "integration_type": "hub",
+  "iot_class": "calculated",
+  "issue_tracker": "https://github.com/brickheadbs/ha-solace/issues",
+  "requirements": [],
+  "version": "0.3.0"
+}
