@@ -15,7 +15,9 @@ from custom_components.solace.fade import (
     PlanKind,
     R_CRIT_COLOUR_MIRED_PER_S,
     colour_transition_is_safe,
+    fade_profile,
     may_run_concurrently,
+    min_safe_step_mired,
     plan_brightness,
     plan_colour,
     rate,
@@ -185,3 +187,80 @@ def test_ikea_must_not_run_colour_and_brightness_concurrently():
 def test_both_aqara_families_may_run_both_channels():
     assert may_run_concurrently(Family.AQARA_CCT) is True
     assert may_run_concurrently(Family.AQARA_RGB) is True
+
+
+# --------------------------------------------------------------------------------
+# Per-family fade profiles
+# --------------------------------------------------------------------------------
+
+PROFILE_KWARGS = dict(
+    smooth_step_mired=2,
+    stepped_step_mired=5,
+    step_transition_s=4.0,
+    catch_up_steps=3,
+)
+
+
+def test_the_concurrent_families_walk_finer_than_the_serialised_one():
+    """The whole point of the split: Aqara glides, IKEA steps."""
+    smooth = fade_profile(Family.AQARA_RGB, **PROFILE_KWARGS)
+    stepped = fade_profile(Family.IKEA, **PROFILE_KWARGS)
+    assert smooth.step_mired < stepped.step_mired
+    assert smooth.concurrent is True
+    assert stepped.concurrent is False
+
+
+def test_the_split_follows_concurrency_not_a_hardcoded_family_list():
+    """A family's fade strategy must be derived from the measured concurrency result, so
+    that a future measurement moving a family across that line moves its strategy too."""
+    for family in Family:
+        profile = fade_profile(family, **PROFILE_KWARGS)
+        expected = 2 if may_run_concurrently(family) else 5
+        assert profile.step_mired == expected, family
+
+
+def test_catch_up_is_a_multiple_of_the_step_and_never_smaller():
+    profile = fade_profile(Family.IKEA, **PROFILE_KWARGS)
+    assert profile.max_step_mired == profile.step_mired * 3
+
+
+def test_catching_up_is_always_safe_because_it_raises_the_rate():
+    """The property that makes catch-up sound rather than reckless: R = Δ/T with T fixed
+    at the step fade, so a bigger Δ moves *away* from the underflow floor."""
+    for family in Family:
+        profile = fade_profile(family, **PROFILE_KWARGS)
+        assert colour_transition_is_safe(profile.step_mired, profile.step_transition_s)
+        assert colour_transition_is_safe(profile.max_step_mired, profile.step_transition_s)
+        assert rate(profile.max_step_mired, profile.step_transition_s) >= rate(
+            profile.step_mired, profile.step_transition_s
+        )
+
+
+def test_a_step_too_small_for_its_own_fade_is_raised_not_sent():
+    """A 1-mired step over a 30 s fade is R = 0.033, well under the floor. The profile
+    must widen the step rather than plan a write that stalls the bulb."""
+    profile = fade_profile(
+        Family.AQARA_RGB,
+        smooth_step_mired=1,
+        stepped_step_mired=1,
+        step_transition_s=30.0,
+        catch_up_steps=1,
+    )
+    assert profile.step_mired == min_safe_step_mired(30.0)
+    assert profile.step_mired > 1
+    assert colour_transition_is_safe(profile.step_mired, 30.0)
+    assert "underflow" in profile.reason
+
+
+def test_the_house_default_fade_does_not_constrain_smoothness():
+    """At the house's 4 s step fade the underflow floor is 1 mired — so the smooth step
+    is chosen for traffic and deferral reasons, not forced by the hardware."""
+    assert min_safe_step_mired(4.0) == 1
+
+
+def test_every_profile_explains_itself():
+    """A stepped family looks like a bug in the panel unless the reason is visible."""
+    for family in Family:
+        profile = fade_profile(family, **PROFILE_KWARGS)
+        assert len(profile.reason) > 40
+        assert str(profile.step_mired) in profile.reason

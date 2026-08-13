@@ -12,7 +12,7 @@ from homeassistant.core import Context, HomeAssistant
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry, async_fire_time_changed
 
-from custom_components.solace.const import DOMAIN
+from custom_components.solace.const import DOMAIN, HOUSE_SETTINGS
 
 from .conftest import LIGHT
 
@@ -40,17 +40,30 @@ async def test_runtime_data_not_hass_data(hass: HomeAssistant, entry) -> None:
 
 
 async def test_house_settings_become_number_entities(hass: HomeAssistant, entry) -> None:
-    """Nothing is hardcoded: every tunable must be reachable from the UI."""
+    """Nothing is hardcoded: **every** tunable must be reachable from the UI.
+
+    Keyed on ``unique_id``, not ``entity_id``. Two reasons, and the second one bit:
+
+    1. It checks the whole table rather than a hand-picked six, so a new setting cannot
+       be added without a control.
+    2. ``entity_id`` is slugified from the *friendly name*, so renaming a setting's label
+       moves it. ``unique_id`` is keyed on the setting key and does not — which is also
+       why a rename does not strand the live house: HA keeps the existing entity_id for a
+       known unique_id and only the displayed name changes.
+    """
+    from homeassistant.helpers import entity_registry as er
+
     assert await _setup(hass, entry)
-    for entity_id in (
-        "number.solace_gate_start_lux",
-        "number.solace_demand_window",
-        "number.solace_night_level",
-        "number.solace_colour_step_size",
-        "number.solace_colour_step_fade",
-        "number.solace_house_bias",
-    ):
-        assert hass.states.get(entity_id) is not None, entity_id
+    registry = er.async_get(hass)
+    have = {
+        e.unique_id
+        for e in er.async_entries_for_config_entry(registry, entry.entry_id)
+        if e.domain == "number"
+    }
+    missing = [
+        s.key for s in HOUSE_SETTINGS if f"{entry.entry_id}_house_{s.key}" not in have
+    ]
+    assert not missing, f"settings with no number entity: {missing}"
 
 
 async def test_room_entities_are_scoped_to_the_subentry(hass: HomeAssistant, entry) -> None:

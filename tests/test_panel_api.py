@@ -234,3 +234,37 @@ async def test_a_room_ambience_override_reaches_the_engine(
     subentry = entry.subentries[subentry_id]
     settings = entry.runtime_data.coordinator.room_settings(subentry)
     assert settings.ambience_level == 40
+
+
+async def test_the_snapshot_describes_how_each_family_walks_the_curve(
+    hass: HomeAssistant, entry, hass_ws_client: WebSocketGenerator
+) -> None:
+    """The panel draws one staircase per family. Without this block it would have to
+    guess a step size, and would draw a smoothness the house does not have."""
+    await _setup(hass, entry)
+    snap = await _get(await hass_ws_client(hass))
+
+    fade = snap["fade"]
+    assert fade["interval_s"] > 0
+    assert fade["families"], "a configured light must produce a family profile"
+    for family in fade["families"]:
+        assert family["count"] >= 1
+        assert family["step_mired"] >= 1
+        assert family["max_step_mired"] >= family["step_mired"]
+        assert isinstance(family["concurrent"], bool)
+        assert family["reason"]
+
+
+async def test_families_are_counted_from_live_lights_not_a_hardcoded_list(
+    hass: HomeAssistant, entry, hass_ws_client: WebSocketGenerator
+) -> None:
+    """A hand-maintained bulb count already went stale once in this house and quietly
+    excluded a light. The count must come from the lights that are actually configured."""
+    await _setup(hass, entry)
+    snap = await _get(await hass_ws_client(hass))
+
+    lights = [light for room in snap["rooms"] for light in room["lights"]]
+    counted = sum(f["count"] for f in snap["fade"]["families"])
+    assert counted == len(lights)
+    families = {f["family"] for f in snap["fade"]["families"]}
+    assert families == {light["family"] for light in lights}

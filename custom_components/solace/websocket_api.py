@@ -50,6 +50,7 @@ from .const import (
     Setting,
 )
 from .coordinator import SolaceConfigEntry, SolaceCoordinator
+from .models import Family
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -278,8 +279,47 @@ def _snapshot(hass: HomeAssistant, coordinator: SolaceCoordinator) -> dict[str, 
             else None,
             "healthy": coordinator.last_update_success,
         },
+        # How each family present in the house walks the colour curve. Two bulbs on the
+        # same clock take different-sized steps, and without this the panel would show
+        # one "colour step size" that is true for neither of them.
+        "fade": {
+            "interval_s": round(coordinator._colour_interval(), 1),  # noqa: SLF001
+            "families": [
+                {
+                    "family": family.value,
+                    "count": count,
+                    "step_mired": profile.step_mired,
+                    "max_step_mired": profile.max_step_mired,
+                    "step_transition_s": profile.step_transition_s,
+                    "concurrent": profile.concurrent,
+                    "reason": profile.reason,
+                }
+                for family, count, profile in _families_present(coordinator, rooms)
+            ],
+        },
         "rooms": rooms,
     }
+
+
+def _families_present(
+    coordinator: SolaceCoordinator, rooms: list[dict[str, Any]]
+) -> list[tuple[Family, int, Any]]:
+    """Families actually installed, in a stable order, with their fade profile.
+
+    Derived from the live lights rather than listed — the same reason ``infer_family``
+    reads the registry: a hand-maintained count of "5 IKEA bulbs" already went stale once
+    in this house and quietly excluded a bulb.
+    """
+    counts: dict[Family, int] = {}
+    for room in rooms:
+        for light in room["lights"]:
+            family = Family(light["family"])
+            counts[family] = counts.get(family, 0) + 1
+    return [
+        (family, counts[family], coordinator.fade_profile_for(family))
+        for family in Family
+        if family in counts
+    ]
 
 
 # ---------------------------------------------------------------------------- commands

@@ -142,6 +142,16 @@ class HouseSettings:
     colour_trim_kelvin: int = 0
     """Manual trim, added after the curve."""
     colour_step_mired: int = 5
+    """Step size for families that must **serialise** colour against brightness — they
+    skip steps while a brightness fade runs, so a coarse walk tracks and a fine one
+    drifts. See ``fade.fade_profile``."""
+    colour_step_mired_smooth: int = 2
+    """Step size for families that may glide colour *during* a brightness fade. They
+    never skip a step, so they can be walked finely and look continuous."""
+    colour_catch_up_steps: int = 3
+    """How many steps' worth a single move may cover when catching up after skipped
+    steps. Safe at any size — a larger Δ over the same short fade raises R, away from the
+    underflow floor — so this bounds the visible jump, not the hardware risk."""
     colour_step_transition_s: float = 4.0
     """See fade.py — R is computed from the TRANSITION time, never the step interval."""
 

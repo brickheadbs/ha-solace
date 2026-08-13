@@ -24,7 +24,7 @@ from homeassistant.util import ulid as ulid_util
 
 from .colour import kelvin_to_mired, mired_to_kelvin
 from .const import CONTEXT_PREFIX
-from .fade import colour_transition_is_safe
+from .fade import FadeProfile, colour_transition_is_safe
 from .models import Family, LightSettings
 
 _LOGGER = logging.getLogger(__name__)
@@ -152,8 +152,9 @@ class LightWriter:
         target_kelvin: int,
         light: LightSettings,
         *,
-        step_mired: int,
-        step_transition_s: float,
+        profile: FadeProfile,
+        r_crit: float,
+        safety: float,
     ) -> int | None:
         """Move colour one **short, bounded step** toward the target.
 
@@ -163,35 +164,42 @@ class LightWriter:
         sits far inside the safe window (R ≈ 1.25 mired/s against a 0.156 floor) and is
         verified clean over 18+ consecutive steps.
 
+        How big that step is comes from ``profile`` — see ``fade.fade_profile``. Families
+        that must serialise walk coarsely and catch up; families that may glide colour
+        during a brightness fade walk finely.
+
         Returns the Kelvin actually commanded, or ``None`` if nothing was sent.
         """
         if current_kelvin is None:
             return None
 
-        # 🔴 IKEA: a colour step FREEZES an in-flight brightness fade. Measured — Entry
-        # Ceiling stalled at 84 for 420 s while a same-family control tracked exactly.
-        # Serialise rather than risk a silently stuck fade.
-        if light.family is Family.IKEA and self._is_busy(entity_id):
+        # 🔴 A colour step FREEZES an in-flight brightness fade on some families.
+        # Measured — Entry Ceiling stalled at 84 for 420 s while a same-family control
+        # tracked exactly. Serialise rather than risk a silently stuck fade. The skipped
+        # step is what `max_step_mired` later makes up.
+        if not profile.concurrent and self._is_busy(entity_id):
             _LOGGER.debug("%s: deferring colour step, brightness fade in flight", entity_id)
             return None
 
         current_mired = kelvin_to_mired(current_kelvin)
         target_mired = kelvin_to_mired(target_kelvin)
         delta = target_mired - current_mired
-        if delta == 0:
-            return None
 
-        # Never overshoot, and never send a step so small it underflows its own fade.
-        size = min(abs(delta), max(step_mired, 1))
+        # Below one step is the family's colour dead zone: not worth a radio write, and
+        # settling within a step of the curve beats chattering at it. Everything above
+        # it moves, capped so a catch-up cannot become a visible lurch.
+        if abs(delta) < profile.step_mired:
+            return None
+        size = min(abs(delta), profile.max_step_mired)
         next_mired = current_mired + (size if delta > 0 else -size)
 
-        if not colour_transition_is_safe(size, step_transition_s):
+        if not colour_transition_is_safe(size, profile.step_transition_s, r_crit, safety):
             _LOGGER.warning(
                 "%s: refusing colour step of %s mired over %ss — below the underflow "
-                "floor; widen colour_step_mired or shorten colour_step_fade",
+                "floor; widen the colour step or shorten the step fade",
                 entity_id,
                 size,
-                step_transition_s,
+                profile.step_transition_s,
             )
             return None
 
@@ -202,7 +210,7 @@ class LightWriter:
             {
                 ATTR_ENTITY_ID: entity_id,
                 ATTR_COLOR_TEMP_KELVIN: kelvin,
-                ATTR_TRANSITION: step_transition_s,
+                ATTR_TRANSITION: profile.step_transition_s,
             },
             blocking=False,
             context=self.new_context(),

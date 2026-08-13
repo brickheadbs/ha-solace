@@ -68,10 +68,13 @@ __all__ = [
     "ColourPlan",
     "BrightnessSegment",
     "BrightnessPlan",
+    "FadeProfile",
     "rate",
     "colour_transition_is_safe",
+    "min_safe_step_mired",
     "plan_colour",
     "plan_brightness",
+    "fade_profile",
     "may_run_concurrently",
 ]
 
@@ -122,6 +125,20 @@ def colour_transition_is_safe(
     if delta_mired == 0:
         return True
     return rate(delta_mired, seconds) >= r_crit * safety
+
+
+def min_safe_step_mired(
+    step_transition_s: float,
+    r_crit: float = R_CRIT_COLOUR_MIRED_PER_S,
+    safety: float = R_CRIT_SAFETY,
+) -> int:
+    """The smallest colour step that survives its **own** fade.
+
+    Rearranged from ``R = Δ/T ≥ R_crit·safety``. At the house default 4 s fade this is
+    ``ceil(0.156 × 1.5 × 4) = 1`` mired — so the underflow floor is not what limits
+    smoothness here. Traffic and deferral are (see ``fade_profile``).
+    """
+    return max(1, ceil(r_crit * safety * max(step_transition_s, 0.0)))
 
 
 @dataclass(frozen=True, slots=True)
@@ -294,6 +311,105 @@ def plan_brightness(
             f"exceeds the {MAX_TRANSITION_S}s uint16 transtime ceiling and would "
             "silently wrap"
         ),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class FadeProfile:
+    """How one bulb family walks the colour curve.
+
+    Two families sharing one clock need different step sizes, and the reason is
+    **measured behaviour, not brand preference**:
+
+    * A family that may glide colour *while brightness is in flight* never skips a step.
+      It can be walked finely — many small moves — and the curve looks continuous.
+    * A family that must **serialise** skips every step that lands inside a brightness
+      fade. Walk it finely and it silently falls behind the curve, because it only ever
+      catches up one step per tick. Walk it coarsely, with a catch-up allowance, and it
+      tracks — visibly stepped, but correct.
+
+    Owner, 2026-08-13: *"take advantage of the aqara bulbs if needed. If Ikea bulbs
+    don't handle ramping well linear is fine for them."* That is what this encodes.
+
+    ``step_mired`` does double duty as a **colour dead zone**: a move smaller than one
+    step is not worth a radio write, so a family settles within one step of the curve
+    rather than chattering at it. Same idea as ``dead_zone`` on brightness.
+    """
+
+    family: Family
+    step_mired: int
+    """The nominal move, and the threshold below which no write is sent."""
+    step_transition_s: float
+    """Each step's OWN fade — short, and far inside the underflow window."""
+    max_step_mired: int
+    """The largest single move, used to catch up after skipped steps.
+
+    ⚠️ Catching up is **always safe**, and the reason is worth stating: ``R = Δ/T`` with
+    T fixed at the step fade, so a *bigger* Δ means a *higher* R — further from the
+    underflow floor, never closer. The only thing bounding this is how large a colour
+    jump is acceptable to the eye, which is why it is a setting.
+    """
+    concurrent: bool
+    """May a colour step be sent while a brightness fade is running on this bulb?"""
+    reason: str
+    """Why this shape. Surfaced in the panel — a stepped family looks like a bug unless
+    the reason is visible."""
+
+
+def fade_profile(
+    family: Family,
+    *,
+    smooth_step_mired: int,
+    stepped_step_mired: int,
+    step_transition_s: float,
+    catch_up_steps: int,
+    r_crit: float = R_CRIT_COLOUR_MIRED_PER_S,
+    safety: float = R_CRIT_SAFETY,
+) -> FadeProfile:
+    """Pick the colour-walking strategy for one family.
+
+    The split is driven by :func:`may_run_concurrently` rather than by naming families
+    here, so a future measurement that moves a family across the concurrency line moves
+    its fade strategy with it automatically.
+
+    ⚠️ **This does not claim a per-family rate floor.** ``R_crit`` was measured on Aqara
+    CCT; Series 4 of ``docs/home-automation/ZIGBEE-FADE-LIMITS.md`` (per-family R_crit)
+    has never been run. Both families are therefore planned against the *same* floor, and
+    the step size is clamped up to :func:`min_safe_step_mired` for both.
+    """
+    concurrent = may_run_concurrently(family)
+    floor = min_safe_step_mired(step_transition_s, r_crit, safety)
+    wanted = smooth_step_mired if concurrent else stepped_step_mired
+    step = max(int(wanted), floor)
+    max_step = max(step, step * max(int(catch_up_steps), 1))
+
+    if concurrent:
+        reason = (
+            f"smooth: {step} mired every step, fading in {step_transition_s:g}s "
+            f"(R={step / max(step_transition_s, 0.001):.2f} vs a {r_crit * safety:.3f} "
+            "floor). Colour may glide during a brightness fade on this family, so no "
+            "step is ever skipped and the walk can be fine."
+        )
+    else:
+        reason = (
+            f"stepped: {step} mired at a time, up to {max_step} to catch up. Colour "
+            "steps freeze an in-flight brightness fade on this family, so steps are "
+            "skipped while one is running — a finer walk would fall behind the curve "
+            "instead of tracking it."
+        )
+    if step > int(wanted):
+        reason += (
+            f" Raised from {int(wanted)} to {step}: below that a step underflows its "
+            f"own {step_transition_s:g}s fade."
+        )
+
+    return FadeProfile(
+        family=family,
+        step_mired=step,
+        step_transition_s=step_transition_s,
+        max_step_mired=max_step,
+        concurrent=concurrent,
+        reason=reason,
     )
 
 

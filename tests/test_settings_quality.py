@@ -21,8 +21,15 @@ from custom_components.solace.models import HouseSettings, RoomSettings
 BOOLEANS = {"ambience_ignores_occupancy"}
 """Rendered as switches. Two states is the whole point, not coarseness."""
 
-COUNTS = {"lux_history_samples", "colour_step_mired", "dead_zone"}
-"""Small integer counts. A step of 1 is already the finest meaningful resolution."""
+COUNTS = {
+    "lux_history_samples",
+    "colour_step_mired",
+    "colour_step_mired_smooth",
+    "colour_catch_up_steps",
+    "dead_zone",
+}
+"""Small integer counts. A step of 1 is already the finest meaningful resolution — a
+mired is not subdividable on the wire, and "catch up by 2.5 steps" is not a thing."""
 
 
 @pytest.mark.parametrize("setting", HOUSE_SETTINGS, ids=lambda s: s.key)

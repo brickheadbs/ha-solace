@@ -102,6 +102,17 @@ export interface World {
   healthy: boolean;
 }
 
+/** How one bulb family walks the colour curve. See `fade.py::fade_profile`. */
+export interface FamilyFade {
+  family: string;
+  count: number;
+  step_mired: number;
+  max_step_mired: number;
+  step_transition_s: number;
+  concurrent: boolean;
+  reason: string;
+}
+
 export interface Snapshot {
   entry_id: string;
   house: Record<string, number>;
@@ -110,6 +121,8 @@ export interface Snapshot {
   room_schema: Schema[];
   links: Record<string, string | null>;
   world: World;
+  /** Present only when at least one light is configured. */
+  fade?: { interval_s: number; families: FamilyFade[] };
   rooms: RoomRow[];
 }
 

@@ -54,8 +54,10 @@ from .const import (
     SUBENTRY_TYPE_ROOM,
 )
 from .engine import ambient_gate, debounce_gate, solve
+from .fade import FadeProfile, fade_profile
 from .models import (
     EngineInput,
+    Family,
     HouseSettings,
     LightSettings,
     Mode,
@@ -204,6 +206,8 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
             "family_cct_max_kelvin",
             "family_rgb_max_kelvin",
             "demand_floor_level",
+            "colour_step_mired_smooth",
+            "colour_catch_up_steps",
         ):
             if key in fields:
                 fields[key] = int(fields[key])
@@ -567,22 +571,46 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                     state.attributes.get("color_temp_kelvin"),
                     target.kelvin,
                     light,
-                    step_mired=house.colour_step_mired,
-                    step_transition_s=house.colour_step_transition_s,
+                    profile=self.fade_profile_for(light.family),
+                    r_crit=house.colour_rate_floor,
+                    safety=house.colour_rate_safety,
                 )
+
+    def fade_profile_for(self, family: Family) -> FadeProfile:
+        """The colour-walking strategy for one family, from live settings.
+
+        Not cached: every value in it is a slider, and a cache is how "a setting takes
+        effect now" quietly stops being true.
+        """
+        house = self.house
+        return fade_profile(
+            family,
+            smooth_step_mired=house.colour_step_mired_smooth,
+            stepped_step_mired=house.colour_step_mired,
+            step_transition_s=house.colour_step_transition_s,
+            catch_up_steps=house.colour_catch_up_steps,
+            r_crit=house.colour_rate_floor,
+            safety=house.colour_rate_safety,
+        )
 
     def _colour_interval(self) -> float:
         """Derive the colour tick from the glide, never hardcode it.
 
-        The full traverse divided into steps of ``colour_step_mired`` gives the number of
-        steps; the glide duration divided by that gives the hold between them. Change the
-        glide or the step size and the cadence follows.
+        The full traverse divided into one step gives the number of steps; the glide
+        duration divided by that gives the hold between them. Change the glide or the
+        step size and the cadence follows.
+
+        The tick is paced for the **finest** family in the house, because a shared clock
+        can only ever be as fine as its fastest consumer. Coarser families are not
+        over-driven by it: their own ``step_mired`` is a dead zone, so they simply decline
+        the ticks where the curve has not yet moved far enough to be worth a write.
         """
         house = self.house
         from .colour import kelvin_to_mired
 
         span = abs(kelvin_to_mired(house.night_kelvin) - kelvin_to_mired(house.day_kelvin))
-        steps = max(1, span / max(house.colour_step_mired, 1))
+        finest = max(1, min(house.colour_step_mired, house.colour_step_mired_smooth))
+        steps = max(1, span / finest)
         return max(house.colour_glide_minutes * 60.0 / steps, house.colour_step_transition_s * 2)
 
     def _asleep(self) -> bool:

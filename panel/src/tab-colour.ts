@@ -12,7 +12,7 @@
 
 import { LitElement, css, html, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
-import type { Hass, Schema, Snapshot } from "./api";
+import type { FamilyFade, Hass, Schema, Snapshot } from "./api";
 import { setHouse } from "./api";
 import "./chart";
 import type { Fact, Series, Tick } from "./chart";
@@ -28,9 +28,22 @@ const HELP: Record<string, string> = {
   colour_trim_kelvin:
     "A live trim added to whatever the curve says, at any time of day. Use it to nudge the whole house warmer or cooler without touching the curve.",
   colour_step_mired:
-    "How big each colour step is. Colour is stepped rather than faded because the bulbs do not glide colour the way they glide brightness.",
-  colour_step_transition_s: "The fade applied to each individual colour step.",
+    "Step size for bulbs that cannot glide colour while their brightness is fading — they skip steps while one is running, so they are walked in bigger, less frequent moves. Smaller is not better here: a finer walk would fall behind the curve rather than track it.",
+  colour_step_mired_smooth:
+    "Step size for bulbs that can glide colour during a brightness fade. They never skip a step, so they can be walked finely and look continuous. This is the setting that makes the good bulbs look good.",
+  colour_catch_up_steps:
+    "How far a single move may reach when a bulb has fallen behind the curve. Safe at any size — a bigger jump over the same short fade is further from the failure threshold, not closer — so this is about how large a visible colour jump you will accept.",
+  colour_step_transition_s:
+    "The fade applied to each individual colour step. This is the number the hardware limit is computed from, never the gap between steps.",
 };
+
+const FAMILY_NAMES: Record<string, string> = {
+  ikea: "IKEA TRÅDFRI",
+  aqara_cct: "Aqara CCT",
+  aqara_rgb: "Aqara RGB",
+};
+
+const FAMILY_COLOURS = ["#4fc3f7", "#ffb74d", "#81c784"];
 
 const toMired = (k: number) => 1_000_000 / Math.max(k, 1);
 const toKelvin = (m: number) => 1_000_000 / Math.max(m, 1);
@@ -98,6 +111,52 @@ export class SolTabColour extends LitElement {
       .advisory ul {
         margin: 4px 0 0;
         padding-left: 16px;
+      }
+      /* One block per bulb family, each carrying the reason it is walked that way. A
+         stepped family looks like a bug without it. */
+      .families {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        gap: 8px;
+        margin: 12px 0 4px;
+      }
+      .family {
+        padding: 8px 10px;
+        background: rgba(255, 255, 255, 0.03);
+        border-radius: var(--sol-r-block);
+      }
+      .fam-head {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        font-size: 12px;
+        margin-bottom: 4px;
+        flex-wrap: wrap;
+      }
+      .swatch {
+        width: 9px;
+        height: 9px;
+        border-radius: 2px;
+        flex: 0 0 auto;
+      }
+      .fam-head .count {
+        color: var(--sol-text-4);
+        font-size: 11px;
+      }
+      .tag {
+        margin-left: auto;
+        padding: 1px 7px;
+        border-radius: 999px;
+        font-size: 10.5px;
+        white-space: nowrap;
+      }
+      .tag.ok {
+        background: rgba(129, 199, 132, 0.14);
+        color: #a5d6a7;
+      }
+      .tag.warn {
+        background: var(--sol-amber-surface);
+        color: var(--sol-amber-light);
       }
       /* The Kelvin gradient is a real reference, not decoration — it is what the numbers
          on the slider mean. */
@@ -297,6 +356,132 @@ export class SolTabColour extends LitElement {
     ></sol-chart>`;
   }
 
+  /**
+   * Walk one family along the curve exactly the way `writer.async_step_colour` does, and
+   * return the staircase it actually produces.
+   *
+   * ⚠️ This mirrors the writer's rule, including the dead zone: a move smaller than one
+   * step is not sent. That is what makes the two families look different on one clock,
+   * and drawing it any other way would show a smoothness the house does not have.
+   *
+   * The serialised family's *deferrals* are deliberately NOT simulated — they depend on
+   * when brightness happens to be moving, which is not knowable here. So this chart is
+   * the family's best case; the catch-up setting is what covers the rest.
+   */
+  private walk(f: FamilyFade, windowMin: number) {
+    const interval = Math.max(this.snap.fade?.interval_s ?? 60, 1);
+    const dusk = this.snap.world.dusk_hour;
+    const at = (min: number) => toMired(this.kelvinAt((dusk + min / 60 + 24) % 24));
+
+    let current = at(0);
+    const points: Array<[number, number]> = [[0, toKelvin(current)]];
+    let moves = 0;
+    for (let t = interval; t <= windowMin * 60; t += interval) {
+      const min = t / 60;
+      const delta = at(min) - current;
+      if (Math.abs(delta) >= f.step_mired) {
+        const size = Math.min(Math.abs(delta), f.max_step_mired);
+        // Hold, then jump: the flat run is the hold, the vertical is the step's own fade.
+        points.push([min, toKelvin(current)]);
+        current += delta > 0 ? size : -size;
+        points.push([min, toKelvin(current)]);
+        moves++;
+      }
+    }
+    points.push([windowMin, toKelvin(current)]);
+    return { points, moves, perHour: Math.round((moves / windowMin) * 60) };
+  }
+
+  /** What the two families actually do with one clock — the whole point of the split. */
+  private stepChart(families: FamilyFade[]) {
+    const windowMin = 20;
+    const dusk = this.snap.world.dusk_hour;
+
+    const ideal: Array<[number, number]> = [];
+    for (let m = 0; m <= windowMin; m += 0.25) {
+      ideal.push([m, this.kelvinAt((dusk + m / 60 + 24) % 24)]);
+    }
+
+    const walks = families.map((f, i) => ({
+      f,
+      colour: FAMILY_COLOURS[i % FAMILY_COLOURS.length],
+      ...this.walk(f, windowMin),
+    }));
+
+    const ks = [...ideal.map((p) => p[1]), ...walks.flatMap((w) => w.points.map((p) => p[1]))];
+    const lo = Math.min(...ks);
+    const hi = Math.max(...ks);
+    const pad = Math.max((hi - lo) * 0.12, 20);
+
+    return html`<sol-chart
+      .series=${[
+        { points: ideal, colour: "rgba(255,255,255,.28)", width: 1.5, dashed: true },
+        ...walks.map((w) => ({ points: w.points, colour: w.colour, width: 2 })),
+      ] as Series[]}
+      .xTicks=${[0, 5, 10, 15, 20].map((m) => ({ value: m, label: `+${m}` }))}
+      .yTicks=${[lo, (lo + hi) / 2, hi].map((k) => ({
+        value: k,
+        label: `${num(Math.round(k))}`,
+      }))}
+      .xDomain=${[0, windowMin] as [number, number]}
+      .yDomain=${[lo - pad, hi + pad] as [number, number]}
+      xTitle="minutes into the glide"
+      yTitle="K"
+      .facts=${[
+        { label: "Tick", value: `every ${num(Math.round(this.snap.fade?.interval_s ?? 0))} s` },
+        ...walks.map((w) => ({
+          label: FAMILY_NAMES[w.f.family] ?? w.f.family,
+          value: `${w.f.step_mired} mired · ~${w.perHour}/h`,
+        })),
+      ] as Fact[]}
+    ></sol-chart>`;
+  }
+
+  private fadeCard() {
+    const fade = this.snap.fade;
+    if (!fade || !fade.families.length) return nothing;
+    return html`<div class="card full">
+      <div class="card-head">
+        <ha-icon icon="mdi:stairs"></ha-icon>
+        <h2>How each bulb walks the curve</h2>
+      </div>
+      <div class="caption" style="margin-bottom:10px">
+        Colour is stepped, not faded — a long colour transition underflows the bulb's own maths and
+        strands it on a hardware rail, permanently and silently. So the curve is walked in small
+        absolute writes. One clock serves every bulb; what differs is how big a step each family
+        takes, and the dashed line is the curve they are all aiming at.
+      </div>
+      ${this.stepChart(fade.families)}
+      <div class="families">
+        ${fade.families.map(
+          (f, i) => html`<div class="family">
+            <div class="fam-head">
+              <span class="swatch" style="background:${FAMILY_COLOURS[i % FAMILY_COLOURS.length]}">
+              </span>
+              <b>${FAMILY_NAMES[f.family] ?? f.family}</b>
+              <span class="count">${f.count} bulb${f.count === 1 ? "" : "s"}</span>
+              <span class="tag ${f.concurrent ? "ok" : "warn"}">
+                ${f.concurrent ? "glides during a fade" : "waits for brightness"}
+              </span>
+            </div>
+            <div class="caption">${f.reason}</div>
+          </div>`
+        )}
+      </div>
+      <div class="sub">
+        ${this.row("colour_step_mired_smooth", (v) => `${num(v)} mired`)}
+        ${this.row("colour_step_mired", (v) => `${num(v)} mired`)}
+        ${this.row("colour_catch_up_steps", (v) => `up to ${num(v)} steps`)}
+        ${this.row("colour_step_transition_s", (v) => `${num(v, 1)} s`)}
+        <div class="caption">
+          The tick is paced for the finest family in the house. Coarser bulbs are not over-driven by
+          it — they simply decline the ticks where the curve has not moved far enough to be worth a
+          write.
+        </div>
+      </div>
+    </div>`;
+  }
+
   /** Bulbs whose ceiling is below the day target — the clamp, made visible. */
   private clampedLights() {
     const day = this.value("day_kelvin") + this.value("colour_trim_kelvin");
@@ -329,13 +514,9 @@ export class SolTabColour extends LitElement {
           <span>right now: <b>${num(this.kelvinAt(this.snap.world.clock_hour))} K</b></span>
           <span>${trim > 0 ? "cooler" : " "}</span>
         </div>
-        <div class="sub">
-          ${this.row("colour_step_mired", (v) => `${num(v)} mired`)}
-          ${this.row("colour_step_transition_s", (v) => `${num(v, 1)} s`)}
-          <div class="caption">
-            Colour moves in steps, not one long fade — the bulbs do not glide colour the way they
-            glide brightness. Step size and glide length together set how often a step is sent.
-          </div>
+        <div class="caption" style="margin-top:10px">
+          Colour moves in steps, not one long fade. Step sizes differ per bulb family — see “How
+          each bulb walks the curve” below.
         </div>
         ${clamped.length
           ? html`<div class="advisory">
@@ -392,6 +573,8 @@ export class SolTabColour extends LitElement {
         </div>
         ${this.chart()}
       </div>
+
+      ${this.fadeCard()}
     </div>`;
   }
 }
