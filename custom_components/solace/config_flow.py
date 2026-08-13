@@ -38,12 +38,13 @@ from homeassistant.helpers.selector import (
 )
 
 from .const import (
-    CONF_AWAKE_OVERRIDE,
+    CONF_ALARM_ENTITY,
     CONF_DND_ENTITY,
     CONF_LIGHTS,
     CONF_LUX_SENSOR,
     CONF_NEAR_PRESENCE,
     CONF_PER_LIGHT,
+    CONF_SLEEP_TOGGLE,
     CONF_PRESENCE,
     DEFAULT_LUX_SENSOR,
     DOMAIN,
@@ -110,12 +111,15 @@ class SolaceConfigFlow(ConfigFlow, domain=DOMAIN):
                             domain=["sensor", "binary_sensor", "input_boolean", "switch"]
                         )
                     ),
-                    # On ⇒ up in the night: rooms set to go dark while asleep rejoin the
-                    # house's night mode instead of staying off.
-                    vol.Optional(CONF_AWAKE_OVERRIDE): EntitySelector(
-                        EntitySelectorConfig(
-                            domain=["sensor", "binary_sensor", "input_boolean", "switch"]
-                        )
+                    # A manual sleep switch, OR-ed with the phone. There is deliberately
+                    # NO "awake" override — the phone already clears DND when he gets out
+                    # of bed, and night mode is latched so getting up does not end it.
+                    vol.Optional(CONF_SLEEP_TOGGLE): EntitySelector(
+                        EntitySelectorConfig(domain=["input_boolean", "switch", "binary_sensor"])
+                    ),
+                    # Night mode ends `alarm_lead_minutes` before this.
+                    vol.Optional(CONF_ALARM_ENTITY): EntitySelector(
+                        EntitySelectorConfig(domain=["sensor"], device_class="timestamp")
                     ),
                 }
             ),
@@ -153,12 +157,29 @@ class SolaceOptionsFlow(OptionsFlow):
             return self.async_create_entry(data={**self.config_entry.options, **user_input})
 
         current = self.config_entry.options
-        schema = {
-            vol.Required(
-                setting.key, default=current.get(setting.key, setting.default)
-            ): _number(setting)
-            for setting in HOUSE_SETTINGS
-        }
+        data = self.config_entry.data
+        schema: dict[Any, Any] = {}
+        # The two house-level entity links live here as well as in the initial flow.
+        # Without them there is no way to attach the sleep toggle or the alarm sensor to
+        # an entry that already exists — the setup step only runs once, and this
+        # integration has no reconfigure step.
+        for key in (CONF_SLEEP_TOGGLE, CONF_ALARM_ENTITY):
+            existing = current.get(key, data.get(key))
+            field = (
+                vol.Optional(key, description={"suggested_value": existing})
+                if existing
+                else vol.Optional(key)
+            )
+            domains = (
+                ["sensor"]
+                if key == CONF_ALARM_ENTITY
+                else ["input_boolean", "switch", "binary_sensor"]
+            )
+            schema[field] = EntitySelector(EntitySelectorConfig(domain=domains))
+        for setting in HOUSE_SETTINGS:
+            schema[
+                vol.Required(setting.key, default=current.get(setting.key, setting.default))
+            ] = _number(setting)
         return self.async_show_form(step_id="init", data_schema=vol.Schema(schema))
 
 

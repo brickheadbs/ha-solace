@@ -46,4 +46,10 @@ async def _async_settings_changed(hass: HomeAssistant, entry: SolaceConfigEntry)
     down and rebuild the entities mid-gesture; the 2026-07 build's 30-second settings
     poll is the opposite failure and felt just as broken.
     """
-    await entry.runtime_data.coordinator.async_request_refresh()
+    coordinator = entry.runtime_data.coordinator
+    # Entity links (sleep toggle, alarm, DND, presence, lights) may have changed, and the
+    # listeners were bound to the OLD ones. Rebind before recalculating, or the new
+    # entity is configured-but-unwatched — which is exactly how the sleep toggle came up
+    # silently dead the first time it was set.
+    coordinator.async_resubscribe()
+    await coordinator.async_request_refresh()

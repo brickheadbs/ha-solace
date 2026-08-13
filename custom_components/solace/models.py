@@ -97,6 +97,11 @@ class HouseSettings:
     # -- Steps 8-12, 15-16: gates and limits ---------------------------------------
     night_level: int = 3
     """Step 8. A fixed level, not a scaling — predictable when half asleep."""
+    night_release_lux: float = 10.0
+    """Night mode ends when outdoor lux rises above this, so a 4 am summer sunrise
+    returns normal logic instead of holding the house at the night level all morning."""
+    alarm_lead_minutes: float = 30.0
+    """Night mode also ends this long before the next alarm, whichever comes first."""
     ambience_level: int = 0
     """Step 9. A low-light *floor* while awake and the gate reads dark. 0 ⇒ feature off."""
     ambience_ignores_occupancy: bool = True
@@ -148,13 +153,14 @@ class RoomSettings:
     """Step 10. Kitchen only. When the *near* sensor reads clear, reduce by this much
     and STAY there — never an off. 0 ⇒ no effect. Do not generalise to other rooms."""
     night_off: bool = False
-    """Asleep ⇒ this room goes fully OFF, not to the night level.
+    """**Asleep** ⇒ this room goes fully OFF, not to the night level.
 
     Brandon, 2026-08-13: *"in the bedroom… when asleep bedroom goes all off. If awake in
     the night, it returns to the same state as the house (night mode during dark)."*
-    So this is the bedroom's rule, and it is overridden by ``awake_override`` — being
-    awake at 3 am puts the room back on the house's night level rather than leaving the
-    one room he is standing in dark."""
+    Keyed on ``asleep``, NOT on ``night_active``: once he is up (DND clears) the bedroom
+    rejoins the house at the night level rather than staying dark in the one room he is
+    standing in. That is the same signal in both directions, with no extra helper — the
+    phone already reports it."""
     manual_hold_minutes: float = 30.0
     """A touch holds manual for N minutes; the switch holds indefinitely."""
 
@@ -187,9 +193,24 @@ class EngineInput:
     means he is asleep. One signal, three uses — night mode, the ambience gate, and the
     bedroom's night-off rule."""
     clock_hour: float
-    awake_override: bool = False
-    """Up in the night. Cancels ``night_off`` so the bedroom rejoins the house's night
-    mode rather than staying dark while he is standing in it."""
+    night_active: bool = False
+    """⚠️ **LATCHED, and NOT the same as ``asleep``.** This is the correction that
+    matters most in the whole engine.
+
+    Measured from 72 h of history: the Pixel's DND **clears the moment Brandon gets out
+    of bed** (2026-08-13: on at 22:49, *off at 05:59*, on again 07:25). So treating night
+    mode as "DND is on right now" means the instant he stands up at 3 am the house leaves
+    night mode, recomputes from a pitch-dark lux reading, and lights every occupied room
+    at full demand — roughly level 206 of 254, straight into his face.
+
+    Night therefore **starts** on sleep and **ends** on its own terms: outdoor lux above
+    ``night_release_lux``, or ``alarm_lead_minutes`` before the next alarm. Getting up
+    does not end it — which is exactly the behaviour he described: *"if I wake up and get
+    out of bed… the lights come on to the low night setting and I can see."*"""
+    asleep: bool = False
+    """Is he asleep **right now** — DND on, or the sleep toggle held. Distinct from
+    ``night_active``: asleep drives the bedroom fully dark and suppresses the ambience
+    glow; night_active drives the level everywhere."""
     gate_open: bool = True
     """The gate's *previous* state — it is hysteretic, so it is an input as well as an
     output."""

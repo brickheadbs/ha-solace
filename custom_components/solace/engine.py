@@ -141,14 +141,15 @@ def demand(lux: float, house: HouseSettings) -> float:
 # --------------------------------------------------------------------------------
 
 
-def mode_for(dnd: bool) -> Mode:
-    """DND on ⇒ asleep ⇒ NIGHT.
+def mode_for(night_active: bool) -> Mode:
+    """Night mode follows the LATCH, not the live sleep signal.
 
-    Brandon's watch turns DND on automatically when he falls asleep, so DND *is* the
-    sleep signal. One signal, three uses (night mode, ambience gate, bedroom off) and
-    no separate "awake" helper to drift out of sync.
+    ⚠️ It is tempting to write ``Mode.NIGHT if dnd else Mode.NORMAL``. That is wrong, and
+    it was wrong here for a day. DND clears when he gets out of bed (measured), so that
+    version leaves night mode the moment he stands up at 3 am and relights the house at
+    full demand. The latch is computed by the coordinator; see ``EngineInput.night_active``.
     """
-    return Mode.NIGHT if dnd else Mode.NORMAL
+    return Mode.NIGHT if night_active else Mode.NORMAL
 
 
 def _evening_axis(hour: float) -> float:
@@ -313,7 +314,7 @@ def solve(
     trace.append(("demand", round(demand_value, 4)))
 
     # 4. Mode.
-    mode = mode_for(data.dnd)
+    mode = mode_for(data.night_active)
     ramp = 0.0 if mode is Mode.NIGHT else ramp_bias(data.clock_hour, house)
     trace.append(("mode", mode.value))
     trace.append(("ramp_stops", round(ramp, 4)))
@@ -337,9 +338,11 @@ def solve(
 
     # 8. Night override — a fixed level, not a scaling.
     if mode is Mode.NIGHT:
-        if room.night_off and not data.awake_override:
-            # The bedroom's rule: asleep ⇒ fully off, not dimmed. A night level in the
-            # room he is asleep in is not a gentler version of off, it is a light on.
+        if room.night_off and data.asleep:
+            # The bedroom's rule, keyed on ASLEEP (not on the night latch): a night level
+            # in the room he is asleep in is not a gentler version of off, it is a light
+            # on. The moment he is up — DND clears by itself — this falls through to the
+            # night level below, so the room he is standing in is never the dark one.
             level = 0
             trace.append(("night_off", True))
         else:
@@ -376,6 +379,7 @@ def solve(
         house.ambience_level > 0
         and mode is Mode.NORMAL
         and gate_open
+        and not data.asleep
         and house.ambience_level > level
         and (data.occupied or house.ambience_ignores_occupancy)
     ):

@@ -239,8 +239,8 @@ def test_levels_are_integers_on_the_0_254_scale():
 
 def test_night_mode_is_a_fixed_level_not_a_scaling(house, room, light):
     """"Predictable when half asleep." Night must not vary with outdoor lux."""
-    dark = solve(house, room, light, _input(lux=1.0, dnd=True))
-    dimmer = solve(house, room, light, _input(lux=45.0, dnd=True))
+    dark = solve(house, room, light, _input(lux=1.0, night_active=True, asleep=True))
+    dimmer = solve(house, room, light, _input(lux=45.0, night_active=True, asleep=True))
     assert dark.mode is Mode.NIGHT
     assert dark.level == dimmer.level == house.night_level
 
@@ -256,7 +256,8 @@ def test_ambience_is_a_floor_that_never_lowers_the_level(house, room, light):
 def test_ambience_is_off_when_asleep(house, room, light):
     """Ambience applies while DND is OFF. DND on ⇒ asleep ⇒ night level, not a floor."""
     house = HouseSettings(ambience_level=20, night_level=3)
-    result = solve(house, RoomSettings(bias_stops=-5.0), light, _input(lux=10.0, dnd=True))
+    result = solve(house, RoomSettings(bias_stops=-5.0), light,
+                   _input(lux=10.0, night_active=True, asleep=True))
     assert result.level == 3
 
 
@@ -401,25 +402,49 @@ def test_a_night_off_room_goes_fully_dark_when_asleep(house, light):
     """The bedroom's rule. A night level in the room he is asleep in is not a gentler
     version of off — it is a light on."""
     bedroom = RoomSettings(name="Bedroom", night_off=True)
-    result = solve(house, bedroom, light, _input(lux=1.0, dnd=True))
+    result = solve(house, bedroom, light, _input(lux=1.0, night_active=True, asleep=True))
     assert result.mode is Mode.NIGHT
     assert result.level == 0
 
 
 def test_other_rooms_still_get_the_night_level_when_asleep(house, room, light):
-    assert solve(house, room, light, _input(lux=1.0, dnd=True)).level == house.night_level
+    got = solve(house, room, light, _input(lux=1.0, night_active=True, asleep=True))
+    assert got.level == house.night_level
 
 
-def test_awake_in_the_night_returns_the_room_to_house_night_mode(house, light):
-    """"If awake in the night, it returns to the same state as the house."\""""
+def test_getting_up_relights_the_bedroom_at_the_night_level(house, light):
+    """THE BUG THIS REPLACES — the one that would have burned him at 06:00.
+
+    Measured over 72 h: the phone's DND clears the *moment he gets out of bed*
+    (on 22:49 → off 05:59 → on 07:25). So `asleep` goes False while `night_active`
+    stays latched, and the bedroom must come back at the NIGHT level.
+
+    Brandon: "If I wake up and get out of bed, it will turn off and the lights come on
+    to the low night setting and I can see."
+    """
     bedroom = RoomSettings(name="Bedroom", night_off=True)
-    result = solve(house, bedroom, light, _input(lux=1.0, dnd=True, awake_override=True))
-    assert result.level == house.night_level
+    got = solve(house, bedroom, light, _input(lux=1.0, night_active=True, asleep=False))
+    assert got.mode is Mode.NIGHT
+    assert got.level == house.night_level
+
+
+def test_getting_up_must_not_relight_the_house_at_full_demand(house, room, light):
+    """The failure mode of the version this replaces.
+
+    Defining night as "DND is on right now" ends night mode the instant he stands up.
+    The engine then recomputes from a pitch-dark lux reading and lights the room at
+    near-full demand. The latch is what stands between him and that.
+    """
+    latched = solve(house, room, light, _input(lux=1.0, night_active=True, asleep=False))
+    unlatched = solve(house, room, light, _input(lux=1.0, night_active=False, asleep=False))
+    assert latched.level == house.night_level
+    assert unlatched.level > 150  # what he would have been hit with
+    assert latched.level < unlatched.level
 
 
 def test_night_off_does_nothing_while_awake(house, light):
     bedroom = RoomSettings(name="Bedroom", night_off=True)
-    assert solve(house, bedroom, light, _input(lux=10.0, dnd=False)).level == 161
+    assert solve(house, bedroom, light, _input(lux=10.0)).level == 161
 
 
 def test_ambience_survives_an_empty_room(house, light):
@@ -435,14 +460,16 @@ def test_ambience_still_goes_out_when_he_falls_asleep(house, light):
     """DND on ⇒ asleep ⇒ the awake glow ends. An occupied room drops from the 20 floor
     to the night level, not to it."""
     house = HouseSettings(ambience_level=20, night_level=3)
-    result = solve(house, RoomSettings(), light, _input(lux=10.0, occupied=True, dnd=True))
+    result = solve(house, RoomSettings(), light,
+                   _input(lux=10.0, occupied=True, night_active=True, asleep=True))
     assert result.level == 3
 
 
 def test_an_empty_room_is_dark_once_he_is_asleep(house, light):
     """Ambience is the *awake* glow. Asleep + empty is off, not a night level."""
     house = HouseSettings(ambience_level=20, night_level=3)
-    result = solve(house, RoomSettings(), light, _input(lux=10.0, occupied=False, dnd=True))
+    result = solve(house, RoomSettings(), light,
+                   _input(lux=10.0, occupied=False, night_active=True, asleep=True))
     assert result.level == 0
 
 
@@ -455,7 +482,8 @@ def test_ambience_and_night_off_together_leave_the_bedroom_dark(house, light):
     """The combination that matters: awake-glow on house-wide, bedroom asleep."""
     house = HouseSettings(ambience_level=20)
     bedroom = RoomSettings(name="Bedroom", night_off=True)
-    result = solve(house, bedroom, light, _input(lux=10.0, occupied=False, dnd=True))
+    result = solve(house, bedroom, light,
+                   _input(lux=10.0, occupied=False, night_active=True, asleep=True))
     assert result.level == 0
 
 

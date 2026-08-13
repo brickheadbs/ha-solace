@@ -323,3 +323,121 @@ async def test_a_reconnecting_bulb_is_not_a_human_touch(hass: HomeAssistant, ent
     await hass.async_block_till_done()
 
     assert room.manual_touched is False
+
+
+# --------------------------------------------------------------------------------
+# The night LATCH — replayed against the measured 2026-08-13 DND sequence
+# --------------------------------------------------------------------------------
+#
+#   22:49  priority_only   he goes to bed
+#   05:59  off             HE GETS OUT OF BED  <- night must NOT end here
+#   07:25  priority_only
+#   07:58  off
+#
+# Night mode is latched: it starts on sleep and ends on the world's terms (outdoor lux,
+# or the lead-in to his alarm), never on his posture.
+
+
+async def test_night_latches_on_and_survives_him_getting_up(hass: HomeAssistant, entry, world) -> None:
+    world(lux=1.0, occupied=True)
+    assert await _setup(hass, entry)
+    co = entry.runtime_data.coordinator
+
+    assert await _mode(hass, entry, "priority_only") == "night"
+    assert co._night_latched is True
+
+    # 05:59 — he gets out of bed and the phone clears DND by itself.
+    assert await _mode(hass, entry, "off") == "night", "night ended when he stood up"
+    assert co._night_latched is True
+    assert int(hass.states.get("sensor.kitchen_target_level").state) == co.house.night_level
+
+
+async def test_night_ends_when_it_gets_light(hass: HomeAssistant, entry, world) -> None:
+    world(lux=1.0)
+    assert await _setup(hass, entry)
+    co = entry.runtime_data.coordinator
+    await _mode(hass, entry, "priority_only")
+    await _mode(hass, entry, "off")
+    assert co._night_latched is True
+
+    # A 4 am summer sunrise: normal logic returns.
+    world(lux=200.0)
+    await hass.async_block_till_done()
+    await co.async_refresh()
+    await hass.async_block_till_done()
+    assert hass.states.get("sensor.kitchen_mode").state == "normal"
+
+
+async def test_night_survives_a_restart(hass: HomeAssistant, entry, world) -> None:
+    """An HA restart at 3 am must not drop night mode and relight the house."""
+    world(lux=1.0)
+    assert await _setup(hass, entry)
+    await _mode(hass, entry, "priority_only")
+    await entry.runtime_data.coordinator.async_persist()
+
+    await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.runtime_data.coordinator._night_latched is True
+
+
+async def test_a_normal_daytime_dnd_does_not_darken_the_house(hass: HomeAssistant, entry, world) -> None:
+    """alarms_only in a bright house is a meeting, not bedtime."""
+    world(lux=4000.0)
+    assert await _setup(hass, entry)
+    assert await _mode(hass, entry, "alarms_only") == "normal"
+    assert entry.runtime_data.coordinator._night_latched is False
+
+
+async def test_changing_an_entity_link_rebinds_the_listeners(hass: HomeAssistant, entry, world) -> None:
+    """Configuring the sleep toggle AFTER setup must start watching it.
+
+    Found live: the toggle was set from the options flow, stored correctly, and did
+    nothing — because listeners were bound once at setup and nothing was watching it.
+    """
+    from custom_components.solace.const import CONF_SLEEP_TOGGLE
+
+    world(lux=1.0)
+    assert await _setup(hass, entry)
+    hass.states.async_set("input_boolean.solace_sleep", "off")
+    await hass.async_block_till_done()
+
+    hass.config_entries.async_update_entry(
+        entry, options={**entry.options, CONF_SLEEP_TOGGLE: "input_boolean.solace_sleep"}
+    )
+    await hass.async_block_till_done()
+
+    # Now flip it — no coordinator tick, purely the state listener.
+    hass.states.async_set("input_boolean.solace_sleep", "on")
+    await hass.async_block_till_done()
+    assert entry.runtime_data.coordinator._night_latched is True
+    assert hass.states.get("sensor.kitchen_mode").state == "night"
+
+
+async def test_the_lux_release_CLEARS_the_latch_not_just_masks_it(hass: HomeAssistant, entry, world) -> None:
+    """Found live, the hard way.
+
+    The first implementation kept `_night_latched` True and consulted a separate
+    "released" flag per room. The latch therefore never cleared — so the next time it
+    simply got dark, the house dropped back into night mode without him ever having gone
+    to sleep. The test that caught it read `night` at dusk on a wide-awake house.
+    """
+    world(lux=1.0)
+    assert await _setup(hass, entry)
+    co = entry.runtime_data.coordinator
+
+    await _mode(hass, entry, "priority_only")
+    await _mode(hass, entry, "off")
+    assert co._night_latched is True
+
+    world(lux=200.0)                      # dawn
+    await hass.async_block_till_done()
+    await co.async_refresh()
+    await hass.async_block_till_done()
+    assert co._night_latched is False, "latch masked instead of cleared"
+
+    world(lux=1.0)                        # dusk the same day — he has NOT gone to bed
+    await hass.async_block_till_done()
+    await co.async_refresh()
+    await hass.async_block_till_done()
+    assert co._night_latched is False
+    assert hass.states.get("sensor.kitchen_mode").state == "normal"

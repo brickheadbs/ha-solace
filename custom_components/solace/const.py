@@ -32,9 +32,6 @@ SUBENTRY_TYPE_ROOM = "room"
 # -- Config keys -------------------------------------------------------------------
 CONF_LUX_SENSOR = "lux_sensor"
 CONF_DND_ENTITY = "dnd_entity"
-CONF_AWAKE_OVERRIDE = "awake_override_entity"
-"""Optional. On ⇒ he is up in the night, so rooms with ``night_off`` rejoin the house's
-night mode instead of staying dark."""
 CONF_DND_SLEEP_STATES = "dnd_sleep_states"
 DEFAULT_DND_SLEEP_STATES = ("on", "priority_only")
 """⚠️ `sensor.pixel_8a_do_not_disturb_sensor` is a **4-value enum**
@@ -48,6 +45,12 @@ is the sleep signal, and `alarms_only` / `total_silence` deliberately are **not*
 
 The 2026-07 automation hit the same wall and solved it with a bridging input_boolean;
 reading the enum directly removes that moving part."""
+
+CONF_SLEEP_TOGGLE = "sleep_toggle_entity"
+"""Optional manual sleep switch, OR-ed with the phone's DND. Brandon's "Sleep now"
+button — a third sleep signal for when the phone has not caught up yet."""
+CONF_ALARM_ENTITY = "alarm_entity"
+"""`sensor.pixel_8a_next_alarm`. Night mode ends `alarm_lead_minutes` before it."""
 
 CONF_LIGHTS = "lights"
 CONF_PRESENCE = "presence"
@@ -103,6 +106,8 @@ HOUSE_SETTINGS: tuple[Setting, ...] = (
     Setting("bias_stops", "House bias", -4, 4, 0.05, 0, "stops", "mdi:tune"),
     # Levels
     Setting("night_level", "Night level", 0, 254, 1, 3, None, "mdi:weather-night"),
+    Setting("night_release_lux", "Night release lux", 0, 500, 1, 10, "lx", "mdi:weather-sunset-up"),
+    Setting("alarm_lead_minutes", "Night ends before alarm", 0, 240, 5, 30, "min", "mdi:alarm"),
     Setting("ambience_level", "Ambience floor", 0, 254, 1, 0, None, "mdi:lightbulb-night"),
     Setting("min_cutoff", "Minimum cutoff", 0, 254, 1, 1, None, "mdi:arrow-collapse-down"),
     Setting("rate_limit_step", "Rate limit", 0, 254, 1, 0, None, "mdi:speedometer-slow"),
