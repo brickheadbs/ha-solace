@@ -137,6 +137,11 @@ export class SolTabLighting extends LitElement {
         gap: 5px;
         border-radius: var(--sol-r-control);
       }
+      .adv-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+        gap: 0 24px;
+      }
       .toggle {
         display: flex;
         align-items: center;
@@ -173,7 +178,11 @@ export class SolTabLighting extends LitElement {
 
   /* ---------------------------------------------------------------- helpers */
 
+  /** Keys rendered by a named card. Anything not here falls into Advanced. */
+  private placed = new Set<string>();
+
   private schema(key: string): Schema | undefined {
+    this.placed.add(key);
     return this.snap.house_schema.find((s) => s.key === key);
   }
 
@@ -448,9 +457,38 @@ export class SolTabLighting extends LitElement {
     `;
   }
 
+  /**
+   * Everything no named card claimed.
+   *
+   * This exists so a setting cannot be added to `const.py` and then be silently
+   * unreachable here — which is exactly the "a value that cannot be changed from the
+   * panel is a bug" failure, just relocated to the frontend. New rows appear
+   * automatically, in a card that says plainly they are not everyday controls.
+   */
+  private renderAdvanced() {
+    const leftover = this.snap.house_schema.filter((s) => !this.placed.has(s.key));
+    if (!leftover.length) return nothing;
+    return html`<div class="card full">
+      <div class="card-head">
+        <ha-icon icon="mdi:wrench-outline"></ha-icon>
+        <h2>Advanced</h2>
+      </div>
+      <div class="caption" style="margin-bottom:8px">
+        Measured constants and plumbing. They have sensible defaults and you should not
+        need them — but nothing in this engine is hardcoded, so they are here rather than
+        buried in the source.
+      </div>
+      <div class="adv-grid">
+        ${leftover.map((s) => this.numberRow(s.key))}
+      </div>
+    </div>`;
+  }
+
   /* ---------------------------------------------------------------- render */
 
   render() {
+    // Recomputed each render: the named cards below repopulate it via `schema()`.
+    this.placed = new Set();
     const gateStart = this.value("gate_start_lux");
     const gateStop = this.value("gate_stop_lux");
     const lo = this.value("lux_full");
@@ -588,6 +626,8 @@ export class SolTabLighting extends LitElement {
         </div>
         <div class="sub">${this.row("gamma")}</div>
       </div>
+
+      ${this.renderAdvanced()}
     </div>`;
   }
 }

@@ -49,8 +49,6 @@ from .const import (
     DEFAULT_MIN_INTERVAL_S,
     DOMAIN,
     HOUSE_DEFAULTS,
-    MANUAL_BRIGHTNESS_THRESHOLD,
-    MANUAL_KELVIN_THRESHOLD,
     ROOM_DEFAULTS,
     SUBENTRY_TYPE_ROOM,
 )
@@ -139,7 +137,16 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
             # from the other direction. Fire immediately, then coalesce the rest of the
             # drag.
             request_refresh_debouncer=Debouncer(
-                hass, _LOGGER, cooldown=0.3, immediate=True
+                hass,
+                _LOGGER,
+                # Read straight off the entry: `self.house` needs `self.config_entry`,
+                # which super().__init__ has not set yet.
+                cooldown=float(
+                    entry.options.get(
+                        "refresh_debounce_s", HOUSE_DEFAULTS["refresh_debounce_s"]
+                    )
+                ),
+                immediate=True,
             ),
         )
         self.writer = LightWriter(hass)
@@ -186,6 +193,18 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         fields["alarm_lead_minutes"] = float(fields.get("alarm_lead_minutes", 30.0))
         fields["ambience_level"] = int(fields.get("ambience_level", 0))
         # Carried as 0/1 in the settings table; the engine wants a real bool.
+        for key in (
+            "lux_history_samples",
+            "manual_brightness_threshold",
+            "manual_kelvin_threshold",
+            "fallback_min_kelvin",
+            "fallback_max_kelvin",
+            "family_cct_max_kelvin",
+            "family_rgb_max_kelvin",
+            "demand_floor_level",
+        ):
+            if key in fields:
+                fields[key] = int(fields[key])
         fields["ambience_ignores_occupancy"] = bool(
             fields.get("ambience_ignores_occupancy", True)
         )
@@ -222,13 +241,18 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         """
         overrides = (subentry.data.get(CONF_PER_LIGHT) or {}).get(entity_id, {})
         state = self.hass.states.get(entity_id)
-        min_kelvin = 2000
-        max_kelvin = 9009
+        house = self.house
+        min_kelvin = house.fallback_min_kelvin
+        max_kelvin = house.fallback_max_kelvin
         family = None
         if state is not None:
             min_kelvin = int(state.attributes.get("min_color_temp_kelvin") or min_kelvin)
             max_kelvin = int(state.attributes.get("max_color_temp_kelvin") or max_kelvin)
-            family = infer_family(state)
+            family = infer_family(
+                state,
+                cct_max_kelvin=house.family_cct_max_kelvin,
+                rgb_max_kelvin=house.family_rgb_max_kelvin,
+            )
         return LightSettings(
             entity_id=entity_id,
             family=family or LightSettings().family,
@@ -627,17 +651,18 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         if old is not None and old.state in transient:
             return
 
+        house = self.house
         touched = False
         if old is None or old.state != new.state:
             touched = True
         else:
             old_brightness = old.attributes.get("brightness") or 0
             new_brightness = new.attributes.get("brightness") or 0
-            if abs(new_brightness - old_brightness) > MANUAL_BRIGHTNESS_THRESHOLD:
+            if abs(new_brightness - old_brightness) > house.manual_brightness_threshold:
                 touched = True
             old_kelvin = old.attributes.get("color_temp_kelvin") or 0
             new_kelvin = new.attributes.get("color_temp_kelvin") or 0
-            if abs(new_kelvin - old_kelvin) > MANUAL_KELVIN_THRESHOLD:
+            if abs(new_kelvin - old_kelvin) > house.manual_kelvin_threshold:
                 touched = True
 
         if not touched:
@@ -750,8 +775,9 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         hardcoded 45.5°N; this installation is near 54°N, where the winter sun caps at 12.5°.
         """
         sun = self.hass.states.get("sun.sun")
+        fallback = self.house.dusk_fallback_hour
         if sun is None:
-            return 21.5
+            return fallback
         # ⚠️ `next_dusk` flips to TOMORROW's dusk the moment today's passes — so reading
         # it during the evening glide (exactly when it matters) returns the wrong day.
         # The clock hour barely moves day to day, so the error is small and would have
@@ -761,7 +787,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         raw = sun.attributes.get("next_dusk")
         parsed = dt_util.parse_datetime(raw) if raw else None
         if parsed is None:
-            return 21.5
+            return fallback
         local = dt_util.as_local(parsed)
         if (local - dt_util.now()).total_seconds() > 12 * 3600:
             local = local - timedelta(days=1)
@@ -776,7 +802,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         """
         house = self.house
         self._lux_history.append(lux)
-        self._lux_history = self._lux_history[-5:]
+        self._lux_history = self._lux_history[-max(2, house.lux_history_samples) :]
         if len(self._lux_history) < 2:
             return
         finite = [v for v in self._lux_history if v != float("inf")]

@@ -6,6 +6,8 @@ found during design, not hypothetical edge cases.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from custom_components.solace.engine import (
@@ -153,11 +155,27 @@ def test_ramp_interpolates_continuously_between_points(house):
     assert ramp_bias(22.5, house) == pytest.approx(-1.5)
 
 
-def test_ramp_is_flat_before_it_opens(house):
-    """A deliberate step at the first point — the live blueprint has no bias at 19:00."""
+def test_ramp_eases_in_rather_than_stepping(house):
+    """⚠️ NEVER JUMP. The ramp used to hold a flat 0 and then *step* onto its first
+    point. It now eases in over `ramp_onset_minutes` immediately before that point —
+    smooth, but still no bias at teatime, which is the reason it does not simply glide
+    from 18:00."""
+    onset_h = house.ramp_onset_minutes / 60
+    first = house.ramp[0]
     assert ramp_bias(18.0, house) == 0.0
-    assert ramp_bias(19.9, house) == 0.0
-    assert ramp_bias(20.0, house) == pytest.approx(-0.5)
+    assert ramp_bias(first.hour - onset_h - 0.01, house) == 0.0
+    # Inside the onset it is partway, and monotonic toward the first point.
+    quarter = ramp_bias(first.hour - onset_h * 0.75, house)
+    half = ramp_bias(first.hour - onset_h * 0.5, house)
+    assert first.stops < quarter < 0
+    assert quarter > half > first.stops
+    assert ramp_bias(first.hour, house) == pytest.approx(first.stops)
+
+
+def test_the_ramp_onset_can_be_switched_back_to_a_step(house):
+    stepped = replace(house, ramp_onset_minutes=0.0)
+    assert ramp_bias(19.99, stepped) == 0.0
+    assert ramp_bias(20.0, stepped) == pytest.approx(-0.5)
 
 
 def test_ramp_survives_midnight(house):
@@ -245,12 +263,52 @@ def test_night_mode_is_a_fixed_level_not_a_scaling(house, room, light):
     assert dark.level == dimmer.level == house.night_level
 
 
-def test_ambience_is_a_floor_that_never_lowers_the_level(house, room, light):
-    house = HouseSettings(ambience_level=20)
-    bright_room = solve(house, room, light, _input(lux=10.0))  # computes ~161
-    assert bright_room.level == 161  # floor did not pull it down
-    dim = solve(house, RoomSettings(bias_stops=-5.0), light, _input(lux=10.0))
-    assert dim.level == 20  # floor lifted it
+def test_ambience_clamps_diminish_but_never_lifts_demand(house, room, light):
+    """The owner's spec, 2026-08-13:
+
+        Demand      normal output   80 %
+        Diminished  set to 50 %  →  40 %
+        Ambience    set to 10 %  →  10 %
+
+    Ambience is a clamp on the **diminished** result, not on demand. A sub-zone going
+    quiet must not take the room below its resting glow — but a bright afternoon
+    genuinely needs less light than the glow, and lifting it back up would light a room
+    the daylight has already lit.
+    """
+    house = HouseSettings(ambience_level=25)
+
+    plain = solve(house, room, light, _input(lux=10.0))
+    assert plain.level == 161  # the floor does not pull a lit room down
+
+    # Diminished but still above the floor — the reduction stands.
+    dimmed = solve(
+        house, RoomSettings(diminish_pct=50.0), light,
+        _input(lux=10.0, diminish_active=True),
+    )
+    assert 78 <= dimmed.level <= 81
+
+    # Diminished *below* the floor — ambience wins.
+    harsh = solve(
+        house, RoomSettings(diminish_pct=95.0), light,
+        _input(lux=10.0, diminish_active=True),
+    )
+    assert harsh.level == 25
+
+    # DEMAND below the floor — demand wins, and is NOT lifted to ambience.
+    low = solve(house, RoomSettings(bias_stops=-5.0), light, _input(lux=10.0))
+    assert 0 < low.level < 25, "a low demand was lifted up to the ambience floor"
+
+
+def test_demand_does_not_dim_below_the_awake_floor(house, room, light):
+    """"Demand wins, but only down to 1 %" — it dims rather than snapping off."""
+    house = HouseSettings(ambience_level=25, demand_floor_level=3)
+    result = solve(house, RoomSettings(bias_stops=-7.0), light, _input(lux=10.0))
+    assert result.level == 3
+
+    # A demand of exactly zero still means "no light needed" — the floor does not
+    # resurrect a room the daylight has switched off.
+    off = solve(house, RoomSettings(bias_stops=-12.0), light, _input(lux=10.0))
+    assert off.level == 0
 
 
 def test_ambience_is_off_when_asleep(house, room, light):

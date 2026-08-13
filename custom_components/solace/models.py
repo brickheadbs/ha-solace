@@ -144,6 +144,45 @@ class HouseSettings:
     colour_step_transition_s: float = 4.0
     """See fade.py — R is computed from the TRANSITION time, never the step interval."""
 
+    # -- Formerly literals buried in the plumbing (2026-08-13) ---------------------
+    refresh_debounce_s: float = 0.3
+    """How long to coalesce a slider drag before recalculating. Fires immediately, then
+    coalesces — the opposite of the 10 s default, which is the failure the brief blames
+    for the last build."""
+    dusk_fallback_hour: float = 21.5
+    """Used only when ``sun.sun`` has no usable ``next_dusk``."""
+    lux_history_samples: int = 5
+    """How many readings the volatility window keeps."""
+    manual_brightness_threshold: int = 25
+    manual_kelvin_threshold: int = 100
+    """Deltas above which a change is a HUMAN touch rather than a bulb echoing back a
+    value that differs slightly from what was commanded. Adaptive Lighting's measured
+    numbers, but measured on *its* hardware — hence tunable here."""
+    fallback_min_kelvin: int = 2000
+    fallback_max_kelvin: int = 9009
+    """Used only when a light does not report its own range."""
+    family_cct_max_kelvin: int = 4200
+    family_rgb_max_kelvin: int = 7000
+    """Where the bulb-family split falls, by reported Kelvin ceiling."""
+    colour_rate_floor: float = 0.156
+    """Measured colour rate floor, mired/s. Below it a bulb's 6-bit fixed-point step
+    underflows and the fade stalls."""
+    colour_rate_safety: float = 1.5
+    """Multiplier on the floor. The boundary is bracketed, not pinned, and the failure
+    mode is a permanently stalled bulb — plan comfortably inside it."""
+
+    # -- Smoothness. THE RULE: never jump ------------------------------------------
+    morning_glide_minutes: float = 90.0
+    """The morning colour release used to be a **step** from night to day Kelvin. Now a
+    glide of this length. 0 restores the old snap, and is a setting rather than a
+    constant so "never jump" stays the user's call, not the code's."""
+    ramp_onset_minutes: float = 30.0
+    """The evening ramp used to **step** onto its first point. Now it eases in over this
+    long. 0 restores the step."""
+    demand_floor_level: int = 3
+    """The floor demand may fall to while awake and lit — roughly 1 % of the 0-254 scale.
+    Ambience does *not* raise a low demand up to itself; demand wins, down to here."""
+
     # -- Display only ---------------------------------------------------------------
     gamma: float = 2.39
     """Measured mean on Aqara CCT (per-point 2.23-2.47). **Display column only** — gamma

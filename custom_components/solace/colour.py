@@ -56,8 +56,20 @@ def target_kelvin(clock_hour: float, dusk_hour: float, house: HouseSettings) -> 
     day_mired = kelvin_to_mired(house.day_kelvin)
     night_mired = kelvin_to_mired(house.night_kelvin)
 
+    morning_hours = max(house.morning_glide_minutes, 0.0) / 60.0
+
     if elapsed >= release_at:
-        kelvin = house.day_kelvin
+        # ⚠️ **NEVER JUMP.** The morning release used to snap straight from the night
+        # colour to the day colour — a hard step, at the exact moment someone is most
+        # likely to be woken by it. It now glides, in mireds like the evening side, over
+        # ``morning_glide_minutes``. Set that to 0 to get the old snap back; it is a
+        # setting precisely so "never jump" stays the user's call and not the code's.
+        into_morning = elapsed - release_at
+        if morning_hours <= 0 or into_morning >= morning_hours:
+            kelvin = house.day_kelvin
+        else:
+            t = into_morning / morning_hours
+            kelvin = mired_to_kelvin(night_mired + t * (day_mired - night_mired))
     elif glide_hours <= 0 or elapsed >= glide_hours:
         kelvin = house.night_kelvin
     else:

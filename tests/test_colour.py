@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from custom_components.solace.colour import (
@@ -51,9 +53,24 @@ def test_the_curve_is_continuous_across_midnight(house):
 
 
 def test_the_curve_releases_in_the_morning(house):
+    """⚠️ The release is a GLIDE, not a step. "Never jump" is a standing rule, and the
+    morning release is the one the sleeper is most likely to be woken by."""
     assert target_kelvin(6.4, DUSK, house) == house.night_kelvin
-    assert target_kelvin(6.5, DUSK, house) == house.day_kelvin
+    # Just past the release it has barely moved — no snap to day colour.
+    just_after = target_kelvin(6.6, DUSK, house)
+    assert house.night_kelvin < just_after < house.day_kelvin
+    # Halfway through the glide it is between the two, and monotonic.
+    half = target_kelvin(6.5 + house.morning_glide_minutes / 120, DUSK, house)
+    assert just_after < half < house.day_kelvin
+    # And it does arrive.
+    assert target_kelvin(6.5 + house.morning_glide_minutes / 60, DUSK, house) == house.day_kelvin
     assert target_kelvin(12.0, DUSK, house) == house.day_kelvin
+
+
+def test_the_morning_glide_can_be_switched_back_to_a_step(house):
+    """0 restores the old snap — "never jump" is the user's call, not the code's."""
+    stepped = replace(house, morning_glide_minutes=0.0)
+    assert target_kelvin(6.5, DUSK, stepped) == stepped.day_kelvin
 
 
 def test_a_winter_dusk_works_the_same(house):
@@ -61,12 +78,17 @@ def test_a_winter_dusk_works_the_same(house):
     winter = 16.8
     assert target_kelvin(16.0, winter, house) == house.day_kelvin
     assert target_kelvin(winter + 1.5, winter, house) == house.night_kelvin
-    assert target_kelvin(6.5, winter, house) == house.day_kelvin
+    # Past the morning glide, not at its first instant.
+    assert (
+        target_kelvin(6.5 + house.morning_glide_minutes / 60, winter, house)
+        == house.day_kelvin
+    )
 
 
 def test_the_manual_trim_is_added_after_the_curve():
     house = HouseSettings(colour_trim_kelvin=200)
-    assert target_kelvin(6.5, DUSK, house) == 4200
+    settled = 6.5 + house.morning_glide_minutes / 60
+    assert target_kelvin(settled, DUSK, house) == house.day_kelvin + 200
 
 
 # --------------------------------------------------------------------------------

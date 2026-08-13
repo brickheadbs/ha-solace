@@ -182,13 +182,18 @@ def ramp_bias(hour: float, house: HouseSettings) -> float:
         (RampPoint(hour=_evening_axis(p.hour), stops=p.stops) for p in house.ramp),
         key=lambda p: p.hour,
     )
-    if axis < points[0].hour:
-        # No bias before the ramp opens. This is a deliberate STEP at the first point,
-        # not a glide up to it: the blueprint the owner uses today has no bias at 19:00
-        # and "evening early" at 20:00, and gliding from 18:00 would invent a bias he
-        # never asked for. A step here is a *mode* change and gets the mode-change
-        # transition; the glide between points is what has to be continuous.
+    onset = max(house.ramp_onset_minutes, 0.0) / 60.0
+    if axis < points[0].hour - onset:
         return 0.0
+    if axis < points[0].hour:
+        # ⚠️ **NEVER JUMP.** This used to hold a flat 0 right up to the first ramp point
+        # and then *step* onto it. Gliding all the way from 18:00 would invent a bias
+        # nobody asked for, so instead it eases in over ``ramp_onset_minutes``
+        # immediately before the first point — smooth, but still no bias at teatime.
+        # Set the onset to 0 to get the old step back.
+        if onset <= 0:
+            return 0.0
+        return ((axis - (points[0].hour - onset)) / onset) * points[0].stops
     if axis >= points[-1].hour:
         # Hold the last point until the morning release — this is what the release is
         # for. Without it the ramp would either snap back at midnight or hold forever.
@@ -355,7 +360,8 @@ def solve(
             level = house.night_level
             trace.append(("night_override", level))
 
-    # 10. Diminish — kitchen only. A reduction that STAYS; never an off.
+    # 10. Diminish — a reduction that STAYS; never an off.
+    demand_level = level
     if room.diminish_pct > 0 and data.diminish_active and level > 0:
         level = int(round(level * (1.0 - room.diminish_pct / 100.0)))
         trace.append(("diminish", level))
@@ -383,17 +389,35 @@ def solve(
     # 0 ⇒ feature off entirely.
     # The room's own floor overrides the house's. 0 ⇒ unmodified, so the room falls back
     # to the house value rather than switching the feature off in that one room.
+    #
+    # ⚠️ **Ambience is a clamp on DIMINISH, not on DEMAND** (owner, 2026-08-13):
+    #
+    #     Demand      normal output   80 %
+    #     Diminished  set to 50 %  →  40 %
+    #     Ambience    set to 10 %  →  10 %
+    #
+    #   * If the *diminished* result falls below ambience, **ambience wins** — a
+    #     sub-zone going quiet must not take the room below its resting glow.
+    #   * If *demand itself* falls below ambience, **demand wins** — a bright afternoon
+    #     genuinely needs less light than the resting glow, and raising it back up would
+    #     light a room the daylight has already lit. It floors at ``demand_floor_level``
+    #     (~1 % of the 0-254 scale) rather than 0, so it dims rather than snapping off.
+    #
+    # Both branches are skipped in NIGHT — the night level is deliberately the only
+    # thing driving the house while asleep.
     ambience = room.ambience_level or house.ambience_level
-    if (
-        ambience > 0
-        and mode is Mode.NORMAL
-        and gate_open
-        and not data.asleep
-        and ambience > level
-        and (data.occupied or house.ambience_ignores_occupancy)
-    ):
-        level = ambience
-        trace.append(("ambience_floor", level))
+    awake_and_dark = mode is Mode.NORMAL and gate_open and not data.asleep
+    lit_here = data.occupied or house.ambience_ignores_occupancy
+    if ambience > 0 and awake_and_dark and lit_here:
+        if demand_level >= ambience:
+            if level < ambience:
+                level = ambience
+                trace.append(("ambience_clamp", level))
+        elif demand_level > 0 and level < house.demand_floor_level:
+            # Demand wins *over ambience* — so it is floored at ~1 %, not lifted all the
+            # way back up to the ambience level. It dims, rather than snapping off.
+            level = house.demand_floor_level
+            trace.append(("demand_floor", level))
 
     # 13. Manual wins over everything computed above.
     if data.manual_level is not None:

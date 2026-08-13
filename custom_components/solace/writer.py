@@ -30,7 +30,9 @@ from .models import Family, LightSettings
 _LOGGER = logging.getLogger(__name__)
 
 
-def infer_family(state: State) -> Family:
+def infer_family(
+    state, *, cct_max_kelvin: int = 4200, rgb_max_kelvin: int = 7000
+) -> Family:
     """Infer the bulb family from what the registry actually reports.
 
     Read, never guessed — the max Kelvin is the discriminator and it comes straight off
@@ -49,9 +51,9 @@ def infer_family(state: State) -> Family:
     registry means the count cannot go stale again.
     """
     max_kelvin = state.attributes.get("max_color_temp_kelvin") or 0
-    if max_kelvin <= 4200:
+    if max_kelvin <= cct_max_kelvin:
         return Family.IKEA
-    if max_kelvin <= 7000:
+    if max_kelvin <= rgb_max_kelvin:
         return Family.AQARA_CCT
     return Family.AQARA_RGB
 

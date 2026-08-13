@@ -97,8 +97,8 @@ HOUSE_SETTINGS: tuple[Setting, ...] = (
     # Ambient gate
     Setting("gate_start_lux", "Gate start lux", 0, 2000, 1, 50, "lx", "mdi:weather-sunset-down"),
     Setting("gate_stop_lux", "Gate stop lux", 0, 2000, 1, 80, "lx", "mdi:weather-sunset-up"),
-    Setting("gate_debounce_falling_s", "Gate debounce falling", 0, 900, 1, 0, "s", "mdi:timer-sand"),
-    Setting("gate_debounce_rising_s", "Gate debounce rising", 0, 900, 1, 0, "s", "mdi:timer-sand"),
+    Setting("gate_debounce_falling_s", "Gate debounce falling", 0, 900, 0.5, 0, "s", "mdi:timer-sand"),
+    Setting("gate_debounce_rising_s", "Gate debounce rising", 0, 900, 0.5, 0, "s", "mdi:timer-sand"),
     # Demand
     Setting("lux_full", "Demand full lux", 0.1, 500, 0.1, 1, "lx", "mdi:brightness-7"),
     Setting("lux_window", "Demand window", 1, 5000, 1, 539, "lx", "mdi:arrow-expand-horizontal"),
@@ -107,7 +107,7 @@ HOUSE_SETTINGS: tuple[Setting, ...] = (
     # Levels
     Setting("night_level", "Night level", 0, 254, 1, 3, None, "mdi:weather-night"),
     Setting("night_release_lux", "Night release lux", 0, 500, 1, 10, "lx", "mdi:weather-sunset-up"),
-    Setting("alarm_lead_minutes", "Night ends before alarm", 0, 240, 5, 30, "min", "mdi:alarm"),
+    Setting("alarm_lead_minutes", "Night ends before alarm", 0, 240, 1, 30, "min", "mdi:alarm"),
     Setting("ambience_level", "Ambience floor", 0, 254, 1, 0, None, "mdi:lightbulb-night"),
     # A boolean carried as 0/1 so it lives in the one settings table with everything
     # else. The panel renders it as a switch. It was a hardcoded True whose own docstring
@@ -128,7 +128,7 @@ HOUSE_SETTINGS: tuple[Setting, ...] = (
     # Transitions — every command sends one explicitly; omitting it inherits a hidden 4 s.
     Setting("transition_on_s", "Transition on", 0, 60, 0.1, 2, "s", "mdi:transition"),
     Setting("transition_off_s", "Transition off", 0, 60, 0.1, 4, "s", "mdi:transition"),
-    Setting("transition_mode_s", "Transition mode change", 0, 300, 1, 10, "s", "mdi:transition"),
+    Setting("transition_mode_s", "Transition mode change", 0, 300, 0.1, 10, "s", "mdi:transition"),
     Setting("transition_setting_s", "Transition while tuning", 0, 5, 0.1, 0.5, "s", "mdi:gesture-swipe"),
     # Colour
     Setting("day_kelvin", "Day colour", 2000, 9000, 10, 4000, "K", "mdi:white-balance-sunny"),
@@ -139,9 +139,9 @@ HOUSE_SETTINGS: tuple[Setting, ...] = (
     Setting(
         "colour_step_transition_s",
         "Colour step fade",
-        1,
-        30,
         0.5,
+        30,
+        0.1,
         4,
         "s",
         "mdi:transition",
@@ -151,10 +151,28 @@ HOUSE_SETTINGS: tuple[Setting, ...] = (
     # Clock 2 — the adaptive interval. These were module constants until the panel
     # landed, which made them exactly the kind of value the brief calls a bug: "a value
     # that cannot be changed from the panel is a bug".
-    Setting("update_interval_min_s", "Update interval min", 5, 3600, 5, 30, "s", "mdi:timer-play"),
-    Setting("update_interval_home_s", "Update interval occupied", 5, 3600, 5, 150, "s", "mdi:timer"),
-    Setting("update_interval_max_s", "Update interval max", 5, 3600, 5, 600, "s", "mdi:timer-off"),
+    Setting("update_interval_min_s", "Update interval min", 5, 3600, 1, 30, "s", "mdi:timer-play"),
+    Setting("update_interval_home_s", "Update interval occupied", 5, 3600, 1, 150, "s", "mdi:timer"),
+    Setting("update_interval_max_s", "Update interval max", 5, 3600, 1, 600, "s", "mdi:timer-off"),
     Setting("lux_volatility_lx", "Lux volatility threshold", 0, 2000, 1, 50, "lx", "mdi:waves"),
+    # -- Values that were literals in the logic until 2026-08-13 -------------------
+    # The rule is "nothing is hardcoded", and these were all in breach: buried in
+    # coordinator.py, writer.py and fade.py rather than in this table.
+    Setting("refresh_debounce_s", "Refresh coalesce", 0, 5, 0.05, 0.3, "s", "mdi:motion-play"),
+    Setting("dusk_fallback_hour", "Dusk fallback", 0, 23.75, 0.25, 21.5, "h", "mdi:weather-dusk"),
+    Setting("lux_history_samples", "Lux samples kept", 2, 20, 1, 5, None, "mdi:chart-line"),
+    Setting("manual_brightness_threshold", "Manual detect: brightness", 0, 254, 1, 25, None, "mdi:hand-back-right"),
+    Setting("manual_kelvin_threshold", "Manual detect: colour", 0, 2000, 10, 100, "K", "mdi:hand-back-right"),
+    Setting("fallback_min_kelvin", "Fallback min Kelvin", 1000, 4000, 10, 2000, "K", "mdi:thermometer-low"),
+    Setting("fallback_max_kelvin", "Fallback max Kelvin", 2000, 20000, 10, 9009, "K", "mdi:thermometer-high"),
+    Setting("family_cct_max_kelvin", "Family split: CCT ceiling", 2000, 9000, 10, 4200, "K", "mdi:call-split"),
+    Setting("family_rgb_max_kelvin", "Family split: RGB ceiling", 2000, 20000, 10, 7000, "K", "mdi:call-split"),
+    Setting("colour_rate_floor", "Colour rate floor", 0.05, 1, 0.001, 0.156, "mired/s", "mdi:speedometer-slow"),
+    Setting("colour_rate_safety", "Colour rate safety", 1, 5, 0.05, 1.5, "x", "mdi:shield-half-full"),
+    # -- Smoothness (AuDHD rule: never jump) ---------------------------------------
+    Setting("morning_glide_minutes", "Morning colour glide", 0, 240, 1, 90, "min", "mdi:weather-sunset-up"),
+    Setting("ramp_onset_minutes", "Evening ramp onset", 0, 240, 1, 30, "min", "mdi:ray-start-arrow"),
+    Setting("demand_floor_level", "Minimum awake level", 0, 254, 1, 3, None, "mdi:arrow-collapse-down"),
     # Display only
     Setting("gamma", "Gamma (display only)", 1, 4, 0.01, 2.39, None, "mdi:chart-bell-curve"),
 )
@@ -184,7 +202,7 @@ ROOM_SETTINGS: tuple[Setting, ...] = (
         "Manual hold",
         0,
         1440,
-        5,
+        1,
         30,
         "min",
         "mdi:hand-back-right",
