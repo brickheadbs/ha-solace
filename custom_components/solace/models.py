@@ -350,6 +350,13 @@ class EngineInput:
     current_level: int = 0
     """What the bulb is at now — the rate limiter's starting point."""
     last_written_level: int | None = None
+    last_source: str | None = None
+    """What drove this light's level on the PREVIOUS tick — see ``Solution.source``.
+
+    The rate limiter needs it. Without it, ambience made every entry and exit look like
+    demand tracking (the light is never off, and the target is never 0, so both of the
+    limiter's exemptions became unreachable) and walking into a room crawled up at
+    ``rate_limit_step`` per tick."""
     """What we last *commanded*. Feeds the dead zone; None ⇒ always write."""
 
 
@@ -368,6 +375,13 @@ class Solution:
     demand: float
     stops: float
     fraction: float
+    source: str = "demand"
+    """WHY the level is what it is: ``demand``, ``ambience``, ``night`` or ``off``.
+
+    Rate limiting is for *hunting* — lux wobbles, demand wobbles, the bulb chases it. A
+    change of source is not hunting, it is a state change (someone walked in, night
+    latched, the glow took over), and throttling those to a couple of levels a tick is
+    how "I walked into the room and nothing happened" happens."""
     trace: tuple[tuple[str, object], ...] = field(default=())
 
     def with_trace(self, step: str, value: object) -> Solution:

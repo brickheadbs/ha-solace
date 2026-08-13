@@ -482,9 +482,38 @@ def solve(
     level = apply_clamp(level, light)
     trace.append(("clamped", level))
 
-    # 15. Rate limit — tracking only.
-    level = rate_limit(data.current_level, level, house.rate_limit_step)
-    trace.append(("rate_limited", level))
+    # 14b. WHY is the level what it is? Needed by the limiter below.
+    steps_taken = dict(trace)
+    if data.manual_level is not None:
+        source = "manual"
+    elif level <= 0:
+        source = "off"
+    elif "ambience_replaces_off" in steps_taken:
+        source = "ambience"
+    elif mode is Mode.NIGHT:
+        source = "night"
+    else:
+        source = "demand"
+
+    # 15. Rate limit — **demand tracking only, and only between two demand ticks.**
+    #
+    # ⚠️ Its two exemptions (`current <= 0` for on, `target <= 0` for off) were how a
+    # state change escaped the limiter. Ambience made both unreachable: with a resting
+    # glow the light is *never* off and the target is *never* 0. So walking into a room
+    # became "tracking" and crawled up at `rate_limit_step` a tick — measured live at
+    # step 2 with a 600 s interval, which is 15 hours to cross the room's range. That is
+    # the "I went into other rooms and nothing happened" report, and it was introduced by
+    # ambience, not by the limiter.
+    #
+    # Hunting is what the limiter is for, and hunting only happens while the source stays
+    # `demand` and lux wobbles underneath it. Any change of source is a state change and
+    # goes straight through, with `transition:` doing the smoothing in hardware.
+    tracking = source == "demand" and data.last_source == "demand"
+    if tracking:
+        level = rate_limit(data.current_level, level, house.rate_limit_step)
+        trace.append(("rate_limited", level))
+    else:
+        trace.append(("rate_limit_skipped", source))
 
     # 16. Dead zone.
     write = past_dead_zone(level, data.last_written_level, house.dead_zone)
@@ -498,6 +527,7 @@ def solve(
         demand=demand_value,
         stops=stops,
         fraction=fraction,
+        source=source,
         trace=tuple(trace),
     )
 

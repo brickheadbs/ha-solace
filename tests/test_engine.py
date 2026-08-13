@@ -804,3 +804,59 @@ def test_the_axis_anchor_is_a_setting_not_a_literal(light):
     discarded = HouseSettings(ramp=ramp, evening_axis_hour=18.0, ramp_onset_minutes=0.0)
     assert ramp_bias(16.5, reachable) == -1.0
     assert ramp_bias(16.5, discarded) == 0.0
+
+
+# --------------------------------------------------------------------------------
+# The rate limiter vs ambience — reported live as "I went into other rooms and
+# nothing happened", 2026-08-13.
+# --------------------------------------------------------------------------------
+
+LIMITED = dict(rate_limit_step=2, ambience_level=11, ambience_start_lux=50.0, min_cutoff=1)
+
+
+def test_walking_into_a_room_is_not_throttled_by_the_tracking_limiter(light):
+    """⚠️ THE REGRESSION. The limiter exempts on (`current <= 0`) and off
+    (`target <= 0`). Ambience makes both unreachable — the light is never off and the
+    target is never 0 — so entering a room became "tracking" and crawled up 2 levels a
+    tick. At the live 600 s interval that is ~15 hours to cross the range.
+    """
+    house = HouseSettings(**LIMITED)
+    arriving = solve(
+        house, RoomSettings(), light,
+        _input(lux=5.0, occupied=True, current_level=11, last_source="ambience"),
+    )
+    assert arriving.source == "demand"
+    assert arriving.level > 100, f"throttled to {arriving.level} — the room feels dead"
+
+
+def test_leaving_a_room_drops_to_the_glow_immediately(light):
+    """The same bug in the other direction: 193 down to 11 at 2 a tick."""
+    house = HouseSettings(**LIMITED, ambience_ignores_occupancy=True)
+    leaving = solve(
+        house, RoomSettings(), light,
+        _input(lux=5.0, occupied=False, current_level=193, last_source="demand"),
+    )
+    assert leaving.source == "ambience"
+    assert leaving.level == 11
+
+
+def test_demand_tracking_is_still_rate_limited(light):
+    """The limiter must keep doing its actual job: stopping the bulb chasing lux wobble
+    while nothing about the room's state has changed."""
+    house = HouseSettings(**LIMITED)
+    tracking = solve(
+        house, RoomSettings(), light,
+        _input(lux=5.0, occupied=True, current_level=100, last_source="demand"),
+    )
+    assert tracking.source == "demand"
+    assert tracking.level == 102, "the limiter stopped limiting real tracking"
+
+
+def test_the_first_tick_after_a_restart_is_not_throttled(light):
+    """`last_source` is None on a cold start. That is a state change, not tracking."""
+    house = HouseSettings(**LIMITED)
+    cold = solve(
+        house, RoomSettings(), light,
+        _input(lux=5.0, occupied=True, current_level=11, last_source=None),
+    )
+    assert cold.level > 100

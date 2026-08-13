@@ -92,6 +92,8 @@ class RoomState:
     """UTC timestamp of the last human touch. Persisted alongside the flag."""
     solutions: dict[str, Solution] = field(default_factory=dict)
     last_written: dict[str, int] = field(default_factory=dict)
+    last_source: dict[str, str] = field(default_factory=dict)
+    """entity_id -> what drove its level last tick. See Solution.source."""
     ambience_open: bool = False
     ambience_pending_since: float | None = None
     last_mode: Mode = Mode.NORMAL
@@ -516,10 +518,14 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                 manual_level=current if manual else None,
                 current_level=current,
                 last_written_level=room.last_written.get(entity_id),
+                last_source=room.last_source.get(entity_id),
             ),
             zone=zone,
         )
         room.solutions[entity_id] = solution
+        # Recorded on EVERY tick, including the ones that write nothing — the limiter
+        # compares this tick's source with the last COMPUTED one, not the last written.
+        room.last_source[entity_id] = solution.source
 
         # Manual wins: compute and display, but never write.
         if manual or not solution.should_write:
