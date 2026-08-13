@@ -190,11 +190,24 @@ class LightWriter:
         delta = target_mired - current_mired
 
         # Below one step is the family's colour dead zone: not worth a radio write, and
-        # settling within a step of the curve beats chattering at it. Everything above
-        # it moves, capped so a catch-up cannot become a visible lurch.
+        # settling within a step of the curve beats chattering at it.
         if abs(delta) < profile.step_mired:
             return None
-        size = min(abs(delta), profile.max_step_mired)
+
+        # Move in WHOLE steps, never the raw remaining delta.
+        #
+        # ⚠️ This is the difference between the setting meaning something and not. Moving
+        # the whole delta makes every write land exactly on the curve, which sounds
+        # better and is not: the drift between ticks then sets the step size, so a
+        # 2-mired setting produced ~4-mired jumps and the panel's own chart showed it.
+        # Quantising means the walk is as fine as the setting says, at the cost of
+        # trailing the curve by up to one step — which is the dead zone, by design.
+        #
+        # `max_step_mired` therefore engages only when several steps' worth has piled up,
+        # which is what it was for: recovering from steps skipped during a brightness
+        # fade, not padding every ordinary move.
+        steps = int(abs(delta) // profile.step_mired)
+        size = min(steps * profile.step_mired, profile.max_step_mired)
         next_mired = current_mired + (size if delta > 0 else -size)
 
         if not colour_transition_is_safe(size, profile.step_transition_s, r_crit, safety):

@@ -209,3 +209,46 @@ async def test_an_unknown_current_colour_writes_nothing(hass, sent):
     writer = LightWriter(hass)
     assert await _step(hass, writer, SMOOTH, None, 3000) is None
     assert sent == []
+
+
+async def test_an_ordinary_move_is_one_whole_step_not_the_leftover_delta(hass, sent):
+    """The setting has to mean what it says.
+
+    Moving the raw remaining delta lands exactly on the curve every time, which sounds
+    better and is not: the drift between ticks then sets the step size, so a 2-mired
+    setting silently produced ~4-mired jumps. The panel's own staircase chart is what
+    made this visible.
+    """
+    writer = LightWriter(hass)
+    drift = SMOOTH.step_mired + 1  # one step, plus a bit — a normal tick's worth
+    result = await _step(
+        hass, writer, SMOOTH, mired_to_kelvin(300), mired_to_kelvin(300 + drift)
+    )
+    assert kelvin_to_mired(result) - 300 == SMOOTH.step_mired
+
+
+async def test_catch_up_engages_only_once_several_steps_have_piled_up(hass, sent):
+    """`max_step_mired` is for recovering skipped steps, not for padding every move."""
+    writer = LightWriter(hass)
+    ordinary = await _step(
+        hass, writer, STEPPED, mired_to_kelvin(300), mired_to_kelvin(300 + STEPPED.step_mired)
+    )
+    assert kelvin_to_mired(ordinary) - 300 == STEPPED.step_mired
+
+    behind = await _step(
+        hass, writer, STEPPED, mired_to_kelvin(300), mired_to_kelvin(300 + 40)
+    )
+    assert kelvin_to_mired(behind) - 300 == STEPPED.max_step_mired
+
+
+async def test_every_move_is_a_whole_number_of_steps(hass, sent):
+    """A staircase with uneven treads is the symptom of the delta leaking into the step
+    size. Checked across a sweep of drifts, not one lucky value."""
+    writer = LightWriter(hass)
+    for drift in range(SMOOTH.step_mired, SMOOTH.max_step_mired * 2):
+        result = await _step(
+            hass, writer, SMOOTH, mired_to_kelvin(300), mired_to_kelvin(300 + drift)
+        )
+        moved = kelvin_to_mired(result) - 300
+        assert moved % SMOOTH.step_mired == 0, f"drift {drift} moved {moved}"
+        assert moved <= SMOOTH.max_step_mired

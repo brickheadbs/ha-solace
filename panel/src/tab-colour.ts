@@ -380,7 +380,13 @@ export class SolTabColour extends LitElement {
       const min = t / 60;
       const delta = at(min) - current;
       if (Math.abs(delta) >= f.step_mired) {
-        const size = Math.min(Math.abs(delta), f.max_step_mired);
+        // Whole steps, exactly as `writer.async_step_colour` does. Moving the raw delta
+        // here would draw an even staircase the house does not produce — and drawing
+        // this wrong is what revealed the writer was doing it wrong too.
+        const size = Math.min(
+          Math.floor(Math.abs(delta) / f.step_mired) * f.step_mired,
+          f.max_step_mired
+        );
         // Hold, then jump: the flat run is the hold, the vertical is the step's own fade.
         points.push([min, toKelvin(current)]);
         current += delta > 0 ? size : -size;
@@ -392,8 +398,34 @@ export class SolTabColour extends LitElement {
     return { points, moves, perHour: Math.round((moves / windowMin) * 60) };
   }
 
-  /** What the two families actually do with one clock — the whole point of the split. */
-  private stepChart(families: FamilyFade[]) {
+  /**
+   * Families that walk identically, merged into one row and one line.
+   *
+   * Both Aqara families resolve to the same profile today, and drawing two identical
+   * staircases stacked exactly on top of each other reads as one line — hiding the
+   * third. The API stays per-family (that is the honest shape of the data); the *chart*
+   * groups by what it is actually drawing.
+   */
+  private grouped(families: FamilyFade[]) {
+    const out: Array<FamilyFade & { label: string }> = [];
+    for (const f of families) {
+      const key = `${f.step_mired}|${f.max_step_mired}|${f.step_transition_s}|${f.concurrent}`;
+      const seen = out.find(
+        (g) => `${g.step_mired}|${g.max_step_mired}|${g.step_transition_s}|${g.concurrent}` === key
+      );
+      const name = FAMILY_NAMES[f.family] ?? f.family;
+      if (seen) {
+        seen.label += ` + ${name}`;
+        seen.count += f.count;
+      } else {
+        out.push({ ...f, label: name });
+      }
+    }
+    return out;
+  }
+
+  /** What each family actually does with one clock — the whole point of the split. */
+  private stepChart(families: Array<FamilyFade & { label: string }>) {
     const windowMin = 20;
     const dusk = this.snap.world.dusk_hour;
 
@@ -429,8 +461,11 @@ export class SolTabColour extends LitElement {
       yTitle="K"
       .facts=${[
         { label: "Tick", value: `every ${num(Math.round(this.snap.fade?.interval_s ?? 0))} s` },
+        // Labelled by behaviour, not by family name: "Aqara RGB + Aqara CCT" wraps to
+        // three lines in this column. The swatches on the blocks below carry the
+        // mapping, in the same order.
         ...walks.map((w) => ({
-          label: FAMILY_NAMES[w.f.family] ?? w.f.family,
+          label: w.f.concurrent ? "Smooth" : "Stepped",
           value: `${w.f.step_mired} mired · ~${w.perHour}/h`,
         })),
       ] as Fact[]}
@@ -440,6 +475,7 @@ export class SolTabColour extends LitElement {
   private fadeCard() {
     const fade = this.snap.fade;
     if (!fade || !fade.families.length) return nothing;
+    const families = this.grouped(fade.families);
     return html`<div class="card full">
       <div class="card-head">
         <ha-icon icon="mdi:stairs"></ha-icon>
@@ -451,14 +487,14 @@ export class SolTabColour extends LitElement {
         absolute writes. One clock serves every bulb; what differs is how big a step each family
         takes, and the dashed line is the curve they are all aiming at.
       </div>
-      ${this.stepChart(fade.families)}
+      ${this.stepChart(families)}
       <div class="families">
-        ${fade.families.map(
+        ${families.map(
           (f, i) => html`<div class="family">
             <div class="fam-head">
               <span class="swatch" style="background:${FAMILY_COLOURS[i % FAMILY_COLOURS.length]}">
               </span>
-              <b>${FAMILY_NAMES[f.family] ?? f.family}</b>
+              <b>${f.label}</b>
               <span class="count">${f.count} bulb${f.count === 1 ? "" : "s"}</span>
               <span class="tag ${f.concurrent ? "ok" : "warn"}">
                 ${f.concurrent ? "glides during a fade" : "waits for brightness"}
