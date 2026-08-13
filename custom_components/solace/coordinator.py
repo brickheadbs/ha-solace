@@ -44,6 +44,7 @@ from .const import (
     CONF_PRESENCE,
     CONF_RAMP,
     CONF_SLEEP_TOGGLE,
+    CONF_ZONES,
     DEFAULT_DND_SLEEP_STATES,
     DEFAULT_MAX_INTERVAL_S,
     DEFAULT_MIN_INTERVAL_S,
@@ -61,6 +62,7 @@ from .models import (
     RampPoint,
     RoomSettings,
     Solution,
+    ZoneSettings,
 )
 from .writer import LightWriter, infer_family
 
@@ -230,6 +232,16 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
             ambience_level=int(data.get("ambience_level", 0)),
             night_off=bool(data.get("night_off", False)),
             manual_hold_minutes=float(data.get("manual_hold_minutes", 30.0)),
+            zones=tuple(
+                ZoneSettings(
+                    zone_id=str(z.get("zone_id") or z.get("name") or ""),
+                    name=str(z.get("name") or z.get("zone_id") or "Zone"),
+                    lights=tuple(z.get("lights") or ()),
+                    bias_stops=float(z.get("bias_stops", 0.0)),
+                    diminish_pct=float(z.get("diminish_pct", 0.0)),
+                )
+                for z in (data.get(CONF_ZONES) or ())
+            ),
         )
 
     def light_settings(self, entity_id: str, subentry: ConfigSubentry) -> LightSettings:
@@ -384,8 +396,15 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
             settings = self.room_settings(subentry)
             # "Either kitchen sensor turning on lights the whole kitchen" — presence is
             # a LIST and any-on wins. A single sensor per room could not express that.
+            # Area presence — ANY sensor in the area. "Either kitchen sensor turning on
+            # lights the whole kitchen" is an area-level question.
             occupied = self._any_on(subentry.data.get(CONF_PRESENCE), default=True)
-            near_clear = not self._any_on(subentry.data.get(CONF_NEAR_PRESENCE), default=True)
+            # Zone presence — "is THIS end of the room occupied", which is what drives
+            # diminish. An undivided area falls back to the old room-level near sensor.
+            zone_presence = {z.get("zone_id"): z.get("presence") for z in (subentry.data.get(CONF_ZONES) or ())}
+            area_near_clear = not self._any_on(
+                subentry.data.get(CONF_NEAR_PRESENCE), default=True
+            )
 
             raw_gate = ambient_gate(lux, room.gate_open, house)
             room.gate_open, room.gate_pending_since = debounce_gate(
@@ -397,11 +416,23 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                 room.manual_touched = False
                 room.manual_since = None
 
+            zone_for = {
+                light_id: zone
+                for zone in settings.zones
+                for light_id in zone.lights
+            }
             for entity_id in subentry.data.get(CONF_LIGHTS, []):
+                zone = zone_for.get(entity_id)
+                if zone is not None and zone.zone_id in zone_presence:
+                    near_clear = not self._any_on(
+                        zone_presence.get(zone.zone_id), default=True
+                    )
+                else:
+                    near_clear = area_near_clear
                 try:
                     await self._async_apply_light(
                         entity_id, subentry, house, settings, room, lux, dnd, clock_hour,
-                        occupied, near_clear, manual, asleep,
+                        occupied, near_clear, manual, asleep, zone,
                     )
                 except Exception:  # noqa: BLE001
                     # One unreachable bulb must not take down the room, and must never
@@ -438,6 +469,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         near_clear: bool,
         manual: bool,
         asleep: bool,
+        zone: ZoneSettings | None = None,
     ) -> None:
         state = self.hass.states.get(entity_id)
         if state is None:
@@ -448,6 +480,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         if state.state != STATE_ON:
             current = 0
 
+        diminish_pct = zone.diminish_pct if zone is not None else settings.diminish_pct
         solution = solve(
             house,
             settings,
@@ -463,11 +496,12 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                 # The debounced answer, not a hint. Without this the engine recomputes
                 # the raw gate and the debounce moves the sensor but never the lights.
                 gate_resolved=room.gate_open,
-                diminish_active=near_clear and settings.diminish_pct > 0,
+                diminish_active=near_clear and diminish_pct > 0,
                 manual_level=current if manual else None,
                 current_level=current,
                 last_written_level=room.last_written.get(entity_id),
             ),
+            zone=zone,
         )
         room.solutions[entity_id] = solution
 

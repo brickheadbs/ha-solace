@@ -9,8 +9,8 @@
 
 import { LitElement, css, html, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
-import type { Hass, LightRow, RoomRow, Snapshot } from "./api";
-import { roomAction, setHouse, setLight, setRoom } from "./api";
+import type { Hass, LightRow, RoomRow, Snapshot, ZoneRow } from "./api";
+import { roomAction, setHouse, setLight, setRoom, setZones } from "./api";
 import { ago, clock, consequence, countdown, lightPct, lux, num, stopLabel } from "./fmt";
 import { tokens } from "./tokens";
 import "./ui";
@@ -32,6 +32,10 @@ const HELP = {
   max: "A hard clamp applied last, after everything else. The light never exceeds it — this is what makes a glare cap a rule rather than a suggestion.",
   manual:
     "Manual hands this room to you and stops Solace writing to it. A touch on a physical switch does the same for a while; this switch holds until you turn it off.",
+  zone:
+    "A part of this area with its own bias — the office end of a living room, the sink end of a kitchen. Same four walls, so it shares the area's presence and its dials; the zone bias is an offset on top.",
+  zoneDiminish:
+    "When this zone's own sensor reads clear, its lights reduce by this much and stay there. They never switch off from diminish alone. 0 means no effect.",
   nightOff:
     "When you are asleep this room goes fully dark instead of dropping to the night level. Once you are up it rejoins the house at the night level, so the room you are standing in is never the dark one.",
 };
@@ -265,6 +269,27 @@ export class SolTabHome extends LitElement {
 
       .lights {
         margin-top: 8px;
+      }
+      .zone-head {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        background: var(--sol-block);
+        border-radius: var(--sol-r-control);
+        padding: 5px 9px;
+        margin-top: 8px;
+      }
+      .zone-head sol-slider {
+        max-width: 120px;
+      }
+      .zone-head .zv {
+        font-size: 11px;
+        color: var(--sol-text-4);
+        min-width: 46px;
+        text-align: right;
+      }
+      .zone-head.warnrow {
+        background: var(--sol-amber-surface);
       }
       .lrow {
         display: grid;
@@ -511,6 +536,79 @@ export class SolTabHome extends LitElement {
     </div>`;
   }
 
+  /**
+   * Per-light rows, grouped under their zone.
+   *
+   * An area with no zones renders a flat list exactly as before — the grouping only
+   * appears once there is something to group.
+   */
+  private renderGrouped(room: RoomRow) {
+    if (!room.zones.length) return room.lights.map((l) => this.renderLight(room, l));
+    const unassigned = room.lights.filter((l) => !l.zone_id);
+    return html`
+      ${room.zones.map((zone) => {
+        const lights = room.lights.filter((l) => l.zone_id === zone.zone_id);
+        if (!lights.length) return nothing;
+        return html`
+          <div class="zone-head">
+            <span class="eyebrow">${zone.name}</span>
+            ${zone.clear === null
+              ? nothing
+              : html`<span class="pill ${zone.clear ? "off" : "on"}"
+                  >${zone.clear ? "clear" : "occupied"}</span
+                >`}
+            <span class="grow"></span>
+            <sol-slider
+              small
+              .value=${zone.bias_stops}
+              .min=${-2}
+              .max=${2}
+              .step=${0.25}
+              @value-changed=${(e: CustomEvent) =>
+                this.pushZone(room, zone, { bias_stops: e.detail.value }, e.detail.final)}
+            ></sol-slider>
+            <span class="zv tab-num">${stopLabel(zone.bias_stops)}</span>
+            ${zone.presence.length
+              ? html`<sol-number
+                  .value=${zone.diminish_pct}
+                  .min=${0}
+                  .max=${100}
+                  .width=${48}
+                  suffix="% when clear"
+                  @value-changed=${(e: CustomEvent) =>
+                    this.pushZone(room, zone, { diminish_pct: e.detail.value })}
+                ></sol-number>`
+              : nothing}
+          </div>
+          ${lights.map((l) => this.renderLight(room, l))}
+        `;
+      })}
+      ${unassigned.length
+        ? html`<div class="zone-head warnrow">
+              <span class="eyebrow">Not in a zone</span>
+              <sol-help
+                flip
+                .text=${"These lights take the area's own zone bias. Assign them to a zone if you want them to follow one."}
+              ></sol-help>
+            </div>
+            ${unassigned.map((l) => this.renderLight(room, l))}`
+        : nothing}
+    `;
+  }
+
+  private async pushZone(
+    room: RoomRow,
+    zone: ZoneRow,
+    patch: Partial<ZoneRow>,
+    final = true
+  ) {
+    const next = room.zones.map((z) =>
+      z.zone_id === zone.zone_id ? { ...z, ...patch } : z
+    );
+    await setZones(this.hass, room.subentry_id, next);
+    if (!final) return;
+  }
+
   private renderRoom(room: RoomRow) {
     const gamma = this.snap.house.gamma ?? 2.39;
     const lit = (room.level ?? 0) > 0;
@@ -625,8 +723,11 @@ export class SolTabHome extends LitElement {
         <span class="readout tab-num">${stopLabel(zone)}</span>
       </div>
 
-      ${room.has_near
+      ${room.has_near && !room.zones.some((z) => z.presence.length)
         ? html`<div class="bias-row">
+            <!-- Only for an UNDIVIDED area. Once zones carry their own presence, this
+                 row and the per-zone ones would be two diminish controls with different
+                 meanings sitting on the same card. -->
             <span class="lab">Diminish <sol-help .text=${HELP.diminish}></sol-help></span>
             <span class="pill ${room.near_clear ? "off" : "on"}"
               >near ${room.near_clear ? "clear" : "occupied"}</span
@@ -656,7 +757,7 @@ export class SolTabHome extends LitElement {
         }}
       >
         <ha-icon class=${open ? "open" : ""} icon="mdi:chevron-right"></ha-icon>
-        Per-light adjustments (${room.lights.length})
+        Per-light adjustments (${room.lights.length}${room.zones.length > 1 ? ` in ${room.zones.length} zones` : ""})
       </button>
 
       ${open
@@ -667,7 +768,7 @@ export class SolTabHome extends LitElement {
               <span class="eyebrow">Min <sol-help flip .text=${HELP.min}></sol-help></span>
               <span class="eyebrow">Max <sol-help flip .text=${HELP.max}></sol-help></span>
             </div>
-            ${room.lights.map((l) => this.renderLight(room, l))}
+            ${this.renderGrouped(room)}
           </div>`
         : nothing}
 

@@ -16,6 +16,7 @@ from enum import Enum
 
 __all__ = [
     "Family",
+    "ZoneSettings",
     "Mode",
     "RampPoint",
     "HouseSettings",
@@ -191,8 +192,42 @@ class HouseSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class ZoneSettings:
+    """A sub-zone inside an area — its own lights, its own bias, its own presence.
+
+    ⚠️ **An area is four walls, not a use.** (Owner, 2026-08-13: *"Even though the office
+    and sitting areas are different uses, they are the same 4 walls and only one sensor.
+    In the kitchen we do have 2 sensors, but still same 4 walls."*)
+
+    So Living is ONE area containing sitting and office zones, and Kitchen is ONE area
+    containing sink, diner, centre and hallway. The earlier build made each of those a
+    separate room, which meant a whole-room dial did not exist for the room anyone
+    actually stands in.
+
+    Presence works at two levels and they do different jobs:
+
+    * **Area presence** (any sensor in the area) answers *is the room occupied* — either
+      kitchen sensor lights the whole kitchen.
+    * **Zone presence** answers *is this end of it occupied*. When a zone's own sensor
+      reads clear its lights reduce by ``diminish_pct`` and STAY there. Never an off.
+    """
+
+    zone_id: str = ""
+    name: str = "Zone"
+    lights: tuple[str, ...] = ()
+    bias_stops: float = 0.0
+    """The layer between the area and the individual light."""
+    diminish_pct: float = 0.0
+    """0 ⇒ no effect. Only meaningful when the zone has its own presence sensor."""
+
+
+@dataclass(frozen=True, slots=True)
 class RoomSettings:
-    """Per-room settings. One per config *subentry*."""
+    """Per-AREA settings. One per config *subentry*.
+
+    Named ``RoomSettings`` for continuity; an "area" here is a set of four walls, which
+    may contain several zones.
+    """
 
     name: str = "Room"
     bias_stops: float = 0.0
@@ -216,6 +251,9 @@ class RoomSettings:
     phone already reports it."""
     manual_hold_minutes: float = 30.0
     """A touch holds manual for N minutes; the switch holds indefinitely."""
+    zones: tuple[ZoneSettings, ...] = ()
+    """Sub-zones. Empty ⇒ the area is undivided and every light takes
+    ``zone_bias_stops`` / ``diminish_pct`` from the area itself."""
 
 
 @dataclass(frozen=True, slots=True)

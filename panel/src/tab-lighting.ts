@@ -20,7 +20,7 @@ import type { Hass, Schema, Snapshot } from "./api";
 import { setHouse, setRamp } from "./api";
 import "./chart";
 import type { Fact, Series, Tick } from "./chart";
-import { clock, num, parseClock, stopLabel } from "./fmt";
+import { clock, lightPct, num, parseClock, stopLabel } from "./fmt";
 import { eveningClockTime, eveningTimeForLux } from "./solar";
 import type { Place } from "./solar";
 import { tokens } from "./tokens";
@@ -392,6 +392,87 @@ export class SolTabLighting extends LitElement {
     ></sol-chart>`;
   }
 
+  /**
+   * The ramp, drawn the way the engine computes it — including the eased onset and the
+   * consequence in real levels, not just stops.
+   *
+   * This is the chart that earns its place: the ramp is an N-point list of abstract
+   * "stops" and nothing else on the page shows what that actually does to the house
+   * across an evening.
+   */
+  private rampChart() {
+    const points = [...this.snap.ramp].sort(
+      (a, b) => ((a.hour - 18 + 24) % 24) - ((b.hour - 18 + 24) % 24)
+    );
+    if (!points.length) return nothing;
+    const axis = (h: number) => (h - 18 + 24) % 24;
+    const release = axis(this.value("morning_release_hour"));
+    const onset = Math.max(this.value("ramp_onset_minutes"), 0) / 60;
+    const gamma = this.snap.house.gamma ?? 2.39;
+
+    const at = (a: number): number => {
+      if (a >= release) return 0;
+      const first = axis(points[0].hour);
+      if (a < first - onset) return 0;
+      if (a < first) return onset <= 0 ? 0 : ((a - (first - onset)) / onset) * points[0].stops;
+      const last = axis(points[points.length - 1].hour);
+      if (a >= last) return points[points.length - 1].stops;
+      for (let i = 0; i < points.length - 1; i++) {
+        const lo = axis(points[i].hour);
+        const hi = axis(points[i + 1].hour);
+        if (lo <= a && a <= hi) {
+          const span = hi - lo;
+          if (span <= 0) return points[i + 1].stops;
+          return points[i].stops + ((a - lo) / span) * (points[i + 1].stops - points[i].stops);
+        }
+      }
+      return 0;
+    };
+
+    // A reference level so the y-axis means something: what a fully-dark room settles at.
+    const base = Math.max(1, ...this.snap.rooms.map((r) => r.level ?? 0), 161);
+    const curve: Array<[number, number]> = [];
+    for (let i = 0; i <= 288; i++) {
+      const a = (i / 288) * release;
+      curve.push([a, base * Math.pow(2, at(a))]);
+    }
+
+    const ticks: Tick[] = [];
+    for (let a = 0; a <= release; a += 2) ticks.push({ value: a, label: clock((a + 18) % 24) });
+    const maxY = Math.max(base, ...curve.map(([, y]) => y));
+
+    return html`<sol-chart
+      .series=${[{ points: curve, colour: "var(--sol-series-start)", width: 2.6 } as Series]}
+      .refLines=${points.map((p) => ({
+        x: axis(p.hour),
+        label: `${clock(p.hour)} ${stopLabel(p.stops)}`,
+        colour: "rgba(255,183,77,.45)",
+        textColour: "var(--sol-amber)",
+      }))}
+      .xTicks=${ticks}
+      .yTicks=${[0, 0.25, 0.5, 0.75, 1].map((f) => ({
+        value: f * maxY,
+        label: String(Math.round(f * maxY)),
+      }))}
+      .xDomain=${[0, release]}
+      .yDomain=${[0, maxY]}
+      xTitle="evening → morning release"
+      .facts=${[
+        { label: "Points", value: String(points.length) },
+        { label: "Onset", value: `${num(this.value("ramp_onset_minutes"))} min` },
+        ...points.map((p, i) => ({
+          label: `Point ${i + 1}`,
+          value: `${clock(p.hour)} · ${stopLabel(p.stops)}`,
+        })),
+        {
+          label: "At the last point",
+          value: `level ${Math.round(base * Math.pow(2, points[points.length - 1].stops))} of ${base}`,
+        },
+        { label: "Reference room", value: `${base} (${lightPct(base, gamma)} % light)` },
+      ] as Fact[]}
+    ></sol-chart>`;
+  }
+
   /* ---------------------------------------------------------------- ramp */
 
   private renderRamp() {
@@ -587,7 +668,7 @@ export class SolTabLighting extends LitElement {
         </div>
       </div>
 
-      <div class="card">
+      <div class="card full">
         <div class="card-head">
           <ha-icon icon="mdi:ray-start-arrow"></ha-icon>
           <h2>Evening ramp</h2>
@@ -596,7 +677,11 @@ export class SolTabLighting extends LitElement {
           An ordered list of points, not two fixed phases — add as many as you want.
         </div>
         ${this.renderRamp()}
-        <div class="sub">${this.row("morning_release_hour", (v) => clock(v))}</div>
+        <div class="sub">
+          ${this.row("ramp_onset_minutes")}
+          ${this.row("morning_release_hour", (v) => clock(v))}
+        </div>
+        <div class="sub">${this.rampChart()}</div>
       </div>
 
       <div class="card">

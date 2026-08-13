@@ -57,6 +57,10 @@ CONF_PRESENCE = "presence"
 CONF_NEAR_PRESENCE = "near_presence"
 CONF_PER_LIGHT = "per_light"
 CONF_RAMP = "ramp"
+CONF_ZONES = "zones"
+"""Sub-zones inside an area. A list of dicts: zone_id, name, lights, presence,
+bias_stops, diminish_pct. Managed from the panel, not the config flow — a dynamic
+nested list is miserable in a voluptuous form and pleasant in a real UI."""
 
 # The one illuminance sensor in the house. There are no indoor lux sensors; per-room
 # daylight is estimated, never measured.

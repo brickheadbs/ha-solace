@@ -33,6 +33,7 @@ from .models import (
     RampPoint,
     RoomSettings,
     Solution,
+    ZoneSettings,
 )
 
 __all__ = [
@@ -297,6 +298,7 @@ def solve(
     room: RoomSettings,
     light: LightSettings,
     data: EngineInput,
+    zone: ZoneSettings | None = None,
 ) -> Solution:
     """Run the full 17-step pipeline for one light.
 
@@ -332,10 +334,15 @@ def solve(
 
     # 5. Bias — additive stops, four levels plus the ramp. Additive so a parent dial
     #    moves everything while children keep their offsets.
+    #
+    #    house → area → zone → light. The zone layer comes from the zone the light
+    #    belongs to; an undivided area falls back to its own `zone_bias_stops`, so a
+    #    room with no sub-zones behaves exactly as before.
+    zone_stops = zone.bias_stops if zone is not None else room.zone_bias_stops
     stops = (
         house.bias_stops
         + room.bias_stops
-        + room.zone_bias_stops
+        + zone_stops
         + light.bias_stops
         + ramp
     )
@@ -360,10 +367,12 @@ def solve(
             level = house.night_level
             trace.append(("night_override", level))
 
-    # 10. Diminish — a reduction that STAYS; never an off.
+    # 10. Diminish — a reduction that STAYS; never an off. Per ZONE: the end of the room
+    #     nobody is standing in dims, the rest of it does not.
     demand_level = level
-    if room.diminish_pct > 0 and data.diminish_active and level > 0:
-        level = int(round(level * (1.0 - room.diminish_pct / 100.0)))
+    diminish_pct = zone.diminish_pct if zone is not None else room.diminish_pct
+    if diminish_pct > 0 and data.diminish_active and level > 0:
+        level = int(round(level * (1.0 - diminish_pct / 100.0)))
         trace.append(("diminish", level))
 
     # 11. Occupancy / gate. Gates only ever subtract.

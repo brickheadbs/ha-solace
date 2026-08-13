@@ -204,9 +204,16 @@ export class SolTabColour extends LitElement {
     const elapsed = (hour - dusk + 24) % 24;
     const releaseAt = (release - dusk + 24) % 24;
 
+    // ⚠️ Mirrors `colour.py::target_kelvin` EXACTLY, including the morning glide. A
+    // chart that draws a different curve from the one the engine runs is worse than no
+    // chart: it is a confident lie about what the house is about to do.
+    const morningH = Math.max(this.value("morning_glide_minutes"), 0) / 60;
     let k: number;
-    if (elapsed >= releaseAt) k = day;
-    else if (glideH <= 0 || elapsed >= glideH) k = night;
+    if (elapsed >= releaseAt) {
+      const intoMorning = elapsed - releaseAt;
+      if (morningH <= 0 || intoMorning >= morningH) k = day;
+      else k = toKelvin(toMired(night) + (intoMorning / morningH) * (toMired(day) - toMired(night)));
+    } else if (glideH <= 0 || elapsed >= glideH) k = night;
     else k = toKelvin(toMired(day) + (elapsed / glideH) * (toMired(night) - toMired(day)));
 
     return Math.max(2000, Math.min(7000, k + this.value("colour_trim_kelvin")));

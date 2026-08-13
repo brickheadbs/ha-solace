@@ -23,9 +23,22 @@ export interface RampPoint {
   stops: number;
 }
 
+export interface ZoneRow {
+  zone_id: string;
+  name: string;
+  lights: string[];
+  presence: string[];
+  bias_stops: number;
+  diminish_pct: number;
+  /** null when the zone has no presence sensor of its own. */
+  clear: boolean | null;
+}
+
 export interface LightRow {
   entity_id: string;
   name: string;
+  /** null = not assigned to any zone; it takes the area's own zone bias. */
+  zone_id: string | null;
   available: boolean;
   group_size: number;
   family: string;
@@ -66,6 +79,7 @@ export interface RoomRow {
     hold_minutes: number;
   };
   lights: LightRow[];
+  zones: ZoneRow[];
 }
 
 export interface World {
@@ -135,6 +149,26 @@ export const setLight = (
     subentry_id,
     entity_id,
     values,
+  });
+
+export const setZones = (hass: Hass, subentry_id: string, zones: ZoneRow[]) =>
+  hass.connection.sendMessagePromise({
+    type: "solace/set_zones",
+    subentry_id,
+    zones: zones.map(({ clear: _clear, ...z }) => z),
+  });
+
+export const mergeAreas = (
+  hass: Hass,
+  into: string,
+  subentry_ids: string[],
+  title?: string
+) =>
+  hass.connection.sendMessagePromise({
+    type: "solace/merge_areas",
+    into,
+    subentry_ids,
+    ...(title ? { title } : {}),
   });
 
 export const roomAction = (

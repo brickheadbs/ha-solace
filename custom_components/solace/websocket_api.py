@@ -40,6 +40,7 @@ from .const import (
     CONF_PRESENCE,
     CONF_RAMP,
     CONF_SLEEP_TOGGLE,
+    CONF_ZONES,
     DOMAIN,
     HOUSE_DEFAULTS,
     HOUSE_SETTINGS,
@@ -67,6 +68,8 @@ def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_set_room)
     websocket_api.async_register_command(hass, ws_set_light)
     websocket_api.async_register_command(hass, ws_room_action)
+    websocket_api.async_register_command(hass, ws_set_zones)
+    websocket_api.async_register_command(hass, ws_merge_areas)
 
 
 # ---------------------------------------------------------------------------- helpers
@@ -134,6 +137,13 @@ def _snapshot(hass: HomeAssistant, coordinator: SolaceCoordinator) -> dict[str, 
         settings = coordinator.room_settings(subentry)
         per_light = subentry.data.get(CONF_PER_LIGHT) or {}
 
+        zones_raw = list(subentry.data.get(CONF_ZONES) or [])
+        zone_of = {
+            light_id: z.get("zone_id")
+            for z in zones_raw
+            for light_id in (z.get("lights") or [])
+        }
+
         lights: list[dict[str, Any]] = []
         for entity_id in subentry.data.get(CONF_LIGHTS, []):
             light = coordinator.light_settings(entity_id, subentry)
@@ -146,6 +156,7 @@ def _snapshot(hass: HomeAssistant, coordinator: SolaceCoordinator) -> dict[str, 
                 {
                     "entity_id": entity_id,
                     "name": _friendly(hass, entity_id),
+                    "zone_id": zone_of.get(entity_id),
                     "available": live is not None and live.state not in ("unavailable", "unknown"),
                     "group_size": len(members) if isinstance(members, (list, tuple)) else 0,
                     "family": light.family.value,
@@ -209,6 +220,23 @@ def _snapshot(hass: HomeAssistant, coordinator: SolaceCoordinator) -> dict[str, 
                     "hold_minutes": hold,
                 },
                 "lights": lights,
+                "zones": [
+                    {
+                        "zone_id": z.get("zone_id"),
+                        "name": z.get("name"),
+                        "lights": list(z.get("lights") or []),
+                        "presence": list(z.get("presence") or []),
+                        "bias_stops": float(z.get("bias_stops", 0.0)),
+                        "diminish_pct": float(z.get("diminish_pct", 0.0)),
+                        # Live state, so the panel can show clear/occupied per zone.
+                        "clear": not coordinator._any_on(  # noqa: SLF001
+                            z.get("presence"), default=True
+                        )
+                        if z.get("presence")
+                        else None,
+                    }
+                    for z in zones_raw
+                ],
             }
         )
 
@@ -464,3 +492,144 @@ async def ws_room_action(hass: HomeAssistant, connection, msg: dict[str, Any]) -
     await coordinator.async_persist()
     await coordinator.async_request_refresh()
     connection.send_result(msg["id"])
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "solace/set_zones",
+        vol.Required("subentry_id"): cv.string,
+        vol.Required("zones"): [
+            {
+                vol.Required("zone_id"): cv.string,
+                vol.Required("name"): cv.string,
+                vol.Optional("lights", default=[]): [cv.entity_id],
+                vol.Optional("presence", default=[]): [cv.entity_id],
+                vol.Optional("bias_stops", default=0.0): vol.Coerce(float),
+                vol.Optional("diminish_pct", default=0.0): vol.All(
+                    vol.Coerce(float), vol.Range(min=0, max=100)
+                ),
+            }
+        ],
+    }
+)
+@websocket_api.async_response
+async def ws_set_zones(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    """Replace an area's zone list.
+
+    ⚠️ Every light in the area must belong to exactly one zone, and every zone light must
+    be in the area. An unassigned light silently falls back to the *area's* zone bias,
+    which looks like the zone dial not working — so it is rejected here rather than
+    debugged later.
+    """
+    entry = _entry(hass)
+    if entry is None:
+        connection.send_error(msg["id"], "not_loaded", "Solace is not set up")
+        return
+    subentry = entry.subentries.get(msg["subentry_id"])
+    if subentry is None:
+        connection.send_error(msg["id"], "unknown_room", "no such area")
+        return
+
+    area_lights = set(subentry.data.get(CONF_LIGHTS) or [])
+    assigned: list[str] = [l for z in msg["zones"] for l in z["lights"]]
+    duplicated = {l for l in assigned if assigned.count(l) > 1}
+    if duplicated:
+        connection.send_error(
+            msg["id"], "duplicate_light", f"in more than one zone: {sorted(duplicated)}"
+        )
+        return
+    stray = set(assigned) - area_lights
+    if stray:
+        connection.send_error(
+            msg["id"], "stray_light", f"not in this area: {sorted(stray)}"
+        )
+        return
+    ids = [z["zone_id"] for z in msg["zones"]]
+    if len(set(ids)) != len(ids):
+        connection.send_error(msg["id"], "duplicate_zone", "zone ids must be unique")
+        return
+
+    hass.config_entries.async_update_subentry(
+        entry, subentry, data={**subentry.data, CONF_ZONES: msg["zones"]}
+    )
+    await entry.runtime_data.coordinator.async_request_refresh()
+    connection.send_result(msg["id"], {"unassigned": sorted(area_lights - set(assigned))})
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "solace/merge_areas",
+        vol.Required("into"): cv.string,
+        vol.Required("subentry_ids"): [cv.string],
+        vol.Optional("title"): cv.string,
+    }
+)
+@websocket_api.async_response
+async def ws_merge_areas(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    """Fold several areas into one, each becoming a zone of the survivor.
+
+    This is the v1 → v2 move that no migration could make for itself: "Living Office",
+    "Living Sitting" and "Living Ceiling" are one set of four walls, and only a human
+    knows that. Bias is preserved by pushing each old area's own ``bias_stops`` down into
+    its new zone, so the merge does not change a single computed level.
+    """
+    entry = _entry(hass)
+    if entry is None:
+        connection.send_error(msg["id"], "not_loaded", "Solace is not set up")
+        return
+    survivor = entry.subentries.get(msg["into"])
+    if survivor is None:
+        connection.send_error(msg["id"], "unknown_room", "no such area")
+        return
+    sources = [entry.subentries.get(sid) for sid in msg["subentry_ids"]]
+    if any(s is None for s in sources):
+        connection.send_error(msg["id"], "unknown_room", "one of the areas does not exist")
+        return
+
+    lights: list[str] = list(survivor.data.get(CONF_LIGHTS) or [])
+    presence: list[str] = list(survivor.data.get(CONF_PRESENCE) or [])
+    zones: list[dict[str, Any]] = list(survivor.data.get(CONF_ZONES) or [])
+    per_light: dict[str, Any] = dict(survivor.data.get(CONF_PER_LIGHT) or {})
+
+    for source in sources:
+        if source is None or source.subentry_id == survivor.subentry_id:
+            continue
+        src_lights = list(source.data.get(CONF_LIGHTS) or [])
+        # The merged area's zone bias carries the old AREA bias, so levels are unchanged.
+        carried = float(source.data.get("bias_stops", 0.0)) + float(
+            source.data.get("zone_bias_stops", 0.0)
+        )
+        zones.append(
+            {
+                "zone_id": source.subentry_id[-8:],
+                "name": source.title,
+                "lights": src_lights,
+                "presence": list(source.data.get(CONF_NEAR_PRESENCE) or []),
+                "bias_stops": carried,
+                "diminish_pct": float(source.data.get("diminish_pct", 0.0)),
+            }
+        )
+        lights.extend(l for l in src_lights if l not in lights)
+        presence.extend(
+            p for p in (source.data.get(CONF_PRESENCE) or []) if p not in presence
+        )
+        per_light.update(source.data.get(CONF_PER_LIGHT) or {})
+
+    hass.config_entries.async_update_subentry(
+        entry,
+        survivor,
+        title=msg.get("title", survivor.title),
+        data={
+            **survivor.data,
+            CONF_LIGHTS: lights,
+            CONF_PRESENCE: presence,
+            CONF_ZONES: zones,
+            CONF_PER_LIGHT: per_light,
+        },
+    )
+    for source in sources:
+        if source is not None and source.subentry_id != survivor.subentry_id:
+            hass.config_entries.async_remove_subentry(entry, source.subentry_id)
+
+    await entry.runtime_data.coordinator.async_request_refresh()
+    connection.send_result(msg["id"], {"zones": len(zones), "lights": len(lights)})

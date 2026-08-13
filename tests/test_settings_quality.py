@@ -40,7 +40,9 @@ def test_every_room_setting_exists_on_the_model(setting):
 def test_every_model_field_is_reachable_from_the_ui():
     """The other direction, and the one that actually rots: a field added to the engine
     with no row in the settings table is a hardcoded value wearing a default."""
-    exempt = {"ramp", "name"}  # ramp has its own editor; name is the subentry title
+    # `ramp` and `zones` are lists, not scalars — each has its own purpose-built editor
+    # in the panel rather than a numeric row. `name` is the subentry title.
+    exempt = {"ramp", "zones", "name"}
     house_keys = {s.key for s in HOUSE_SETTINGS}
     room_keys = {s.key for s in ROOM_SETTINGS}
     missing_house = set(HouseSettings.__slots__) - house_keys - exempt
