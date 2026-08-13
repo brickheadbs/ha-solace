@@ -38,8 +38,8 @@ from .models import (
 )
 
 __all__ = [
-    "ambient_gate",
-    "debounce_gate",
+    "ambience_threshold",
+    "debounce_ambience",
     "demand",
     "ramp_bias",
     "mode_for",
@@ -58,29 +58,40 @@ and the 1-10 % band is exactly where the owner lives. z2m passes floats through 
 
 
 # --------------------------------------------------------------------------------
-# Step 2 — ambient gate: may lights run at all?
+# Step 2 — the ambience threshold: is it dark enough for the resting glow?
 # --------------------------------------------------------------------------------
 
 
-def ambient_gate(lux: float, was_open: bool, house: HouseSettings) -> bool:
-    """Hysteretic dark/bright gate.
+def ambience_threshold(lux: float, was_open: bool, house: HouseSettings) -> bool:
+    """Hysteretic dark/bright threshold — **for ambience, and nothing else.**
 
-    Two thresholds, deliberately apart, so the boundary does not flicker:
-    the gate OPENS (lights allowed) at or below ``gate_start_lux`` and does not CLOSE
-    again until lux reaches ``gate_stop_lux``.
+    Two thresholds, deliberately apart, so the boundary does not flicker: it reads DARK
+    at or below ``ambience_start_lux`` and does not read BRIGHT again until lux reaches
+    ``ambience_stop_lux``.
 
-    This answers *may lights run*. It is a different question from ``demand`` (*how much
-    light*), and the two must be tuned as a pair — with the six-tab starting values the
-    gate (50/80 lx) is far narrower than the demand curve (1 → 540 lx), so the top ~85 %
-    of the demand curve is unreachable. That is a **tuning** observation, not a bug to
-    fix by hardcoding a relationship between them.
+    ⚠️ **This does NOT decide whether lights may run.** It used to, and that was a design
+    error with a long paper trail:
+
+    * Owner, 2026-08-13: *"It isn't supposed to be a gate. It is supposed to ONLY be for
+      ambience lighting."*
+    * The panel shipped a card claiming the two jobs were deliberately one mechanism —
+      *"shipping them separately would be two systems doing one job"*. That claim was
+      invented here, not asked for.
+    * This docstring previously observed that the 50/80 pair made *"the top ~85 % of the
+      demand curve unreachable"* and dismissed it as **"a tuning observation, not a bug"**.
+      It was the bug. At 247 lx an occupied room computed level 18 and was then zeroed,
+      and the only way to find out was to ask.
+
+    **Normal lighting is governed by demand, occupancy and ``min_cutoff``** — the demand
+    curve already falls to zero at ``lux_full + lux_window`` on its own, so it needs no
+    second ceiling bolted on top.
     """
     if was_open:
-        return lux < house.gate_stop_lux
-    return lux <= house.gate_start_lux
+        return lux < house.ambience_stop_lux
+    return lux <= house.ambience_start_lux
 
 
-def debounce_gate(
+def debounce_ambience(
     raw_open: bool,
     was_open: bool,
     now: float,
@@ -89,7 +100,7 @@ def debounce_gate(
 ) -> tuple[bool, float | None]:
     """Apply the per-direction time debounce to a gate transition.
 
-    Returns ``(gate_open, new_pending_since)``.
+    Returns ``(ambience_open, new_pending_since)``.
 
     ⚠️ **Both debounces default to 0 and 0 must mean *no* debounce** — not "a very short
     one". The Sonoff mmWave sensors already impose a 15 s minimum in hardware that
@@ -99,7 +110,7 @@ def debounce_gate(
     if raw_open == was_open:
         return was_open, None
 
-    delay = house.gate_debounce_falling_s if raw_open else house.gate_debounce_rising_s
+    delay = house.ambience_debounce_falling_s if raw_open else house.ambience_debounce_rising_s
     if delay <= 0:
         return raw_open, None
 
@@ -314,14 +325,14 @@ def solve(
 
     # 2. Ambient gate (hysteretic). The *time* debounce needs a clock, which this module
     #    does not have, so the caller applies it and hands the finished answer down in
-    #    `gate_resolved`. Recomputing it here from `gate_open` is what quietly nullified
-    #    the debounce — see EngineInput.gate_resolved.
-    gate_open = (
-        data.gate_resolved
-        if data.gate_resolved is not None
-        else ambient_gate(data.lux, data.gate_open, house)
+    #    `ambience_resolved`. Recomputing it here from `ambience_open` is what quietly nullified
+    #    the debounce — see EngineInput.ambience_resolved.
+    ambience_open = (
+        data.ambience_resolved
+        if data.ambience_resolved is not None
+        else ambience_threshold(data.lux, data.ambience_open, house)
     )
-    trace.append(("gate_open", gate_open))
+    trace.append(("ambience_open", ambience_open))
 
     # 3. Demand — objective.
     demand_value = demand(data.lux, house)
@@ -376,56 +387,68 @@ def solve(
         level = int(round(level * (1.0 - diminish_pct / 100.0)))
         trace.append(("diminish", level))
 
-    # 11. Occupancy / gate. Gates only ever subtract.
-    if not gate_open or not data.occupied:
+    # 11. Occupancy. The only thing that switches normal lighting off outright.
+    #
+    # ⚠️ The ambience threshold used to be ANDed in here, and that was the bug: at 247 lx
+    # an occupied room computed level 18 and was then zeroed, because 247 > 50. Normal
+    # lighting does not need a second ceiling — `demand` already reaches zero on its own
+    # at `lux_full + lux_window`, which is what makes that window mean what the panel
+    # says it means.
+    if not data.occupied:
         level = 0
-        trace.append(("gated_off", {"gate_open": gate_open, "occupied": data.occupied}))
+        trace.append(("unoccupied", True))
 
     # 12. Min cutoff — below it, off rather than a useless glow.
-    if 0 < level < house.min_cutoff:
+    #
+    # ⚠️ **Disabled while the ambience threshold reads dark** (owner, 2026-08-13: the
+    # ambience settings "also disable the Minimum cutoff so that lights can go as low as
+    # 1 at night when low levels are actually needed"). The cutoff exists to stop a
+    # pointless glow competing with daylight; after dark a level of 1 is not pointless,
+    # it is the whole point. So the floor drops out rather than being tuned down, and the
+    # dimmest reachable level becomes 1 instead of `min_cutoff`.
+    cutoff = 0 if ambience_open else house.min_cutoff
+    if 0 < level < cutoff:
         level = 0
-        trace.append(("below_cutoff", house.min_cutoff))
+        trace.append(("below_cutoff", cutoff))
 
-    # 9→12b. AMBIENCE FLOOR — deliberately applied *after* the gates, not at step 9.
+    # 12b. AMBIENCE — **the replacement for OFF**, not a floor under demand.
     #
-    # Owner, 2026-08-13: ambience is on when *"below threshold and awake"* — two
-    # conditions, and occupancy is not one of them. That only works downstream of the
-    # occupancy gate: applied at step 9 (where the brief put it) the gate would zero it
-    # a moment later and an empty room would go dark, which is the opposite of an
-    # always-on glow. So it is the floor that survives the gates.
+    # Owner, 2026-08-13, after this was built the wrong way twice:
     #
-    # It still never *lowers* anything — an occupied room computing 161 keeps 161 — and
-    # it is still off while asleep (mode NIGHT) and while the gate reads bright.
-    # 0 ⇒ feature off entirely.
-    # The room's own floor overrides the house's. 0 ⇒ unmodified, so the room falls back
-    # to the house value rather than switching the feature off in that one room.
+    #     "Ambient ALWAYS confuses agents. It replaces the OFF state below threshold
+    #      while awake."
     #
-    # ⚠️ **Ambience is a clamp on DIMINISH, not on DEMAND** (owner, 2026-08-13):
+    # That is the whole definition. Read it as a state machine, not an arithmetic clamp:
+    # a light that would be **dark** shows the resting glow instead, provided it is dark
+    # outside and he is awake. A light that is already **lit** is left alone — ambience
+    # never touches a working demand level.
     #
-    #     Demand      normal output   80 %
-    #     Diminished  set to 50 %  →  40 %
-    #     Ambience    set to 10 %  →  10 %
+    # This is applied after the occupancy check and the cutoff on purpose, because those
+    # are the two things that produce the OFF it replaces. Applied at step 9 (where the
+    # brief put it) they would zero it a moment later.
     #
-    #   * If the *diminished* result falls below ambience, **ambience wins** — a
-    #     sub-zone going quiet must not take the room below its resting glow.
-    #   * If *demand itself* falls below ambience, **demand wins** — a bright afternoon
-    #     genuinely needs less light than the resting glow, and raising it back up would
-    #     light a room the daylight has already lit. It floors at ``demand_floor_level``
-    #     (~1 % of the 0-254 scale) rather than 0, so it dims rather than snapping off.
-    #
-    # Both branches are skipped in NIGHT — the night level is deliberately the only
-    # thing driving the house while asleep.
+    # It is skipped in NIGHT — the night level is deliberately the only thing driving the
+    # house while asleep. 0 ⇒ feature off. The room's own value overrides the house's;
+    # 0 there means "unmodified", so the room falls back to the house rather than
+    # switching the feature off in that one room.
     ambience = room.ambience_level or house.ambience_level
-    awake_and_dark = mode is Mode.NORMAL and gate_open and not data.asleep
+    dark_and_awake = mode is Mode.NORMAL and ambience_open and not data.asleep
     lit_here = data.occupied or house.ambience_ignores_occupancy
-    if ambience > 0 and awake_and_dark and lit_here:
-        if demand_level >= ambience:
-            if level < ambience:
-                level = ambience
-                trace.append(("ambience_clamp", level))
-        elif demand_level > 0 and level < house.demand_floor_level:
-            # Demand wins *over ambience* — so it is floored at ~1 %, not lifted all the
-            # way back up to the ambience level. It dims, rather than snapping off.
+    if ambience > 0 and dark_and_awake and lit_here:
+        if level == 0:
+            # The headline case. Off becomes the glow.
+            level = ambience
+            trace.append(("ambience_replaces_off", level))
+        elif demand_level >= ambience and level < ambience:
+            # Diminish took a lit room below its resting glow. A sub-zone going quiet
+            # must not take the room darker than it would be if nothing were happening
+            # at all. (Owner: "If diminished drops below, Ambient wins.")
+            level = ambience
+            trace.append(("ambience_clamp", level))
+        elif demand_level < ambience and level < house.demand_floor_level:
+            # Demand itself is below the glow — a brightish room genuinely needs less
+            # light, and lifting it back up would light a room the daylight already lit.
+            # Demand wins, floored at ~1 % so it dims rather than snapping off.
             level = house.demand_floor_level
             trace.append(("demand_floor", level))
 
@@ -450,7 +473,7 @@ def solve(
         level=level,
         should_write=write,
         mode=mode,
-        gate_open=gate_open,
+        ambience_open=ambience_open,
         demand=demand_value,
         stops=stops,
         fraction=fraction,

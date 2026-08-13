@@ -104,12 +104,21 @@ async def test_a_dark_occupied_room_gets_written(hass: HomeAssistant, entry) -> 
     assert "color_temp_kelvin" in payload
 
 
-async def test_a_bright_room_is_gated_off(hass: HomeAssistant, entry, world) -> None:
+async def test_daylight_switches_the_room_off_via_demand(hass: HomeAssistant, entry, world) -> None:
+    """Full daylight ⇒ 0, and it is DEMAND that does it, not the ambience threshold.
+
+    This used to pass at 400 lx because the 50/80 ambience pair was ANDed into normal
+    lighting. It no longer is (2026-08-13), so the room stays lit at 400 lx and goes dark
+    where the demand curve actually ends: lux_full + lux_window.
+    """
     world(lux=400.0)
     assert await _setup(hass, entry)
-    state = hass.states.get("sensor.kitchen_target_level")
-    assert state is not None
-    assert int(state.state) == 0
+    assert int(hass.states.get("sensor.kitchen_target_level").state) > 0
+
+    world(lux=5000.0)
+    await entry.runtime_data.coordinator.async_refresh()
+    await hass.async_block_till_done()
+    assert int(hass.states.get("sensor.kitchen_target_level").state) == 0
 
 
 async def test_the_target_sensor_exposes_the_full_trace(hass: HomeAssistant, entry) -> None:

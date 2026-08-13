@@ -32,7 +32,7 @@ def light() -> LightSettings:
 
 
 def _input(**kwargs) -> EngineInput:
-    base = {"lux": 10.0, "occupied": True, "dnd": False, "clock_hour": 14.0, "gate_open": False}
+    base = {"lux": 10.0, "occupied": True, "dnd": False, "clock_hour": 14.0, "ambience_open": False}
     base.update(kwargs)
     return EngineInput(**base)
 

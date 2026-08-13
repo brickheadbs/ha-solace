@@ -112,7 +112,7 @@ class SolaceTargetSensor(SolaceRoomEntity, SensorEntity):
             return {}
         house = self.coordinator.house
         return {
-            "gate_open": room.gate_open,
+            "ambience_open": room.ambience_open,
             "per_light": {
                 entity_id: {
                     "level": solution.level,

@@ -206,7 +206,7 @@ def _snapshot(hass: HomeAssistant, coordinator: SolaceCoordinator) -> dict[str, 
                     subentry.data.get(CONF_NEAR_PRESENCE), default=True
                 ),
                 "has_near": bool(subentry.data.get(CONF_NEAR_PRESENCE)),
-                "gate_open": bool(state.gate_open) if state else False,
+                "ambience_open": bool(state.ambience_open) if state else False,
                 "demand": round(first.demand, 4) if first else None,
                 "stops": round(first.stops, 3) if first else None,
                 "mode": first.mode.value if first else None,

@@ -80,7 +80,7 @@ class SolaceConfigFlow(ConfigFlow, domain=DOMAIN):
     """The house-level flow. One entry per installation."""
 
     # v2 added the per-area `zones` list. See `async_migrate_entry`.
-    VERSION = 2
+    VERSION = 3
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None

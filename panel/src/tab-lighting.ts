@@ -7,11 +7,11 @@
  *    *"Build it as an ordered list of ramp points from the start — retrofitting a third
  *    phase later is worse than supporting N now."* Two points are the starting config,
  *    not the schema, so the panel has to be able to add and remove them.
- * 2. **The demand card shades the region where the gate overrides demand.** With the
- *    starting values the gate (50/80 lx) is far narrower than the demand curve
- *    (1 → 540 lx), so the top ~85 % of the curve is unreachable. Neither value is wrong;
- *    they answer different questions and must be tuned as a pair, which is impossible
- *    if the interaction is invisible.
+ * 2. **The demand card marks where the ambience threshold sits on the demand curve.**
+ *    It no longer *overrides* demand — that was the 2026-08-13 bug, where the 50/80 pair
+ *    was ANDed into normal lighting and silently zeroed an occupied room at 247 lx. The
+ *    marker stays because the relationship is still worth seeing: below it the minimum
+ *    cutoff drops out and the glow may appear.
  */
 
 import { LitElement, css, html, nothing } from "lit";
@@ -27,27 +27,27 @@ import { tokens } from "./tokens";
 import "./ui";
 
 const HELP: Record<string, string> = {
-  gate_start_lux:
-    "Falling edge. At or below this outdoor level the lights are allowed to run at all. This answers whether lights may run — not how bright they get.",
-  gate_stop_lux:
-    "Rising edge. At or above this the lights stop. The gap between the two thresholds is deliberate hysteresis so the boundary does not flicker.",
-  gate_debounce_falling_s:
-    "Extra delay before the gate opens. Leave at 0 unless you have a reason: the mmWave sensors already impose a 15 s minimum in hardware and zigbee2mqtt adds more on top.",
-  gate_debounce_rising_s:
-    "Extra delay before the gate closes. Same warning — stacking three minutes on top of the hardware delay is three minutes of lag and then a mystery.",
+  ambience_start_lux:
+    "Falling edge. At or below this outdoor level it counts as dark: the ambience glow may appear, and the minimum cutoff drops out. It does NOT decide whether normal lighting runs — demand and occupancy do that.",
+  ambience_stop_lux:
+    "Rising edge. At or above this it counts as bright again and the glow goes. The gap between the two thresholds is deliberate hysteresis so the boundary does not flicker.",
+  ambience_debounce_falling_s:
+    "Extra delay before it reads dark. Leave at 0 unless you have a reason: the mmWave sensors already impose a 15 s minimum in hardware and zigbee2mqtt adds more on top.",
+  ambience_debounce_rising_s:
+    "Extra delay before it reads bright again. Same warning — stacking three minutes on top of the hardware delay is three minutes of lag and then a mystery.",
   lux_full:
     "The outdoor level at or below which the room wants full light. The bottom of the demand curve.",
   lux_window:
-    "How far above the full point demand falls away to nothing. Full point plus window is the level at which lights go out.",
+    "How far above the full point demand fades to nothing. Full point plus window IS the outdoor level at which normal lighting goes out — nothing else overrides it. Below that, an occupied room lights in proportion to how dark it is.",
   min_cutoff:
-    "Below this the light goes off rather than sitting at a useless glow. Applied before the per-light clamp.",
+    "Below this the light goes off rather than sitting at a useless glow competing with daylight. Ignored once it is dark — after dark a level of 1 is the point, not a waste — so this only bites in daylight.",
   night_level:
     "A fixed level while night mode is latched — not a scaling. Fixed so it is predictable when you are half asleep.",
   night_release_lux:
     "Night mode ends when it gets this light outside. Getting out of bed does not end it; that is deliberate, so a 3 am trip does not relight the house at full demand.",
   alarm_lead_minutes: "Night mode also ends this long before your next alarm, whichever comes first.",
   ambience_level:
-    "A house-wide low-light floor while you are awake and the gate reads dark. It only raises a level, never lowers it. 0 turns the feature off everywhere.",
+    "What a light shows INSTEAD OF BEING OFF, once it is dark outside and you are awake. It replaces off — it never dims a light that is already doing its job. 0 turns the feature off everywhere.",
   ambience_ignores_occupancy:
     "On: the ambience glow stays in a room nobody is in. Off: it needs occupancy like everything else.",
   rate_limit_step:
@@ -246,7 +246,7 @@ export class SolTabLighting extends LitElement {
   private demandChart() {
     const lo = Math.max(this.value("lux_full"), 0.1);
     const hi = lo + Math.max(this.value("lux_window"), 1);
-    const gateStart = this.value("gate_start_lux");
+    const gateStart = this.value("ambience_start_lux");
 
     // Sample in log-lux — the curve is logarithmic and linear sampling wastes every
     // point above a few hundred lux.
@@ -262,7 +262,6 @@ export class SolTabLighting extends LitElement {
       decades.push({ value: e, label: e < 0 ? "0.1" : num(Math.pow(10, e)) });
     }
 
-    const unreachable = gateStart < hi;
     return html`<sol-chart
       .series=${[
         { points, colour: "var(--sol-series-start)", width: 2.6 } as Series,
@@ -270,7 +269,7 @@ export class SolTabLighting extends LitElement {
       .refLines=${[
         {
           x: Math.log10(Math.max(gateStart, 0.1)),
-          label: `gate ${num(gateStart)} lx`,
+          label: `dark ${num(gateStart)} lx`,
           colour: "rgba(240,98,146,.55)",
           textColour: "var(--sol-series-full)",
         },
@@ -279,19 +278,14 @@ export class SolTabLighting extends LitElement {
       .yTicks=${[0, 0.25, 0.5, 0.75, 1].map((v) => ({ value: v, label: `${v * 100} %` }))}
       .xDomain=${[-1, Math.ceil(Math.log10(hi * 1.2))]}
       .yDomain=${[0, 1]}
-      .shade=${unreachable
-        ? ([Math.log10(Math.max(gateStart, 0.1)), Math.ceil(Math.log10(hi * 1.2))] as [
-            number,
-            number,
-          ])
-        : null}
-      .shadeLabel=${unreachable ? "gate shuts — demand never reached" : ""}
+      .shade=${[-1, Math.log10(Math.max(gateStart, 0.1))] as [number, number]}
+      .shadeLabel=${"dark — cutoff drops out, glow allowed"}
       xTitle="outdoor lux"
       .facts=${[
         { label: "Full at", value: `${num(lo, 1)} lx` },
         { label: "Out at", value: `${num(hi)} lx` },
-        { label: "Gate opens", value: `${num(gateStart)} lx` },
-        { label: "Gate closes", value: `${num(this.value("gate_stop_lux"))} lx` },
+        { label: "Counts as dark", value: `${num(gateStart)} lx` },
+        { label: "Bright again", value: `${num(this.value("ambience_stop_lux"))} lx` },
         { label: "Now", value: num(this.snap.world.lux, 1) + " lx" },
       ] as Fact[]}
     ></sol-chart>`;
@@ -308,7 +302,7 @@ export class SolTabLighting extends LitElement {
       year: w.year || new Date().getFullYear(),
     };
     const lat = w.latitude;
-    const gateStart = this.value("gate_start_lux");
+    const gateStart = this.value("ambience_start_lux");
     const luxFull = Math.max(this.value("lux_full"), 0.1);
     const ambienceOn = this.value("ambience_level") > 0 ? gateStart : null;
 
@@ -570,12 +564,12 @@ export class SolTabLighting extends LitElement {
   render() {
     // Recomputed each render: the named cards below repopulate it via `schema()`.
     this.placed = new Set();
-    const gateStart = this.value("gate_start_lux");
-    const gateStop = this.value("gate_stop_lux");
+    const gateStart = this.value("ambience_start_lux");
+    const gateStop = this.value("ambience_stop_lux");
     const lo = this.value("lux_full");
     const hi = lo + this.value("lux_window");
     const debounced =
-      this.value("gate_debounce_falling_s") > 0 || this.value("gate_debounce_rising_s") > 0;
+      this.value("ambience_debounce_falling_s") > 0 || this.value("ambience_debounce_rising_s") > 0;
 
     return html`<div class="grid">
       <div class="card">
@@ -603,16 +597,19 @@ export class SolTabLighting extends LitElement {
       <div class="card">
         <div class="card-head">
           <ha-icon icon="mdi:theme-light-dark"></ha-icon>
-          <h2>Ambient gate &amp; ambience</h2>
+          <h2>Ambience — the evening glow</h2>
         </div>
         <div class="caption" style="margin-bottom:6px">
-          One mechanism, two names. The same pair of thresholds decides whether lights may run at
-          all and when the ambience floor applies — shipping them separately would be two systems
-          doing one job.
+          <b>These thresholds do not decide whether normal lighting runs.</b> That is the demand
+          curve above, plus occupancy. These two numbers only say when it is dark enough for the
+          resting glow — and they do one other thing: below them the minimum cutoff drops out, so
+          lights can reach 1 after dark instead of stopping at
+          ${num(this.value("min_cutoff"))}.
         </div>
-        ${this.row("gate_start_lux")} ${this.row("gate_stop_lux")}
+        ${this.row("ambience_start_lux")} ${this.row("ambience_stop_lux")}
         <div class="caption">
-          Hysteresis gap: ${num(Math.max(0, gateStop - gateStart))} lx.
+          Hysteresis gap: ${num(Math.max(0, gateStop - gateStart))} lx — the boundary does not
+          flicker.
         </div>
         <div class="sub">
           ${this.row("ambience_level")}
@@ -644,7 +641,7 @@ export class SolTabLighting extends LitElement {
             Leave these at 0 unless you have a measured reason. The mmWave sensors already impose a
             15 s minimum in hardware, and zigbee2mqtt adds more on top of that.
           </div>
-          ${this.row("gate_debounce_falling_s")} ${this.row("gate_debounce_rising_s")}
+          ${this.row("ambience_debounce_falling_s")} ${this.row("ambience_debounce_rising_s")}
           ${debounced
             ? html`<div class="warn">
                 <ha-icon icon="mdi:alert-outline"></ha-icon>

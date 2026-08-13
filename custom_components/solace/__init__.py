@@ -66,7 +66,12 @@ async def async_migrate_entry(hass: HomeAssistant, entry: SolaceConfigEntry) -> 
     result computes byte-identical levels to v1. Merging areas is then a deliberate,
     visible act in the panel.
     """
+    if entry.version >= 3:
+        return True
+
     if entry.version >= 2:
+        _async_rename_gate_keys(hass, entry)
+        hass.config_entries.async_update_entry(entry, version=3)
         return True
 
     for subentry in list(entry.subentries.values()):
@@ -85,9 +90,38 @@ async def async_migrate_entry(hass: HomeAssistant, entry: SolaceConfigEntry) -> 
         ]
         hass.config_entries.async_update_subentry(entry, subentry, data=data)
 
-    hass.config_entries.async_update_entry(entry, version=2)
+    _async_rename_gate_keys(hass, entry)
+    hass.config_entries.async_update_entry(entry, version=3)
     _LOGGER.info("Solace: migrated %s areas to the v2 zone layout", len(entry.subentries))
     return True
+
+
+GATE_KEY_RENAMES = {
+    "gate_start_lux": "ambience_start_lux",
+    "gate_stop_lux": "ambience_stop_lux",
+    "gate_debounce_falling_s": "ambience_debounce_falling_s",
+    "gate_debounce_rising_s": "ambience_debounce_rising_s",
+}
+
+
+def _async_rename_gate_keys(hass: HomeAssistant, entry: SolaceConfigEntry) -> None:
+    """v2 → v3: the ``gate_*`` settings become ``ambience_*``.
+
+    Not cosmetic. The name is what caused the bug it is named after: called a "gate", the
+    pair got ANDed into normal lighting, so an occupied room at 247 lx computed a level
+    and was then zeroed — while the panel claimed the merge was deliberate. The
+    thresholds only ever governed the ambience glow (and, below them, the dropping-out of
+    ``min_cutoff``). Renaming them is what stops the next reader re-deriving the same
+    wrong thing from the word "gate".
+
+    Values are carried across untouched, so a house that had tuned them keeps its tuning.
+    """
+    options = dict(entry.options)
+    moved = {new: options.pop(old) for old, new in GATE_KEY_RENAMES.items() if old in options}
+    if not moved:
+        return
+    hass.config_entries.async_update_entry(entry, options={**options, **moved})
+    _LOGGER.info("Solace: renamed %s gate settings to ambience_*", len(moved))
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: SolaceConfigEntry) -> bool:

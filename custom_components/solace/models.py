@@ -66,12 +66,12 @@ class HouseSettings:
     """House-wide settings. One per config entry."""
 
     # -- Step 2: ambient gate (lux hysteresis) ------------------------------------
-    gate_start_lux: float = 50.0
+    ambience_start_lux: float = 50.0
     """Falling edge — at or below this, lights MAY run."""
-    gate_stop_lux: float = 80.0
-    """Rising edge — at or above this, lights stop. Must be > gate_start_lux."""
-    gate_debounce_falling_s: float = 0.0
-    gate_debounce_rising_s: float = 0.0
+    ambience_stop_lux: float = 80.0
+    """Rising edge — at or above this, lights stop. Must be > ambience_start_lux."""
+    ambience_debounce_falling_s: float = 0.0
+    ambience_debounce_rising_s: float = 0.0
     """⚠️ THE DEBOUNCE RULE: default 0, and 0 must mean *no* debounce. Three layers
     already debounce before HA sees anything (Sonoff 15 s in hardware, z2m
     no_occupancy_since, then us). Never raise these without the owner's explicit
@@ -190,9 +190,13 @@ class HouseSettings:
     ramp_onset_minutes: float = 30.0
     """The evening ramp used to **step** onto its first point. Now it eases in over this
     long. 0 restores the step."""
-    demand_floor_level: int = 3
-    """The floor demand may fall to while awake and lit — roughly 1 % of the 0-254 scale.
-    Ambience does *not* raise a low demand up to itself; demand wins, down to here."""
+    demand_floor_level: int = 1
+    """The dimmest level demand may fall to while dark, rather than snapping off.
+
+    **1, because 0 is off** (owner, 2026-08-13: *"really as low as 0, but 0 is off"*).
+    This was 3 — "roughly 1 % of the scale" — which fought the rule that the cutoff drops
+    out after dark precisely so low levels are reachable. Ambience does not raise a low
+    demand up to itself; demand wins, down to here."""
 
     # -- Display only ---------------------------------------------------------------
     gamma: float = 2.39
@@ -312,20 +316,20 @@ class EngineInput:
     """Is he asleep **right now** — DND on, or the sleep toggle held. Distinct from
     ``night_active``: asleep drives the bedroom fully dark and suppresses the ambience
     glow; night_active drives the level everywhere."""
-    gate_open: bool = True
+    ambience_open: bool = True
     """The gate's *previous* state — it is hysteretic, so it is an input as well as an
-    output. Used only when ``gate_resolved`` is None."""
-    gate_resolved: bool | None = None
+    output. Used only when ``ambience_resolved`` is None."""
+    ambience_resolved: bool | None = None
     """The gate's **final** state for this tick, already hysteretic *and* debounced.
 
     ⚠️ This field exists because omitting it silently disabled the time debounce. The
     coordinator owns the clock, so it is the only thing that can debounce; it did, stored
-    the result, and then handed it to ``solve`` as ``gate_open`` — where ``solve``
-    re-ran ``ambient_gate`` on it and produced the *un*-debounced answer again. The
+    the result, and then handed it to ``solve`` as ``ambience_open`` — where ``solve``
+    re-ran ``ambience_threshold`` on it and produced the *un*-debounced answer again. The
     debounce moved ``binary_sensor.…_ambient_gate`` and nothing else: the lights still
     zeroed instantly, and the sensor and the bulbs visibly disagreed.
 
-    None ⇒ compute the gate from ``lux`` and ``gate_open`` (what the unit tests do, and
+    None ⇒ compute the gate from ``lux`` and ``ambience_open`` (what the unit tests do, and
     what makes ``solve`` usable standalone)."""
     diminish_active: bool = False
     """The near sub-zone sensor reads clear (kitchen only)."""
@@ -348,7 +352,7 @@ class Solution:
     level: int
     should_write: bool
     mode: Mode
-    gate_open: bool
+    ambience_open: bool
     demand: float
     stops: float
     fraction: float

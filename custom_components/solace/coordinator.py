@@ -53,7 +53,7 @@ from .const import (
     ROOM_DEFAULTS,
     SUBENTRY_TYPE_ROOM,
 )
-from .engine import ambient_gate, debounce_gate, solve
+from .engine import ambience_threshold, debounce_ambience, solve
 from .fade import FadeProfile, fade_profile
 from .models import (
     EngineInput,
@@ -92,8 +92,8 @@ class RoomState:
     """UTC timestamp of the last human touch. Persisted alongside the flag."""
     solutions: dict[str, Solution] = field(default_factory=dict)
     last_written: dict[str, int] = field(default_factory=dict)
-    gate_open: bool = False
-    gate_pending_since: float | None = None
+    ambience_open: bool = False
+    ambience_pending_since: float | None = None
     last_mode: Mode = Mode.NORMAL
 
     def is_manual(self, hold_minutes: float, now: float) -> bool:
@@ -410,9 +410,9 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                 subentry.data.get(CONF_NEAR_PRESENCE), default=True
             )
 
-            raw_gate = ambient_gate(lux, room.gate_open, house)
-            room.gate_open, room.gate_pending_since = debounce_gate(
-                raw_gate, room.gate_open, loop_now, room.gate_pending_since, house
+            raw_gate = ambience_threshold(lux, room.ambience_open, house)
+            room.ambience_open, room.ambience_pending_since = debounce_ambience(
+                raw_gate, room.ambience_open, loop_now, room.ambience_pending_since, house
             )
 
             manual = room.is_manual(settings.manual_hold_minutes, now.timestamp())
@@ -496,10 +496,10 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                 clock_hour=clock_hour,
                 night_active=self._night_active(),
                 asleep=asleep,
-                gate_open=room.gate_open,
+                ambience_open=room.ambience_open,
                 # The debounced answer, not a hint. Without this the engine recomputes
                 # the raw gate and the debounce moves the sensor but never the lights.
-                gate_resolved=room.gate_open,
+                ambience_resolved=room.ambience_open,
                 diminish_active=near_clear and diminish_pct > 0,
                 manual_level=current if manual else None,
                 current_level=current,

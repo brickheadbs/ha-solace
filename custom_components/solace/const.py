@@ -99,10 +99,10 @@ class Setting:
 #: House-wide settings. Order is the order they appear in the UI.
 HOUSE_SETTINGS: tuple[Setting, ...] = (
     # Ambient gate
-    Setting("gate_start_lux", "Gate start lux", 0, 2000, 1, 50, "lx", "mdi:weather-sunset-down"),
-    Setting("gate_stop_lux", "Gate stop lux", 0, 2000, 1, 80, "lx", "mdi:weather-sunset-up"),
-    Setting("gate_debounce_falling_s", "Gate debounce falling", 0, 900, 0.5, 0, "s", "mdi:timer-sand"),
-    Setting("gate_debounce_rising_s", "Gate debounce rising", 0, 900, 0.5, 0, "s", "mdi:timer-sand"),
+    Setting("ambience_start_lux", "Gate start lux", 0, 2000, 1, 50, "lx", "mdi:weather-sunset-down"),
+    Setting("ambience_stop_lux", "Gate stop lux", 0, 2000, 1, 80, "lx", "mdi:weather-sunset-up"),
+    Setting("ambience_debounce_falling_s", "Gate debounce falling", 0, 900, 0.5, 0, "s", "mdi:timer-sand"),
+    Setting("ambience_debounce_rising_s", "Gate debounce rising", 0, 900, 0.5, 0, "s", "mdi:timer-sand"),
     # Demand
     Setting("lux_full", "Demand full lux", 0.1, 500, 0.1, 1, "lx", "mdi:brightness-7"),
     Setting("lux_window", "Demand window", 1, 5000, 1, 539, "lx", "mdi:arrow-expand-horizontal"),
@@ -187,7 +187,7 @@ HOUSE_SETTINGS: tuple[Setting, ...] = (
     # -- Smoothness (AuDHD rule: never jump) ---------------------------------------
     Setting("morning_glide_minutes", "Morning colour glide", 0, 240, 1, 90, "min", "mdi:weather-sunset-up"),
     Setting("ramp_onset_minutes", "Evening ramp onset", 0, 240, 1, 30, "min", "mdi:ray-start-arrow"),
-    Setting("demand_floor_level", "Minimum awake level", 0, 254, 1, 3, None, "mdi:arrow-collapse-down"),
+    Setting("demand_floor_level", "Dimmest level while dark", 1, 254, 1, 1, None, "mdi:arrow-collapse-down"),
     # Display only
     Setting("gamma", "Gamma (display only)", 1, 4, 0.01, 2.39, None, "mdi:chart-bell-curve"),
 )

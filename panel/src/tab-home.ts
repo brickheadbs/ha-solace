@@ -628,7 +628,7 @@ export class SolTabHome extends LitElement {
           <div class="sub">
             ${room.lights.length} light${room.lights.length === 1 ? "" : "s"} ·
             ${room.occupied ? "occupied" : "clear"} ·
-            gate ${room.gate_open ? "open" : "shut"}
+            ${room.ambience_open ? "dark" : "daylight"}
           </div>
         </div>
         <sol-segmented

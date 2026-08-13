@@ -80,3 +80,29 @@ async def test_a_room_can_be_reconfigured(hass: HomeAssistant, entry, world):
     assert stored["night_off"] is True
     assert stored["bias_stops"] == -1.0
     assert stored["per_light"][LIGHT]["clamp_max"] == 10
+
+
+async def test_v2_gate_settings_are_renamed_not_lost(hass) -> None:
+    """The rename must carry a tuned house across, not silently reset it to defaults.
+
+    A house that had moved these off the defaults would otherwise have its ambience
+    thresholds jump back to 50/80 on upgrade, with nothing in the log to say so.
+    """
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    from custom_components.solace.const import DOMAIN
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        version=2,
+        options={"gate_start_lux": 33.0, "gate_stop_lux": 66.0, "ambience_level": 9},
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert entry.version == 3
+    assert entry.options["ambience_start_lux"] == 33.0
+    assert entry.options["ambience_stop_lux"] == 66.0
+    assert "gate_start_lux" not in entry.options
+    assert entry.options["ambience_level"] == 9, "unrelated settings must not be touched"

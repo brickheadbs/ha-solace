@@ -11,10 +11,10 @@ from dataclasses import replace
 import pytest
 
 from custom_components.solace.engine import (
-    ambient_gate,
+    ambience_threshold,
     apply_clamp,
     clip_to_full,
-    debounce_gate,
+    debounce_ambience,
     demand,
     past_dead_zone,
     ramp_bias,
@@ -55,7 +55,7 @@ def _input(**kwargs) -> EngineInput:
         "occupied": True,
         "dnd": False,
         "clock_hour": 14.0,  # daytime: outside the evening ramp
-        "gate_open": False,  # start closed, as the brief's property table does
+        "ambience_open": False,  # start closed, as the brief's property table does
     }
     base.update(kwargs)
     return EngineInput(**base)
@@ -99,48 +99,60 @@ def test_demand_is_monotonically_decreasing(house):
 def test_gate_hysteresis_does_not_flicker_at_the_boundary(house):
     """50/80 lx with hysteresis: the gate must not chatter between them."""
     # Rising out of darkness — stays open right through the 50 lx mark.
-    assert ambient_gate(60.0, was_open=True, house=house) is True
-    assert ambient_gate(79.9, was_open=True, house=house) is True
-    assert ambient_gate(80.0, was_open=True, house=house) is False
+    assert ambience_threshold(60.0, was_open=True, house=house) is True
+    assert ambience_threshold(79.9, was_open=True, house=house) is True
+    assert ambience_threshold(80.0, was_open=True, house=house) is False
     # Falling out of daylight — stays shut until 50.
-    assert ambient_gate(60.0, was_open=False, house=house) is False
-    assert ambient_gate(51.0, was_open=False, house=house) is False
-    assert ambient_gate(50.0, was_open=False, house=house) is True
+    assert ambience_threshold(60.0, was_open=False, house=house) is False
+    assert ambience_threshold(51.0, was_open=False, house=house) is False
+    assert ambience_threshold(50.0, was_open=False, house=house) is True
 
 
-def test_gate_shut_zeroes_the_room_even_though_demand_is_nonzero(house, room, light):
-    """From the brief: at 51 lx the gate is shut while demand is still ~0.35.
+def test_the_ambience_threshold_does_not_switch_normal_lighting_off(house, room, light):
+    """⚠️ THE 2026-08-13 BUG, inverted into a guard.
 
-    Not a bug — two mechanisms answering different questions. Recorded as a test so
-    nobody "fixes" it by hardcoding a relationship between the two windows.
+    This test used to assert the opposite — that at 51 lx an occupied room goes to 0
+    because the ambience threshold (50/80) is shut — and it called that "two mechanisms
+    answering different questions, recorded so nobody fixes it".
+
+    It was the bug, and the test was holding it in place. Owner: *"It isn't supposed to
+    be a gate. It is supposed to ONLY be for ambience lighting."* An occupied room with
+    real demand lights, whatever the ambience threshold says.
     """
     assert demand(51.0, house) > 0.3
-    assert solve(house, room, light, _input(lux=51.0)).level == 0
-    assert solve(house, room, light, _input(lux=400.0)).level == 0
+    assert solve(house, room, light, _input(lux=51.0)).level > 0
+
+    # Normal lighting still goes out on its own — via DEMAND reaching zero at
+    # lux_full + lux_window, which is what makes that window mean what the panel says.
+    out_at = house.lux_full + house.lux_window
+    assert demand(out_at, house) == 0.0
+    assert solve(house, room, light, _input(lux=out_at)).level == 0
+    # ...and it is still lit just below that point.
+    assert solve(house, room, light, _input(lux=out_at * 0.5)).level > 0
 
 
 def test_debounce_defaults_to_zero_and_zero_means_no_debounce(house):
     """THE DEBOUNCE RULE. 0 must mean *no* debounce, not "a very short one"."""
-    assert house.gate_debounce_rising_s == 0.0
-    assert house.gate_debounce_falling_s == 0.0
-    state, pending = debounce_gate(True, False, now=100.0, pending_since=None, house=house)
+    assert house.ambience_debounce_rising_s == 0.0
+    assert house.ambience_debounce_falling_s == 0.0
+    state, pending = debounce_ambience(True, False, now=100.0, pending_since=None, house=house)
     assert state is True
     assert pending is None
 
 
 def test_debounce_holds_the_old_state_until_the_delay_elapses():
-    house = HouseSettings(gate_debounce_rising_s=180.0)
+    house = HouseSettings(ambience_debounce_rising_s=180.0)
     # raw says "close the gate" (bright); we were open. Rising debounce applies.
-    state, pending = debounce_gate(False, True, now=0.0, pending_since=None, house=house)
+    state, pending = debounce_ambience(False, True, now=0.0, pending_since=None, house=house)
     assert state is True and pending == 0.0
-    state, pending = debounce_gate(False, True, now=179.0, pending_since=0.0, house=house)
+    state, pending = debounce_ambience(False, True, now=179.0, pending_since=0.0, house=house)
     assert state is True and pending == 0.0
-    state, pending = debounce_gate(False, True, now=180.0, pending_since=0.0, house=house)
+    state, pending = debounce_ambience(False, True, now=180.0, pending_since=0.0, house=house)
     assert state is False and pending is None
 
 
 def test_debounce_pending_clears_when_the_world_changes_back(house):
-    state, pending = debounce_gate(True, True, now=50.0, pending_since=10.0, house=house)
+    state, pending = debounce_ambience(True, True, now=50.0, pending_since=10.0, house=house)
     assert state is True and pending is None
 
 
@@ -300,15 +312,21 @@ def test_ambience_clamps_diminish_but_never_lifts_demand(house, room, light):
 
 
 def test_demand_does_not_dim_below_the_awake_floor(house, room, light):
-    """"Demand wins, but only down to 1 %" — it dims rather than snapping off."""
-    house = HouseSettings(ambience_level=25, demand_floor_level=3)
-    result = solve(house, RoomSettings(bias_stops=-7.0), light, _input(lux=10.0))
-    assert result.level == 3
+    """"Demand wins" — it dims rather than snapping off, down to the floor.
 
-    # A demand of exactly zero still means "no light needed" — the floor does not
-    # resurrect a room the daylight has switched off.
-    off = solve(house, RoomSettings(bias_stops=-12.0), light, _input(lux=10.0))
-    assert off.level == 0
+    The floor is **1, because 0 is off** (owner: *"really as low as 0, but 0 is off"*).
+    It was 3 until 2026-08-13, which fought the rule that the cutoff drops out after dark
+    precisely so low levels are reachable.
+    """
+    house = HouseSettings(ambience_level=25, demand_floor_level=1)
+    result = solve(house, RoomSettings(bias_stops=-7.0), light, _input(lux=10.0))
+    assert 0 < result.level < 25
+
+    # Driven all the way to nothing, the light is OFF — and off in the dark, while awake,
+    # is exactly what ambience replaces. It does not stay dark and it is not floored at 1.
+    crushed = solve(house, RoomSettings(bias_stops=-12.0), light, _input(lux=10.0))
+    assert crushed.level == 25
+    assert "ambience_replaces_off" in dict(crushed.trace)
 
 
 def test_ambience_is_off_when_asleep(house, room, light):
@@ -345,10 +363,22 @@ def test_unoccupied_is_zero(house, room, light):
 
 
 def test_min_cutoff_prefers_off_to_a_useless_glow(house, light):
-    house = HouseSettings(min_cutoff=10)
+    """...but ONLY in daylight. After dark the cutoff drops out entirely.
+
+    Owner, 2026-08-13: the ambience settings "also disable the Minimum cutoff so that
+    lights can go as low as 1 at night when low levels are actually needed". A glow that
+    is useless against daylight is the entire point once it is dark.
+    """
+    house = HouseSettings(min_cutoff=10, ambience_start_lux=50, ambience_stop_lux=80)
     room = RoomSettings(bias_stops=-6.0)
-    result = solve(house, room, light, _input(lux=10.0))
-    assert result.level == 0
+
+    # Bright: the cutoff bites.
+    bright = solve(house, room, light, _input(lux=200.0))
+    assert bright.level == 0
+
+    # Dark: it does not. A level below the cutoff survives instead of snapping off.
+    dark = solve(house, room, light, _input(lux=10.0))
+    assert 0 < dark.level < 10
 
 
 def test_manual_wins_over_everything_computed(house, room, light):
@@ -445,7 +475,7 @@ def test_solution_carries_a_full_trace(house, room, light):
     result = solve(house, room, light, _input(lux=10.0))
     steps = dict(result.trace)
     assert steps["lux"] == 10.0
-    assert steps["gate_open"] is True
+    assert steps["ambience_open"] is True
     assert 0 < steps["demand"] < 1
     assert steps["level_raw"] == 161
     assert steps["clamped"] == 161
@@ -557,30 +587,110 @@ def test_a_bright_empty_house_stays_dark_despite_ambience(house, light):
 
 
 def test_a_debounced_gate_is_not_recomputed_away(house, room, light):
-    """⚠️ Regression. `solve` used to re-run `ambient_gate` on the value the coordinator
+    """⚠️ Regression. `solve` used to re-run `ambience_threshold` on the value the coordinator
     had already debounced, which produced the *un*-debounced answer every time. The
     debounce moved `binary_sensor.…_ambient_gate` and nothing else — the lights still
     zeroed instantly, and the sensor and the bulbs visibly disagreed.
 
-    Here the world is bright (100 lx, well past `gate_stop_lux` 80) but the caller's
+    Here the world is bright (100 lx, well past `ambience_stop_lux` 80) but the caller's
     debounce is still holding the gate open. The lights must stay on.
     """
     held_open = solve(
-        house, room, light, _input(lux=100.0, gate_open=True, gate_resolved=True)
+        house, room, light, _input(lux=100.0, ambience_open=True, ambience_resolved=True)
     )
-    assert dict(held_open.trace)["gate_open"] is True
+    assert dict(held_open.trace)["ambience_open"] is True
     assert held_open.level > 0, "the debounced gate was recomputed away"
 
-    # And the converse: a caller holding it shut wins over a dark reading.
+    # And the converse: a caller holding it SHUT wins over a dark reading.
+    #
+    # Observed through ambience, not through the level — since 2026-08-13 the threshold
+    # does not switch normal lighting off, so `level == 0` would no longer be evidence of
+    # anything. An unoccupied room is off either way; what changes is whether the glow
+    # replaces that off.
+    glow = HouseSettings(ambience_level=20, ambience_ignores_occupancy=True)
     held_shut = solve(
-        house, room, light, _input(lux=5.0, gate_open=False, gate_resolved=False)
+        glow, room, light,
+        _input(lux=5.0, occupied=False, ambience_open=False, ambience_resolved=False),
     )
-    assert held_shut.level == 0
+    assert dict(held_shut.trace)["ambience_open"] is False
+    assert held_shut.level == 0, "the debounced threshold was recomputed away"
+
+    released = solve(
+        glow, room, light,
+        _input(lux=5.0, occupied=False, ambience_open=True, ambience_resolved=True),
+    )
+    assert released.level == 20
 
 
 def test_without_a_resolved_gate_solve_still_computes_one(house, room, light):
-    """`gate_resolved=None` keeps `solve` usable standalone — the unit tests and any
+    """`ambience_resolved=None` keeps `solve` usable standalone — the unit tests and any
     what-if preview rely on it deriving the gate from lux."""
-    result = solve(house, room, light, _input(lux=10.0, gate_open=False))
-    assert dict(result.trace)["gate_open"] is True
+    result = solve(house, room, light, _input(lux=10.0, ambience_open=False))
+    assert dict(result.trace)["ambience_open"] is True
     assert result.level == 161
+
+
+# --------------------------------------------------------------------------------
+# Ambience — the owner's definition, verbatim, as executable tests
+#
+#   "Ambient ALWAYS confuses agents. It replaces the OFF state below threshold
+#    while awake."                                            — 2026-08-13
+#
+# It was built twice as a floor under demand before that sentence landed. These tests
+# exist so the third rebuild cannot quietly happen.
+# --------------------------------------------------------------------------------
+
+GLOW = dict(ambience_level=20, ambience_start_lux=50.0, ambience_stop_lux=80.0)
+
+
+def test_ambience_replaces_off(light):
+    """The headline rule. A room that would be dark shows the glow instead."""
+    house = HouseSettings(**GLOW, ambience_ignores_occupancy=True)
+    result = solve(house, RoomSettings(), light, _input(lux=10.0, occupied=False))
+    assert result.level == 20
+    assert "ambience_replaces_off" in dict(result.trace)
+
+
+def test_ambience_never_dims_a_light_that_is_already_working(light):
+    """It replaces OFF. It is not a ceiling, and not a floor that drags a lit room down."""
+    house = HouseSettings(**GLOW)
+    result = solve(house, RoomSettings(), light, _input(lux=10.0, occupied=True))
+    assert result.level > 20, "a properly lit room was pulled down to the glow"
+
+
+def test_ambience_does_not_appear_in_daylight(light):
+    """Above the threshold, off stays off — the glow is an evening thing."""
+    house = HouseSettings(**GLOW, ambience_ignores_occupancy=True)
+    result = solve(house, RoomSettings(), light, _input(lux=200.0, occupied=False))
+    assert result.level == 0
+
+
+def test_ambience_does_not_appear_while_asleep(light):
+    """Awake is half the rule. Night mode owns the house while he is asleep."""
+    house = HouseSettings(**GLOW, ambience_ignores_occupancy=True)
+    result = solve(
+        house, RoomSettings(), light, _input(lux=10.0, occupied=False, asleep=True, dnd=True)
+    )
+    assert result.level != 20
+
+
+def test_an_occupied_room_lights_at_the_lux_that_started_all_this(light):
+    """247 lx, occupied, evening ramp active — the exact live reading that was reported
+    as "lux well below the threshold but the lights are off". It must light."""
+    house = HouseSettings(**GLOW, min_cutoff=11)
+    result = solve(house, RoomSettings(), light, _input(lux=247.0, occupied=True))
+    assert result.level > 0
+
+
+def test_the_cutoff_drops_out_below_the_threshold_but_zero_is_still_off(light):
+    """"Really as low as 0, but 0 is off." The dimmest reachable level is 1, not the
+    cutoff — and not 0, which means off."""
+    house = HouseSettings(
+        ambience_level=0,
+        ambience_start_lux=50.0,
+        ambience_stop_lux=80.0,
+        min_cutoff=11,
+        demand_floor_level=1,
+    )
+    dim = solve(house, RoomSettings(bias_stops=-6.0), light, _input(lux=10.0, occupied=True))
+    assert 0 < dim.level < 11

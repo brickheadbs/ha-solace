@@ -66,7 +66,7 @@ export interface RoomRow {
   occupied: boolean;
   near_clear: boolean;
   has_near: boolean;
-  gate_open: boolean;
+  ambience_open: boolean;
   demand: number | null;
   stops: number | null;
   mode: string | null;

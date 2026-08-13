@@ -50,7 +50,7 @@ class SolaceGateSensor(SolaceRoomEntity, BinarySensorEntity):
     @property
     def is_on(self) -> bool:
         room = self.room
-        return bool(room and room.gate_open)
+        return bool(room and room.ambience_open)
 
 
 class SolaceManualActiveSensor(SolaceRoomEntity, BinarySensorEntity):
