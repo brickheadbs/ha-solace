@@ -491,3 +491,42 @@ async def test_dragging_a_setting_uses_the_tuning_transition(
 
     # And the tuning flag is one tick only — the next ordinary tick must not snap.
     assert entry.runtime_data.coordinator._tuning is False
+
+
+async def test_a_settings_change_rebinds_listeners_without_accumulating_them(
+    hass: HomeAssistant, entry
+) -> None:
+    """Changing a setting must re-derive the clocks, and must not leave the old ones running.
+
+    Both halves have bitten this codebase. Re-binding is why the sleep toggle stopped
+    being silently dead. Tearing down first is what stops a slider drag from leaving a
+    second colour ticker behind — twenty drags would mean twenty writers on one bulb,
+    which is the exact contamination that invalidated a night of hardware measurements.
+    """
+    assert await _setup(hass, entry)
+    coordinator = entry.runtime_data.coordinator
+    before = len(coordinator._unsubscribes)
+    assert before, "nothing is listening at all"
+
+    for _ in range(5):
+        coordinator.async_resubscribe()
+    assert len(coordinator._unsubscribes) == before
+
+
+async def test_the_colour_clock_follows_the_step_size(hass: HomeAssistant, entry) -> None:
+    """The tick is paced for the finest family, so a finer step must mean a faster clock.
+    A value that only takes effect on restart is the bug class the brief names."""
+    assert await _setup(hass, entry)
+    coordinator = entry.runtime_data.coordinator
+
+    hass.config_entries.async_update_entry(
+        entry, options={**entry.options, "colour_step_mired_smooth": 10}
+    )
+    await hass.async_block_till_done()
+    coarse = coordinator._colour_interval()
+
+    hass.config_entries.async_update_entry(
+        entry, options={**entry.options, "colour_step_mired_smooth": 2}
+    )
+    await hass.async_block_till_done()
+    assert coordinator._colour_interval() < coarse
