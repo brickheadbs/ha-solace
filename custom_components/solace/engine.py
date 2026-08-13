@@ -7,7 +7,8 @@ PURE MODULE. **No ``homeassistant`` imports, ever.**
     logic bugs actually live; everything else is plumbing."
         — ha-integration-build §8
 
-This file implements the 17-step contract in ``SOLACE-V02-BUILD-BRIEF.md``
+This file implements the 17-step contract from the build brief, archived 2026-08-13 at
+``homelab:docs/archive/SOLACE-BUILD-BRIEF-2026-08-13.md``
 ("Order of calculation — lux sensor → one bulb"). **Order matters**: several steps are
 only correct in this position, and two of them were bugs in earlier drafts that got
 fixed by moving them. Read the brief before reordering anything here.

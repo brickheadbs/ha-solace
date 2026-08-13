@@ -251,9 +251,9 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
     def light_settings(self, entity_id: str, subentry: ConfigSubentry) -> LightSettings:
         """Per-light settings, with the hardware facts read from the live entity.
 
-        Kelvin limits are **never guessed** — five bulbs in this house stop at 4000 K and
-        six floor at 2702 K, and an out-of-range request is accepted, pinned, and logged
-        as a success.
+        Kelvin limits are **never guessed** — some bulbs here stop at 4000 K and others
+        floor at 2702 K, and an out-of-range request is accepted, pinned, and logged as
+        a success.
         """
         overrides = (subentry.data.get(CONF_PER_LIGHT) or {}).get(entity_id, {})
         state = self.hass.states.get(entity_id)

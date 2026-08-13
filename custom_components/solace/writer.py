@@ -38,17 +38,21 @@ def infer_family(
     Read, never guessed — the max Kelvin is the discriminator and it comes straight off
     the live entity:
 
-    ==============  ====================  ==============
-    max_color_temp  family                count in house
-    ==============  ====================  ==============
-    4000 K          IKEA TRADFRI          5
-    6535 K          Aqara CCT             6
-    9009 K          Aqara RGB             12
-    ==============  ====================  ==============
+    ==============  ====================
+    max_color_temp  family
+    ==============  ====================
+    4000 K          IKEA TRADFRI
+    6535 K          Aqara CCT
+    9009 K          Aqara RGB
+    ==============  ====================
 
-    The IKEA count matters: a note in this repo once "corrected" 5 → 4 in the wrong
-    direction and ``living_sitting_ne`` kept getting missed. Deriving it from the
-    registry means the count cannot go stale again.
+    ⚠️ **No bulb counts here, deliberately.** This docstring used to carry "5 / 6 / 12",
+    and on 2026-08-13 a live registry probe made all three wrong (6 / 6 / 15 counting
+    group members individually). A count in a comment is a hardcoded fact about one
+    house at one moment, and the whole reason this function reads the registry is that
+    such facts rot — a note in this repo once "corrected" the IKEA count in the *wrong*
+    direction and ``living_sitting_ne`` kept getting missed as a result. The panel shows
+    the live count; nothing needs to remember it.
     """
     max_kelvin = state.attributes.get("max_color_temp_kelvin") or 0
     if max_kelvin <= cct_max_kelvin:

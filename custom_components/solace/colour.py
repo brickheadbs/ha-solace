@@ -8,9 +8,10 @@ Settled decisions this implements (ha-lighting-system §2, do not re-litigate):
   **mireds**, plus a manual Kelvin trim.
 * **Sun *elevation* was tried and failed** — it sits flat all afternoon then collapses
   in 90 minutes. Anchor to dusk and the clock instead.
-* **Clamp per bulb, and surface the clamp.** A 5000 K request pins five bulbs at
-  4000 K (the three entry lights, the living ceiling, and ``living_sitting_ne``). The
-  bulb reports success either way — silence here is how "colour doesn't work" happens.
+* **Clamp per bulb, and surface the clamp.** A 5000 K request pins every IKEA-family
+  bulb at 4000 K. The bulb reports success either way — silence here is how "colour
+  doesn't work" happens. (How many that is, is read from the registry and shown in the
+  panel; it is deliberately not written down here, because it changes.)
 """
 
 from __future__ import annotations

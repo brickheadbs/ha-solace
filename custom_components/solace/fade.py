@@ -49,7 +49,8 @@ Channel          Mechanism
 
 🔴 **IKEA is the exception.** A concurrent colour step **froze an in-flight brightness
 fade at 84 for 420 s**, against a clean same-family control that tracked perfectly. On
-those five bulbs the two channels must be serialised. See ``may_run_concurrently``.
+that family the two channels must be serialised — see ``may_run_concurrently``, and
+``fade_profile`` for what serialising costs and how the step size pays for it.
 """
 
 from __future__ import annotations

@@ -117,3 +117,30 @@ def test_no_bare_numeric_literals_left_in_the_engine_path():
             assert not re.search(pattern, text), (
                 f"{rel}: `{pattern}` is hardcoded again — it belongs in const.py"
             )
+
+
+def test_no_bulb_counts_are_written_down_anywhere():
+    """A count of bulbs is a hardcoded fact about one house at one moment.
+
+    Every family count in this codebase was written as prose — "five bulbs stop at
+    4000 K", a table reading 5/6/12 — and on 2026-08-13 a live registry probe made all
+    of them wrong. The counts are *derived* from the registry precisely so they cannot
+    rot; writing one into a comment quietly reintroduces the thing the derivation exists
+    to prevent, and the next agent believes the comment.
+    """
+    root = pathlib.Path(__file__).resolve().parents[1] / "custom_components" / "solace"
+    # Two or more only. "one bulb, one writer" and "lux sensor → one bulb" are idioms
+    # about the singular case, not claims about how many are installed.
+    counting = re.compile(
+        r"\b(two|three|four|five|six|seven|eight|nine|ten|\d+)\s+bulbs\b",
+        re.IGNORECASE,
+    )
+    offenders = []
+    for path in sorted(root.rglob("*.py")):
+        for number, line in enumerate(path.read_text().splitlines(), 1):
+            match = counting.search(line)
+            # "a 4-bulb RGB combo" describes a measurement that was run, not a claim
+            # about what is installed today.
+            if match and "combo" not in line:
+                offenders.append(f"{path.name}:{number}: {line.strip()}")
+    assert not offenders, "bulb counts written down instead of derived:\n" + "\n".join(offenders)

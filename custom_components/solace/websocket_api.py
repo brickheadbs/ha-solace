@@ -279,9 +279,9 @@ def _snapshot(hass: HomeAssistant, coordinator: SolaceCoordinator) -> dict[str, 
             else None,
             "healthy": coordinator.last_update_success,
         },
-        # How each family present in the house walks the colour curve. Two bulbs on the
-        # same clock take different-sized steps, and without this the panel would show
-        # one "colour step size" that is true for neither of them.
+        # How each family present in the house walks the colour curve. Families sharing
+        # one clock take different-sized steps, and without this the panel would show a
+        # single "colour step size" that is true for none of them.
         "fade": {
             "interval_s": round(coordinator._colour_interval(), 1),  # noqa: SLF001
             "families": [

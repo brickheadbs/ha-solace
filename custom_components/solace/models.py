@@ -277,7 +277,7 @@ class LightSettings:
     clamp_max: int = 254
     min_kelvin: int = 2000
     max_kelvin: int = 9009
-    """Read from the live registry, not guessed — five bulbs stop at 4000 K."""
+    """Read from the live registry, not guessed — IKEA-family bulbs stop at 4000 K."""
 
 
 @dataclass(frozen=True, slots=True)
