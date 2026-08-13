@@ -18,6 +18,7 @@ from typing import Any
 
 import voluptuous as vol
 from homeassistant.config_entries import (
+    SOURCE_RECONFIGURE,
     ConfigEntry,
     ConfigFlow,
     ConfigFlowResult,
@@ -28,6 +29,7 @@ from homeassistant.config_entries import (
 from homeassistant.core import callback
 from homeassistant.data_entry_flow import section
 from homeassistant.helpers.selector import (
+    BooleanSelector,
     EntitySelector,
     EntitySelectorConfig,
     NumberSelector,
@@ -36,6 +38,7 @@ from homeassistant.helpers.selector import (
 )
 
 from .const import (
+    CONF_AWAKE_OVERRIDE,
     CONF_DND_ENTITY,
     CONF_LIGHTS,
     CONF_LUX_SENSOR,
@@ -52,15 +55,24 @@ from .const import (
 
 
 def _number(setting: Setting) -> NumberSelector:
-    return NumberSelector(
-        NumberSelectorConfig(
-            min=setting.minimum,
-            max=setting.maximum,
-            step=setting.step,
-            mode=NumberSelectorMode.BOX,
-            unit_of_measurement=setting.unit,
-        )
-    )
+    """Build a number selector for one setting.
+
+    ⚠️ `unit_of_measurement` must be **omitted**, never passed as None — voluptuous
+    validates it as `str` and a None raises `MultipleInvalid` while *building the
+    schema*. The failure is nasty: the whole options flow refuses to open, HA reports it
+    only as a generic 400, and nothing lands in the log. The room flow was unaffected
+    purely because every room setting happens to have a unit, which is exactly the kind
+    of coincidence that hides a bug.
+    """
+    config: dict = {
+        "min": setting.minimum,
+        "max": setting.maximum,
+        "step": setting.step,
+        "mode": NumberSelectorMode.BOX,
+    }
+    if setting.unit:
+        config["unit_of_measurement"] = setting.unit
+    return NumberSelector(NumberSelectorConfig(**config))
 
 
 class SolaceConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -88,10 +100,22 @@ class SolaceConfigFlow(ConfigFlow, domain=DOMAIN):
                     ): EntitySelector(
                         EntitySelectorConfig(domain=["sensor"], device_class="illuminance")
                     ),
-                    # DND is the definition of "asleep": Brandon's watch turns it on
-                    # automatically when he falls asleep. One signal, three uses.
+                    # DND is the definition of "asleep". ⚠️ `sensor` MUST be in this
+                    # list: the Pixel's DND entity is `sensor.pixel_8a_do_not_disturb_
+                    # sensor`, a four-value enum, not a binary_sensor. Leaving `sensor`
+                    # out makes the real entity unpickable — which is exactly what
+                    # happened on the first attempt.
                     vol.Optional(CONF_DND_ENTITY): EntitySelector(
-                        EntitySelectorConfig(domain=["binary_sensor", "input_boolean", "switch"])
+                        EntitySelectorConfig(
+                            domain=["sensor", "binary_sensor", "input_boolean", "switch"]
+                        )
+                    ),
+                    # On ⇒ up in the night: rooms set to go dark while asleep rejoin the
+                    # house's night mode instead of staying off.
+                    vol.Optional(CONF_AWAKE_OVERRIDE): EntitySelector(
+                        EntitySelectorConfig(
+                            domain=["sensor", "binary_sensor", "input_boolean", "switch"]
+                        )
                     ),
                 }
             ),
@@ -161,14 +185,18 @@ class RoomSubentryFlowHandler(ConfigSubentryFlow):
                     vol.Required(CONF_LIGHTS): EntitySelector(
                         EntitySelectorConfig(domain="light", multiple=True)
                     ),
+                    # A LIST, any-on. "Either kitchen sensor turning on lights the whole
+                    # kitchen" cannot be expressed with a single sensor per room.
                     vol.Optional(CONF_PRESENCE): EntitySelector(
-                        EntitySelectorConfig(domain="binary_sensor")
+                        EntitySelectorConfig(domain="binary_sensor", multiple=True)
                     ),
                     # Kitchen only. The *near* sub-zone reading clear is what triggers
                     # diminish — a reduction that stays, never an off.
                     vol.Optional(CONF_NEAR_PRESENCE): EntitySelector(
-                        EntitySelectorConfig(domain="binary_sensor")
+                        EntitySelectorConfig(domain="binary_sensor", multiple=True)
                     ),
+                    # The bedroom's rule: asleep ⇒ fully off, not dimmed.
+                    vol.Required("night_off", default=False): BooleanSelector(),
                     **{
                         vol.Required(s.key, default=s.default): _number(s)
                         for s in ROOM_SETTINGS
@@ -201,9 +229,20 @@ class RoomSubentryFlowHandler(ConfigSubentryFlow):
                     "clamp_max": int(block.get("clamp_max", 254)),
                 }
             title = self._room.pop("name")
-            return self.async_create_entry(
-                title=title, data={**self._room, CONF_PER_LIGHT: per_light}
-            )
+            data = {**self._room, CONF_PER_LIGHT: per_light}
+
+            # ⚠️ A reconfigure must NOT finish with `async_create_entry` — HA raises
+            # `ValueError: Source is reconfigure, expected user`. Reusing the create
+            # path for reconfigure is the obvious way to avoid duplicating the form,
+            # and it fails at the very last call.
+            if self.source == SOURCE_RECONFIGURE:
+                return self.async_update_and_abort(
+                    self._get_entry(),
+                    self._get_reconfigure_subentry(),
+                    title=title,
+                    data=data,
+                )
+            return self.async_create_entry(title=title, data=data)
 
         schema: dict[Any, Any] = {}
         for entity_id in lights:
@@ -235,4 +274,11 @@ class RoomSubentryFlowHandler(ConfigSubentryFlow):
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
+        """Same two-step form as adding a room, pre-filled with what is stored.
+
+        Subentry flows support only `user` and `reconfigure` — there is no discovery or
+        reauth step to fall back on, so this is the single edit path.
+        """
+        if user_input is None:
+            self._room = dict(self._get_reconfigure_subentry().data)
         return await self.async_step_user(user_input)

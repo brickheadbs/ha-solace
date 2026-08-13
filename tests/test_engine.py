@@ -390,3 +390,76 @@ def test_solution_carries_a_full_trace(house, room, light):
     assert 0 < steps["demand"] < 1
     assert steps["level_raw"] == 161
     assert steps["clamped"] == 161
+
+
+# --------------------------------------------------------------------------------
+# Bedroom at night, and ambience-vs-occupancy (both settled by Brandon 2026-08-13)
+# --------------------------------------------------------------------------------
+
+
+def test_a_night_off_room_goes_fully_dark_when_asleep(house, light):
+    """The bedroom's rule. A night level in the room he is asleep in is not a gentler
+    version of off — it is a light on."""
+    bedroom = RoomSettings(name="Bedroom", night_off=True)
+    result = solve(house, bedroom, light, _input(lux=1.0, dnd=True))
+    assert result.mode is Mode.NIGHT
+    assert result.level == 0
+
+
+def test_other_rooms_still_get_the_night_level_when_asleep(house, room, light):
+    assert solve(house, room, light, _input(lux=1.0, dnd=True)).level == house.night_level
+
+
+def test_awake_in_the_night_returns_the_room_to_house_night_mode(house, light):
+    """"If awake in the night, it returns to the same state as the house."\""""
+    bedroom = RoomSettings(name="Bedroom", night_off=True)
+    result = solve(house, bedroom, light, _input(lux=1.0, dnd=True, awake_override=True))
+    assert result.level == house.night_level
+
+
+def test_night_off_does_nothing_while_awake(house, light):
+    bedroom = RoomSettings(name="Bedroom", night_off=True)
+    assert solve(house, bedroom, light, _input(lux=10.0, dnd=False)).level == 161
+
+
+def test_ambience_survives_an_empty_room(house, light):
+    """Brandon: ambience conditions are "below threshold and awake" — two conditions.
+    Occupancy is not one of them."""
+    house = HouseSettings(ambience_level=20)
+    assert house.ambience_ignores_occupancy is True
+    result = solve(house, RoomSettings(), light, _input(lux=10.0, occupied=False))
+    assert result.level == 20
+
+
+def test_ambience_still_goes_out_when_he_falls_asleep(house, light):
+    """DND on ⇒ asleep ⇒ the awake glow ends. An occupied room drops from the 20 floor
+    to the night level, not to it."""
+    house = HouseSettings(ambience_level=20, night_level=3)
+    result = solve(house, RoomSettings(), light, _input(lux=10.0, occupied=True, dnd=True))
+    assert result.level == 3
+
+
+def test_an_empty_room_is_dark_once_he_is_asleep(house, light):
+    """Ambience is the *awake* glow. Asleep + empty is off, not a night level."""
+    house = HouseSettings(ambience_level=20, night_level=3)
+    result = solve(house, RoomSettings(), light, _input(lux=10.0, occupied=False, dnd=True))
+    assert result.level == 0
+
+
+def test_ambience_never_lowers_an_occupied_room(house, light):
+    house = HouseSettings(ambience_level=20)
+    assert solve(house, RoomSettings(), light, _input(lux=10.0, occupied=True)).level == 161
+
+
+def test_ambience_and_night_off_together_leave_the_bedroom_dark(house, light):
+    """The combination that matters: awake-glow on house-wide, bedroom asleep."""
+    house = HouseSettings(ambience_level=20)
+    bedroom = RoomSettings(name="Bedroom", night_off=True)
+    result = solve(house, bedroom, light, _input(lux=10.0, occupied=False, dnd=True))
+    assert result.level == 0
+
+
+def test_a_bright_empty_house_stays_dark_despite_ambience(house, light):
+    """Ambience is gated on the lux threshold, so daytime is unaffected."""
+    house = HouseSettings(ambience_level=20)
+    assert solve(house, RoomSettings(), light, _input(lux=400.0, occupied=False)).level == 0

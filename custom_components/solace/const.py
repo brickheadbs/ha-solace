@@ -32,6 +32,23 @@ SUBENTRY_TYPE_ROOM = "room"
 # -- Config keys -------------------------------------------------------------------
 CONF_LUX_SENSOR = "lux_sensor"
 CONF_DND_ENTITY = "dnd_entity"
+CONF_AWAKE_OVERRIDE = "awake_override_entity"
+"""Optional. On ⇒ he is up in the night, so rooms with ``night_off`` rejoin the house's
+night mode instead of staying dark."""
+CONF_DND_SLEEP_STATES = "dnd_sleep_states"
+DEFAULT_DND_SLEEP_STATES = ("on", "priority_only")
+"""⚠️ `sensor.pixel_8a_do_not_disturb_sensor` is a **4-value enum**
+(`off` / `priority_only` / `alarms_only` / `total_silence`), NOT a binary sensor. A
+plain `state == "on"` test never matches it, so night mode would simply never engage —
+silently, because nothing errors.
+
+Brandon, 2026-08-13: *"When in priority only it means I'm sleeping."* So `priority_only`
+is the sleep signal, and `alarms_only` / `total_silence` deliberately are **not**.
+`"on"` is kept so the setting also works if pointed at a plain input_boolean.
+
+The 2026-07 automation hit the same wall and solved it with a bridging input_boolean;
+reading the enum directly removes that moving part."""
+
 CONF_LIGHTS = "lights"
 CONF_PRESENCE = "presence"
 CONF_NEAR_PRESENCE = "near_presence"

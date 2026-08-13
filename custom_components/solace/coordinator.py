@@ -34,13 +34,16 @@ from homeassistant.util import dt as dt_util
 
 from .colour import resolve_colour
 from .const import (
+    CONF_AWAKE_OVERRIDE,
     CONF_DND_ENTITY,
+    CONF_DND_SLEEP_STATES,
     CONF_LIGHTS,
     CONF_LUX_SENSOR,
     CONF_NEAR_PRESENCE,
     CONF_PER_LIGHT,
     CONF_PRESENCE,
     CONF_RAMP,
+    DEFAULT_DND_SLEEP_STATES,
     DEFAULT_MAX_INTERVAL_S,
     DEFAULT_MIN_INTERVAL_S,
     DOMAIN,
@@ -142,6 +145,8 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         self.rooms: dict[str, RoomState] = {}
         self._store: Store = Store(hass, STORAGE_VERSION, STORAGE_KEY)
         self._lux_history: list[float] = []
+        self._last_good_lux: float | None = None
+        self._lux_warned = False
         self._unsubscribes: list[Any] = []
 
     # ------------------------------------------------------------------ settings
@@ -184,6 +189,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
             bias_stops=float(data.get("bias_stops", 0.0)),
             zone_bias_stops=float(data.get("zone_bias_stops", 0.0)),
             diminish_pct=float(data.get("diminish_pct", 0.0)),
+            night_off=bool(data.get("night_off", False)),
             manual_hold_minutes=float(data.get("manual_hold_minutes", 30.0)),
         )
 
@@ -251,8 +257,13 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
             triggers.append(dnd)
         for subentry in self._subentries():
             for key in (CONF_PRESENCE, CONF_NEAR_PRESENCE):
-                if entity_id := subentry.data.get(key):
-                    triggers.append(entity_id)
+                value = subentry.data.get(key)
+                if isinstance(value, str):
+                    triggers.append(value)
+                elif value:
+                    triggers.extend(value)
+        if awake := self.config_entry.options.get(CONF_AWAKE_OVERRIDE):
+            triggers.append(awake)
         triggers = [t for t in triggers if t]
         if triggers:
             self._unsubscribes.append(
@@ -289,6 +300,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         house = self.house
         lux = self._lux()
         dnd = self._dnd()
+        awake_override = self._awake_override()
         now = dt_util.utcnow()
         clock_hour = now.astimezone(dt_util.DEFAULT_TIME_ZONE).hour + now.astimezone(
             dt_util.DEFAULT_TIME_ZONE
@@ -301,8 +313,10 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                 RoomState(subentry_id=subentry.subentry_id, name=subentry.title),
             )
             settings = self.room_settings(subentry)
-            occupied = self._is_on(subentry.data.get(CONF_PRESENCE), default=True)
-            near_clear = not self._is_on(subentry.data.get(CONF_NEAR_PRESENCE), default=True)
+            # "Either kitchen sensor turning on lights the whole kitchen" — presence is
+            # a LIST and any-on wins. A single sensor per room could not express that.
+            occupied = self._any_on(subentry.data.get(CONF_PRESENCE), default=True)
+            near_clear = not self._any_on(subentry.data.get(CONF_NEAR_PRESENCE), default=True)
 
             raw_gate = ambient_gate(lux, room.gate_open, house)
             room.gate_open, room.gate_pending_since = debounce_gate(
@@ -318,7 +332,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                 try:
                     await self._async_apply_light(
                         entity_id, subentry, house, settings, room, lux, dnd, clock_hour,
-                        occupied, near_clear, manual,
+                        occupied, near_clear, manual, awake_override,
                     )
                 except Exception:  # noqa: BLE001
                     # One unreachable bulb must not take down the room, and must never
@@ -345,6 +359,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         occupied: bool,
         near_clear: bool,
         manual: bool,
+        awake_override: bool,
     ) -> None:
         state = self.hass.states.get(entity_id)
         if state is None:
@@ -364,6 +379,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                 occupied=occupied,
                 dnd=dnd,
                 clock_hour=clock_hour,
+                awake_override=awake_override,
                 gate_open=room.gate_open,
                 diminish_active=near_clear and settings.diminish_pct > 0,
                 manual_level=current if manual else None,
@@ -472,6 +488,16 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         if new is None:
             return
 
+        # ⚠️ A z2m reconnect drives a bulb unknown/unavailable -> on. That is not a
+        # human, and counting it would drop the room into manual for the whole hold
+        # window every time the mesh hiccups. This house has a documented history of
+        # edge-driven automations being stranded by exactly this transition.
+        transient = {"unknown", "unavailable"}
+        if new.state in transient:
+            return
+        if old is not None and old.state in transient:
+            return
+
         touched = False
         if old is None or old.state != new.state:
             touched = True
@@ -506,20 +532,88 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         )
 
     def _lux(self) -> float:
+        """Outdoor lux, with a fail-safe that is neither "dark" nor "bright".
+
+        ⚠️ The obvious fallbacks are both bad. Treating an unknown reading as **0 lx**
+        means a dead sensor drives every room to full demand all day — the worst outcome
+        in a house whose owner is light-sensitive and whose whole reason for automating
+        lighting was to avoid exactly that. Treating it as **bright** leaves rooms dark
+        when occupied.
+
+        So: hold the **last good reading**. That covers the realistic failure — a z2m
+        reconnect blip lasting seconds — with no visible effect at all. Only if we have
+        never seen a value (a cold boot before the sensor first reports) does it fall
+        back, and it falls back to *bright*, because a few dark seconds at startup is a
+        smaller failure than the lights slamming to full, and manual control is always
+        available.
+        """
         state = self.hass.states.get(self._lux_entity())
         try:
-            return float(state.state)  # type: ignore[union-attr]
-        except (TypeError, ValueError):
-            # Unknown lux must not mean "blazing daylight" — that would leave the house
-            # dark. Fall back to the darkest reading, so the gate stays permissive.
-            return 0.0
+            # `state` is None when the entity does not exist yet — that raises
+            # AttributeError, NOT TypeError, so it must be caught explicitly. Missing it
+            # let the exception escape `_async_update_data` and fail the whole entry into
+            # a ConfigEntryNotReady retry loop over a *sensor reading*.
+            value = float(state.state)  # type: ignore[union-attr]
+        except (AttributeError, TypeError, ValueError):
+            if self._last_good_lux is not None:
+                return self._last_good_lux
+            # Log the TRANSITION, not the condition. This is called once per room per
+            # tick, so logging unconditionally turns a single dead sensor into hundreds
+            # of identical lines — and a noisy check camouflages the real fault sitting
+            # next to it.
+            if not self._lux_warned:
+                self._lux_warned = True
+                _LOGGER.warning(
+                    "Solace: no reading yet from %s — holding lights off until it reports",
+                    self._lux_entity(),
+                )
+            return float("inf")
+        if self._lux_warned:
+            self._lux_warned = False
+            _LOGGER.info("Solace: %s is reporting again (%s lx)", self._lux_entity(), value)
+        self._last_good_lux = value
+        return value
+
+    def _awake_override(self) -> bool:
+        """Is he up in the night? Cancels the bedroom's night-off rule.
+
+        Optional and off by default — with no entity configured this is always False, so
+        the bedroom simply stays off while DND is on.
+        """
+        return self._is_on(
+            self.config_entry.options.get(CONF_AWAKE_OVERRIDE), default=False
+        )
 
     def _dnd(self) -> bool:
-        return self._is_on(
-            self.config_entry.options.get(CONF_DND_ENTITY)
-            or self.config_entry.data.get(CONF_DND_ENTITY),
-            default=False,
-        )
+        """Asleep?
+
+        NOT an on/off test. The phone's DND sensor is a four-value enum, so `== "on"`
+        would never match and night mode would never engage — with no error to show for
+        it. Match against the configured sleep states instead.
+        """
+        entity_id = self.config_entry.options.get(
+            CONF_DND_ENTITY
+        ) or self.config_entry.data.get(CONF_DND_ENTITY)
+        if not entity_id:
+            return False
+        state = self.hass.states.get(entity_id)
+        if state is None or state.state in ("unknown", "unavailable"):
+            return False
+        sleep_states = self.config_entry.options.get(
+            CONF_DND_SLEEP_STATES
+        ) or DEFAULT_DND_SLEEP_STATES
+        return state.state in sleep_states
+
+    def _any_on(self, entity_ids, *, default: bool) -> bool:
+        """True if ANY of these entities is on. Accepts a bare string or a list."""
+        if not entity_ids:
+            return default
+        if isinstance(entity_ids, str):
+            entity_ids = [entity_ids]
+        known = [e for e in entity_ids if self.hass.states.get(e) is not None]
+        if not known:
+            return default
+        return any(self._is_on(e, default=False) for e in known)
 
     def _is_on(self, entity_id: str | None, *, default: bool) -> bool:
         if not entity_id:
@@ -537,13 +631,22 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         hardcoded 45.5°N; this house is at 54.05°N, where the winter sun caps at 12.5°.
         """
         sun = self.hass.states.get("sun.sun")
-        dusk = sun.attributes.get("next_dusk") if sun else None
-        if dusk:
-            parsed = dt_util.parse_datetime(dusk)
-            if parsed:
-                local = dt_util.as_local(parsed)
-                return local.hour + local.minute / 60.0
-        return 21.5
+        if sun is None:
+            return 21.5
+        # ⚠️ `next_dusk` flips to TOMORROW's dusk the moment today's passes — so reading
+        # it during the evening glide (exactly when it matters) returns the wrong day.
+        # The clock hour barely moves day to day, so the error is small and would have
+        # hidden here for months. Prefer the sun's own "below horizon" reading: once
+        # dusk has passed today, next_dusk is ~24 h out and we want today's, which is
+        # next_dusk minus a day.
+        raw = sun.attributes.get("next_dusk")
+        parsed = dt_util.parse_datetime(raw) if raw else None
+        if parsed is None:
+            return 21.5
+        local = dt_util.as_local(parsed)
+        if (local - dt_util.now()).total_seconds() > 12 * 3600:
+            local = local - timedelta(days=1)
+        return local.hour + local.minute / 60.0
 
     def _retune_interval(self, lux: float) -> None:
         """Clock 2 — scale the poll to how fast the world is moving."""
@@ -553,7 +656,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
             return
         volatility = max(self._lux_history) - min(self._lux_history)
         anyone_home = any(
-            self._is_on(sub.data.get(CONF_PRESENCE), default=True) for sub in self._subentries()
+            self._any_on(sub.data.get(CONF_PRESENCE), default=True) for sub in self._subentries()
         )
         if volatility > 50:
             seconds = DEFAULT_MIN_INTERVAL_S

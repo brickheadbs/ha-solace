@@ -99,11 +99,12 @@ class HouseSettings:
     """Step 8. A fixed level, not a scaling — predictable when half asleep."""
     ambience_level: int = 0
     """Step 9. A low-light *floor* while awake and the gate reads dark. 0 ⇒ feature off."""
-    ambience_ignores_occupancy: bool = False
-    """⚠️ OPEN QUESTION for Brandon. The brief calls ambience "always-on... while someone
-    is awake", but its own step order puts the occupancy gate (11) *after* the ambience
-    floor (9), so occupancy wins. Both readings are defensible, so this is a helper
-    rather than a silent choice. False = the brief's literal step order."""
+    ambience_ignores_occupancy: bool = True
+    """RESOLVED by Brandon 2026-08-13: *"Ambience is correctly stated as on with
+    conditions true: below threshold and awake."* Two conditions — occupancy is not one
+    of them, so the ambience floor survives an empty room. (The brief's step order put
+    the occupancy gate after the floor, which would have gone dark instead; that reading
+    is now settled.) Still a helper, because it is still a preference."""
     min_cutoff: int = 1
     """Step 12. Below this ⇒ 0, not a useless glow."""
     rate_limit_step: int = 0
@@ -146,6 +147,14 @@ class RoomSettings:
     diminish_pct: float = 0.0
     """Step 10. Kitchen only. When the *near* sensor reads clear, reduce by this much
     and STAY there — never an off. 0 ⇒ no effect. Do not generalise to other rooms."""
+    night_off: bool = False
+    """Asleep ⇒ this room goes fully OFF, not to the night level.
+
+    Brandon, 2026-08-13: *"in the bedroom… when asleep bedroom goes all off. If awake in
+    the night, it returns to the same state as the house (night mode during dark)."*
+    So this is the bedroom's rule, and it is overridden by ``awake_override`` — being
+    awake at 3 am puts the room back on the house's night level rather than leaving the
+    one room he is standing in dark."""
     manual_hold_minutes: float = 30.0
     """A touch holds manual for N minutes; the switch holds indefinitely."""
 
@@ -172,8 +181,15 @@ class EngineInput:
     """`sensor.entry_exterior_illuminance` — the one sensor in the house."""
     occupied: bool
     dnd: bool
-    """DND on ⇒ asleep ⇒ NIGHT."""
+    """DND on ⇒ asleep ⇒ NIGHT.
+
+    A measured signal, not an inference: Brandon's Pixel 8a in **priority-only** DND
+    means he is asleep. One signal, three uses — night mode, the ambience gate, and the
+    bedroom's night-off rule."""
     clock_hour: float
+    awake_override: bool = False
+    """Up in the night. Cancels ``night_off`` so the bedroom rejoins the house's night
+    mode rather than staying dark while he is standing in it."""
     gate_open: bool = True
     """The gate's *previous* state — it is hysteretic, so it is an input as well as an
     output."""

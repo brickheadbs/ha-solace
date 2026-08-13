@@ -337,17 +337,14 @@ def solve(
 
     # 8. Night override — a fixed level, not a scaling.
     if mode is Mode.NIGHT:
-        level = house.night_level
-        trace.append(("night_override", level))
-
-    # 9. Ambience floor — only while AWAKE (DND off) and the gate reads dark.
-    #    Raises the level to the floor; never lowers it. 0 ⇒ feature off.
-    ambience_held = False
-    if house.ambience_level > 0 and mode is Mode.NORMAL and gate_open:
-        if house.ambience_level > level:
-            level = house.ambience_level
-            ambience_held = True
-            trace.append(("ambience_floor", level))
+        if room.night_off and not data.awake_override:
+            # The bedroom's rule: asleep ⇒ fully off, not dimmed. A night level in the
+            # room he is asleep in is not a gentler version of off, it is a light on.
+            level = 0
+            trace.append(("night_off", True))
+        else:
+            level = house.night_level
+            trace.append(("night_override", level))
 
     # 10. Diminish — kitchen only. A reduction that STAYS; never an off.
     if room.diminish_pct > 0 and data.diminish_active and level > 0:
@@ -355,10 +352,7 @@ def solve(
         trace.append(("diminish", level))
 
     # 11. Occupancy / gate. Gates only ever subtract.
-    occupancy_ok = data.occupied or (
-        ambience_held and house.ambience_ignores_occupancy
-    )
-    if not gate_open or not occupancy_ok:
+    if not gate_open or not data.occupied:
         level = 0
         trace.append(("gated_off", {"gate_open": gate_open, "occupied": data.occupied}))
 
@@ -366,6 +360,27 @@ def solve(
     if 0 < level < house.min_cutoff:
         level = 0
         trace.append(("below_cutoff", house.min_cutoff))
+
+    # 9→12b. AMBIENCE FLOOR — deliberately applied *after* the gates, not at step 9.
+    #
+    # Brandon, 2026-08-13: ambience is on when *"below threshold and awake"* — two
+    # conditions, and occupancy is not one of them. That only works downstream of the
+    # occupancy gate: applied at step 9 (where the brief put it) the gate would zero it
+    # a moment later and an empty room would go dark, which is the opposite of an
+    # always-on glow. So it is the floor that survives the gates.
+    #
+    # It still never *lowers* anything — an occupied room computing 161 keeps 161 — and
+    # it is still off while asleep (mode NIGHT) and while the gate reads bright.
+    # 0 ⇒ feature off entirely.
+    if (
+        house.ambience_level > 0
+        and mode is Mode.NORMAL
+        and gate_open
+        and house.ambience_level > level
+        and (data.occupied or house.ambience_ignores_occupancy)
+    ):
+        level = house.ambience_level
+        trace.append(("ambience_floor", level))
 
     # 13. Manual wins over everything computed above.
     if data.manual_level is not None:
