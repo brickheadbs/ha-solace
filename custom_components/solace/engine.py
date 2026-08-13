@@ -304,9 +304,15 @@ def solve(
     # 1. Outdoor lux — the one sensor in the house.
     trace.append(("lux", data.lux))
 
-    # 2. Ambient gate (hysteretic). Debounce is applied by the caller, which owns the
-    #    clock; here we take the already-debounced state.
-    gate_open = ambient_gate(data.lux, data.gate_open, house)
+    # 2. Ambient gate (hysteretic). The *time* debounce needs a clock, which this module
+    #    does not have, so the caller applies it and hands the finished answer down in
+    #    `gate_resolved`. Recomputing it here from `gate_open` is what quietly nullified
+    #    the debounce — see EngineInput.gate_resolved.
+    gate_open = (
+        data.gate_resolved
+        if data.gate_resolved is not None
+        else ambient_gate(data.lux, data.gate_open, house)
+    )
     trace.append(("gate_open", gate_open))
 
     # 3. Demand — objective.
@@ -375,15 +381,18 @@ def solve(
     # It still never *lowers* anything — an occupied room computing 161 keeps 161 — and
     # it is still off while asleep (mode NIGHT) and while the gate reads bright.
     # 0 ⇒ feature off entirely.
+    # The room's own floor overrides the house's. 0 ⇒ unmodified, so the room falls back
+    # to the house value rather than switching the feature off in that one room.
+    ambience = room.ambience_level or house.ambience_level
     if (
-        house.ambience_level > 0
+        ambience > 0
         and mode is Mode.NORMAL
         and gate_open
         and not data.asleep
-        and house.ambience_level > level
+        and ambience > level
         and (data.occupied or house.ambience_ignores_occupancy)
     ):
-        level = house.ambience_level
+        level = ambience
         trace.append(("ambience_floor", level))
 
     # 13. Manual wins over everything computed above.

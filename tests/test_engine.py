@@ -491,3 +491,38 @@ def test_a_bright_empty_house_stays_dark_despite_ambience(house, light):
     """Ambience is gated on the lux threshold, so daytime is unaffected."""
     house = HouseSettings(ambience_level=20)
     assert solve(house, RoomSettings(), light, _input(lux=400.0, occupied=False)).level == 0
+
+
+# --------------------------------------------------------------------------------
+# The gate debounce has to survive the trip into solve()
+# --------------------------------------------------------------------------------
+
+
+def test_a_debounced_gate_is_not_recomputed_away(house, room, light):
+    """⚠️ Regression. `solve` used to re-run `ambient_gate` on the value the coordinator
+    had already debounced, which produced the *un*-debounced answer every time. The
+    debounce moved `binary_sensor.…_ambient_gate` and nothing else — the lights still
+    zeroed instantly, and the sensor and the bulbs visibly disagreed.
+
+    Here the world is bright (100 lx, well past `gate_stop_lux` 80) but the caller's
+    debounce is still holding the gate open. The lights must stay on.
+    """
+    held_open = solve(
+        house, room, light, _input(lux=100.0, gate_open=True, gate_resolved=True)
+    )
+    assert dict(held_open.trace)["gate_open"] is True
+    assert held_open.level > 0, "the debounced gate was recomputed away"
+
+    # And the converse: a caller holding it shut wins over a dark reading.
+    held_shut = solve(
+        house, room, light, _input(lux=5.0, gate_open=False, gate_resolved=False)
+    )
+    assert held_shut.level == 0
+
+
+def test_without_a_resolved_gate_solve_still_computes_one(house, room, light):
+    """`gate_resolved=None` keeps `solve` usable standalone — the unit tests and any
+    what-if preview rely on it deriving the gate from lux."""
+    result = solve(house, room, light, _input(lux=10.0, gate_open=False))
+    assert dict(result.trace)["gate_open"] is True
+    assert result.level == 161

@@ -117,6 +117,16 @@ class HouseSettings:
     dead_zone: int = 2
     """Step 16. A change smaller than this writes nothing at all."""
 
+    # -- Clock 2: the adaptive interval -------------------------------------------
+    update_interval_min_s: float = 30.0
+    """Used while the outdoor lux is moving fast."""
+    update_interval_home_s: float = 150.0
+    """Stable, but someone is home."""
+    update_interval_max_s: float = 600.0
+    """Stable and empty."""
+    lux_volatility_lx: float = 50.0
+    """Spread across the last few readings above which lux counts as *moving*."""
+
     # -- Step 17: transitions ------------------------------------------------------
     transition_on_s: float = 2.0
     transition_off_s: float = 4.0
@@ -152,6 +162,10 @@ class RoomSettings:
     diminish_pct: float = 0.0
     """Step 10. Kitchen only. When the *near* sensor reads clear, reduce by this much
     and STAY there — never an off. 0 ⇒ no effect. Do not generalise to other rooms."""
+    ambience_level: int = 0
+    """Per-room ambience floor. **0 ⇒ take the house floor**, not "off" — the room
+    control is an override, and the handoff's rule is that a control at zero is simply
+    unmodified. Set the *house* floor to 0 to turn the feature off everywhere."""
     night_off: bool = False
     """**Asleep** ⇒ this room goes fully OFF, not to the night level.
 
@@ -213,7 +227,19 @@ class EngineInput:
     glow; night_active drives the level everywhere."""
     gate_open: bool = True
     """The gate's *previous* state — it is hysteretic, so it is an input as well as an
-    output."""
+    output. Used only when ``gate_resolved`` is None."""
+    gate_resolved: bool | None = None
+    """The gate's **final** state for this tick, already hysteretic *and* debounced.
+
+    ⚠️ This field exists because omitting it silently disabled the time debounce. The
+    coordinator owns the clock, so it is the only thing that can debounce; it did, stored
+    the result, and then handed it to ``solve`` as ``gate_open`` — where ``solve``
+    re-ran ``ambient_gate`` on it and produced the *un*-debounced answer again. The
+    debounce moved ``binary_sensor.…_ambient_gate`` and nothing else: the lights still
+    zeroed instantly, and the sensor and the bulbs visibly disagreed.
+
+    None ⇒ compute the gate from ``lux`` and ``gate_open`` (what the unit tests do, and
+    what makes ``solve`` usable standalone)."""
     diminish_active: bool = False
     """The near sub-zone sensor reads clear (kitchen only)."""
     manual_level: int | None = None

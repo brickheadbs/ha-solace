@@ -3,10 +3,12 @@
   "name": "Solace",
   "codeowners": ["@brickheadbs"],
   "config_flow": true,
+  "after_dependencies": ["frontend", "panel_custom"],
+  "dependencies": ["http", "websocket_api"],
   "documentation": "https://github.com/brickheadbs/ha-solace",
   "integration_type": "hub",
   "iot_class": "calculated",
   "issue_tracker": "https://github.com/brickheadbs/ha-solace/issues",
   "requirements": [],
-  "version": "0.3.0"
+  "version": "0.4.0"
 }

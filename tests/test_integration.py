@@ -441,3 +441,36 @@ async def test_the_lux_release_CLEARS_the_latch_not_just_masks_it(hass: HomeAssi
     await hass.async_block_till_done()
     assert co._night_latched is False
     assert hass.states.get("sensor.kitchen_mode").state == "normal"
+
+
+async def test_dragging_a_setting_uses_the_tuning_transition(
+    hass: HomeAssistant, entry, world
+) -> None:
+    """⚠️ Regression. `transition_setting_s` existed, was documented as the fourth
+    transition, and was wired to nothing but the manual slider — so moving a house
+    setting produced a 10-second fade per drag step, which is the exact "unusable" case
+    the brief names when it asks for four speeds.
+    """
+    world(light_on=True)
+    assert await _setup(hass, entry)
+
+    calls: list[dict] = []
+    hass.bus.async_listen(
+        "call_service",
+        lambda e: calls.append(e.data) if e.data.get("domain") == "light" else None,
+    )
+
+    # Move a house setting the way the panel does — through the config entry, which is
+    # what fires clock 1.
+    hass.config_entries.async_update_entry(
+        entry, options={**entry.options, "bias_stops": -1.5}
+    )
+    await hass.async_block_till_done()
+
+    turn_ons = [c for c in calls if c["service"] == "turn_on"]
+    assert turn_ons, "the settings change produced no write at all"
+    house = entry.runtime_data.coordinator.house
+    assert turn_ons[-1]["service_data"]["transition"] == house.transition_setting_s
+
+    # And the tuning flag is one tick only — the next ordinary tick must not snap.
+    assert entry.runtime_data.coordinator._tuning is False

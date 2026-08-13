@@ -109,6 +109,19 @@ HOUSE_SETTINGS: tuple[Setting, ...] = (
     Setting("night_release_lux", "Night release lux", 0, 500, 1, 10, "lx", "mdi:weather-sunset-up"),
     Setting("alarm_lead_minutes", "Night ends before alarm", 0, 240, 5, 30, "min", "mdi:alarm"),
     Setting("ambience_level", "Ambience floor", 0, 254, 1, 0, None, "mdi:lightbulb-night"),
+    # A boolean carried as 0/1 so it lives in the one settings table with everything
+    # else. The panel renders it as a switch. It was a hardcoded True whose own docstring
+    # claimed it was a helper — which is the failure mode the core rule exists to stop.
+    Setting(
+        "ambience_ignores_occupancy",
+        "Ambience in empty rooms",
+        0,
+        1,
+        1,
+        1,
+        None,
+        "mdi:account-off-outline",
+    ),
     Setting("min_cutoff", "Minimum cutoff", 0, 254, 1, 1, None, "mdi:arrow-collapse-down"),
     Setting("rate_limit_step", "Rate limit", 0, 254, 1, 0, None, "mdi:speedometer-slow"),
     Setting("dead_zone", "Dead zone", 0, 50, 1, 2, None, "mdi:circle-off-outline"),
@@ -135,6 +148,13 @@ HOUSE_SETTINGS: tuple[Setting, ...] = (
     ),
     # Timing
     Setting("morning_release_hour", "Morning release", 0, 23.75, 0.25, 6.5, "h", "mdi:weather-sunny"),
+    # Clock 2 — the adaptive interval. These were module constants until the panel
+    # landed, which made them exactly the kind of value the brief calls a bug: "a value
+    # that cannot be changed from the panel is a bug".
+    Setting("update_interval_min_s", "Update interval min", 5, 3600, 5, 30, "s", "mdi:timer-play"),
+    Setting("update_interval_home_s", "Update interval occupied", 5, 3600, 5, 150, "s", "mdi:timer"),
+    Setting("update_interval_max_s", "Update interval max", 5, 3600, 5, 600, "s", "mdi:timer-off"),
+    Setting("lux_volatility_lx", "Lux volatility threshold", 0, 2000, 1, 50, "lx", "mdi:waves"),
     # Display only
     Setting("gamma", "Gamma (display only)", 1, 4, 0.01, 2.39, None, "mdi:chart-bell-curve"),
 )
@@ -144,6 +164,21 @@ ROOM_SETTINGS: tuple[Setting, ...] = (
     Setting("bias_stops", "Room bias", -4, 4, 0.05, 0, "stops", "mdi:tune", scope="room"),
     Setting("zone_bias_stops", "Zone bias", -4, 4, 0.05, 0, "stops", "mdi:tune", scope="room"),
     Setting("diminish_pct", "Diminish", 0, 100, 1, 0, "%", "mdi:arrow-down-circle", scope="room"),
+    # Per-room ambience. The handoff's Home tab puts an ambience control on every room
+    # card; the house floor alone could not express that. 0 ⇒ this room takes the house
+    # floor, which keeps the handoff's "a control at zero is simply unmodified" rule and
+    # avoids an inheritance sentinel.
+    Setting(
+        "ambience_level",
+        "Room ambience",
+        0,
+        254,
+        1,
+        0,
+        None,
+        "mdi:lightbulb-night",
+        scope="room",
+    ),
     Setting(
         "manual_hold_minutes",
         "Manual hold",

@@ -150,6 +150,17 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         self._lux_warned = False
         self._night_latched = False
         self._unsubscribes: list[Any] = []
+        self.last_tick: Any = None
+        """When the loop last completed. `DataUpdateCoordinator` does not expose this —
+        `last_update_success` is a bool, not a timestamp — and the panel's "updated 18 s
+        ago" needs the time, so it is tracked here rather than guessed at."""
+        self._tuning = False
+        """Set by the entry update listener just before a settings-driven refresh, so the
+        writes from *that* tick use `transition_setting_s` instead of the mode glide.
+
+        Without it `transition_setting_s` was dead code: the only caller was the manual
+        slider, and dragging a house setting produced a 10-second fade per step — the
+        exact "unusable" case the brief names when it asks for a fourth transition."""
 
     # ------------------------------------------------------------------ settings
 
@@ -174,6 +185,10 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         fields["night_release_lux"] = float(fields.get("night_release_lux", 10.0))
         fields["alarm_lead_minutes"] = float(fields.get("alarm_lead_minutes", 30.0))
         fields["ambience_level"] = int(fields.get("ambience_level", 0))
+        # Carried as 0/1 in the settings table; the engine wants a real bool.
+        fields["ambience_ignores_occupancy"] = bool(
+            fields.get("ambience_ignores_occupancy", True)
+        )
         fields["min_cutoff"] = int(fields.get("min_cutoff", 1))
         fields["rate_limit_step"] = int(fields.get("rate_limit_step", 0))
         fields["dead_zone"] = int(fields.get("dead_zone", 2))
@@ -193,6 +208,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
             bias_stops=float(data.get("bias_stops", 0.0)),
             zone_bias_stops=float(data.get("zone_bias_stops", 0.0)),
             diminish_pct=float(data.get("diminish_pct", 0.0)),
+            ambience_level=int(data.get("ambience_level", 0)),
             night_off=bool(data.get("night_off", False)),
             manual_hold_minutes=float(data.get("manual_hold_minutes", 30.0)),
         )
@@ -373,7 +389,16 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
             room.last_mode = Mode.NIGHT if self._night_active() else Mode.NORMAL
 
         self._retune_interval(lux)
+        self.last_tick = now
+        # One tick only. The next tick is ordinary tracking again, so it must not inherit
+        # the tuning glide and start snapping.
+        self._tuning = False
         return self.rooms
+
+    @callback
+    def async_note_tuning(self) -> None:
+        """Mark the next refresh as settings-driven (clock 1, slider in hand)."""
+        self._tuning = True
 
     async def _async_apply_light(
         self,
@@ -411,6 +436,9 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                 night_active=self._night_active(),
                 asleep=asleep,
                 gate_open=room.gate_open,
+                # The debounced answer, not a hint. Without this the engine recomputes
+                # the raw gate and the debounce moves the sensor but never the lights.
+                gate_resolved=room.gate_open,
                 diminish_active=near_clear and settings.diminish_pct > 0,
                 manual_level=current if manual else None,
                 current_level=current,
@@ -434,6 +462,10 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
             transition = house.transition_on_s
         elif solution.mode is not room.last_mode:
             transition = house.transition_mode_s
+        elif self._tuning:
+            # A slider is being dragged. This is the fourth transition, and the whole
+            # reason it exists: a 10-second glide per drag step is unusable.
+            transition = house.transition_setting_s
         else:
             # Tracking moves are small by construction (rate limit + dead zone), so they
             # reuse the mode-change glide rather than adding a fifth knob.
@@ -494,115 +526,6 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         span = abs(kelvin_to_mired(house.night_kelvin) - kelvin_to_mired(house.day_kelvin))
         steps = max(1, span / max(house.colour_step_mired, 1))
         return max(house.colour_glide_minutes * 60.0 / steps, house.colour_step_transition_s * 2)
-
-    # ------------------------------------------------------------------ listeners
-
-    @callback
-    def _on_world_change(self, _event: Event[EventStateChangedData]) -> None:
-        self.hass.async_create_task(self.async_refresh())
-
-    @callback
-    def _on_light_change(self, event: Event[EventStateChangedData]) -> None:
-        """Did a human touch this light?
-
-        Compare with **thresholds, not equality**. Bulbs echo back values that differ
-        from what was commanded, so an exact comparison flags every echo as a human
-        touch and the room locks itself into manual within a tick.
-        """
-        if self.writer.is_our_context(event.context):
-            return
-
-        entity_id = event.data["entity_id"]
-        old = event.data.get("old_state")
-        new = event.data.get("new_state")
-        if new is None:
-            return
-
-        # ⚠️ A z2m reconnect drives a bulb unknown/unavailable -> on. That is not a
-        # human, and counting it would drop the room into manual for the whole hold
-        # window every time the mesh hiccups. This house has a documented history of
-        # edge-driven automations being stranded by exactly this transition.
-        transient = {"unknown", "unavailable"}
-        if new.state in transient:
-            return
-        if old is not None and old.state in transient:
-            return
-
-        touched = False
-        if old is None or old.state != new.state:
-            touched = True
-        else:
-            old_brightness = old.attributes.get("brightness") or 0
-            new_brightness = new.attributes.get("brightness") or 0
-            if abs(new_brightness - old_brightness) > MANUAL_BRIGHTNESS_THRESHOLD:
-                touched = True
-            old_kelvin = old.attributes.get("color_temp_kelvin") or 0
-            new_kelvin = new.attributes.get("color_temp_kelvin") or 0
-            if abs(new_kelvin - old_kelvin) > MANUAL_KELVIN_THRESHOLD:
-                touched = True
-
-        if not touched:
-            return
-
-        for subentry in self._subentries():
-            if entity_id in subentry.data.get(CONF_LIGHTS, []):
-                room = self.rooms.get(subentry.subentry_id)
-                if room is None:
-                    continue
-                room.manual_touched = True
-                room.manual_since = dt_util.utcnow().timestamp()
-                self.hass.async_create_task(self.async_persist())
-                self.async_update_listeners()
-
-    # ------------------------------------------------------------------ helpers
-
-    def _lux_entity(self) -> str:
-        return self.config_entry.options.get(CONF_LUX_SENSOR) or self.config_entry.data.get(
-            CONF_LUX_SENSOR, ""
-        )
-
-    def _lux(self) -> float:
-        """Outdoor lux, with a fail-safe that is neither "dark" nor "bright".
-
-        ⚠️ The obvious fallbacks are both bad. Treating an unknown reading as **0 lx**
-        means a dead sensor drives every room to full demand all day — the worst outcome
-        in a house whose owner is light-sensitive and whose whole reason for automating
-        lighting was to avoid exactly that. Treating it as **bright** leaves rooms dark
-        when occupied.
-
-        So: hold the **last good reading**. That covers the realistic failure — a z2m
-        reconnect blip lasting seconds — with no visible effect at all. Only if we have
-        never seen a value (a cold boot before the sensor first reports) does it fall
-        back, and it falls back to *bright*, because a few dark seconds at startup is a
-        smaller failure than the lights slamming to full, and manual control is always
-        available.
-        """
-        state = self.hass.states.get(self._lux_entity())
-        try:
-            # `state` is None when the entity does not exist yet — that raises
-            # AttributeError, NOT TypeError, so it must be caught explicitly. Missing it
-            # let the exception escape `_async_update_data` and fail the whole entry into
-            # a ConfigEntryNotReady retry loop over a *sensor reading*.
-            value = float(state.state)  # type: ignore[union-attr]
-        except (AttributeError, TypeError, ValueError):
-            if self._last_good_lux is not None:
-                return self._last_good_lux
-            # Log the TRANSITION, not the condition. This is called once per room per
-            # tick, so logging unconditionally turns a single dead sensor into hundreds
-            # of identical lines — and a noisy check camouflages the real fault sitting
-            # next to it.
-            if not self._lux_warned:
-                self._lux_warned = True
-                _LOGGER.warning(
-                    "Solace: no reading yet from %s — holding lights off until it reports",
-                    self._lux_entity(),
-                )
-            return float("inf")
-        if self._lux_warned:
-            self._lux_warned = False
-            _LOGGER.info("Solace: %s is reporting again (%s lx)", self._lux_entity(), value)
-        self._last_good_lux = value
-        return value
 
     def _asleep(self) -> bool:
         """Is he asleep RIGHT NOW — phone DND, or the manual sleep toggle."""
@@ -845,20 +768,28 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         return local.hour + local.minute / 60.0
 
     def _retune_interval(self, lux: float) -> None:
-        """Clock 2 — scale the poll to how fast the world is moving."""
+        """Clock 2 — scale the poll to how fast the world is moving.
+
+        All four numbers here are settings, not constants. They were literals until the
+        panel landed, which is precisely the "value that cannot be changed from the
+        panel" the brief calls a bug.
+        """
+        house = self.house
         self._lux_history.append(lux)
         self._lux_history = self._lux_history[-5:]
         if len(self._lux_history) < 2:
             return
-        volatility = max(self._lux_history) - min(self._lux_history)
+        finite = [v for v in self._lux_history if v != float("inf")]
+        volatility = (max(finite) - min(finite)) if len(finite) >= 2 else 0.0
         anyone_home = any(
             self._any_on(sub.data.get(CONF_PRESENCE), default=True) for sub in self._subentries()
         )
-        if volatility > 50:
-            seconds = DEFAULT_MIN_INTERVAL_S
+        if volatility > house.lux_volatility_lx:
+            seconds = house.update_interval_min_s
         elif anyone_home:
-            seconds = 150
+            seconds = house.update_interval_home_s
         else:
-            seconds = DEFAULT_MAX_INTERVAL_S
+            seconds = house.update_interval_max_s
+        seconds = max(float(seconds), 1.0)
         if self.update_interval != timedelta(seconds=seconds):
             self.update_interval = timedelta(seconds=seconds)
