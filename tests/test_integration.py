@@ -238,3 +238,88 @@ async def test_unload_is_clean(hass: HomeAssistant, entry) -> None:
     assert await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
     assert entry.state is entry.state.NOT_LOADED
+
+
+# --------------------------------------------------------------------------------
+# The DND enum — polarity, explicitly
+# --------------------------------------------------------------------------------
+#
+# Brandon, 2026-08-13: "When in priority only it means I'm sleeping."
+#
+#   priority_only  ⇒ ASLEEP  ⇒ night mode, ambience OFF
+#   off            ⇒ AWAKE   ⇒ normal mode, ambience allowed
+#
+# Getting this backwards is not a crash — it is a house that lights up when he goes to
+# bed and goes dark when he gets up, with nothing in the log. It is also easy to invert
+# while "tidying", so the polarity is pinned from both ends.
+
+from .conftest import DND  # noqa: E402
+
+
+async def _mode(hass, entry, dnd_state: str) -> str:
+    hass.states.async_set(DND, dnd_state)
+    await hass.async_block_till_done()
+    await entry.runtime_data.coordinator.async_refresh()
+    await hass.async_block_till_done()
+    return hass.states.get("sensor.kitchen_mode").state
+
+
+async def test_priority_only_means_asleep(hass: HomeAssistant, entry) -> None:
+    assert await _setup(hass, entry)
+    assert await _mode(hass, entry, "priority_only") == "night"
+
+
+async def test_dnd_off_means_awake(hass: HomeAssistant, entry) -> None:
+    assert await _setup(hass, entry)
+    assert await _mode(hass, entry, "off") == "normal"
+
+
+async def test_the_ambience_glow_ends_when_he_falls_asleep(hass: HomeAssistant, entry, world) -> None:
+    """The user-visible consequence of the polarity, end to end."""
+    world(lux=10.0, occupied=False)
+    hass.config_entries.async_update_entry(
+        entry, options={**entry.options, "ambience_level": 20, "night_level": 51}
+    )
+    assert await _setup(hass, entry)
+
+    assert await _mode(hass, entry, "off") == "normal"
+    assert int(hass.states.get("sensor.kitchen_target_level").state) == 20  # awake glow
+
+    assert await _mode(hass, entry, "priority_only") == "night"
+    assert int(hass.states.get("sensor.kitchen_target_level").state) == 0  # asleep, empty
+
+
+async def test_alarms_only_and_total_silence_are_not_sleep(hass: HomeAssistant, entry) -> None:
+    """He named priority_only specifically. The other two DND modes are daytime uses
+    (a meeting, a call) and must not put the house to bed."""
+    assert await _setup(hass, entry)
+    assert await _mode(hass, entry, "alarms_only") == "normal"
+    assert await _mode(hass, entry, "total_silence") == "normal"
+
+
+async def test_an_unavailable_dnd_sensor_reads_as_awake(hass: HomeAssistant, entry) -> None:
+    """A phone that drops off Wi-Fi must not put the house into night mode."""
+    assert await _setup(hass, entry)
+    assert await _mode(hass, entry, "unavailable") == "normal"
+
+
+# --------------------------------------------------------------------------------
+# Manual detection must ignore a z2m reconnect
+# --------------------------------------------------------------------------------
+
+
+async def test_a_reconnecting_bulb_is_not_a_human_touch(hass: HomeAssistant, entry, world) -> None:
+    """A z2m reconnect drives a bulb unavailable -> on. Counting that as a touch parks
+    the room in manual for the whole hold window every time the mesh hiccups."""
+    world(light_on=True)
+    assert await _setup(hass, entry)
+    room = next(iter(entry.runtime_data.coordinator.rooms.values()))
+    room.manual_touched = False
+
+    attrs = {"min_color_temp_kelvin": 2702, "max_color_temp_kelvin": 6535}
+    hass.states.async_set(LIGHT, "unavailable", attrs, context=Context())
+    await hass.async_block_till_done()
+    hass.states.async_set(LIGHT, "on", {**attrs, "brightness": 200}, context=Context())
+    await hass.async_block_till_done()
+
+    assert room.manual_touched is False
