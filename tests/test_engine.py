@@ -694,3 +694,21 @@ def test_the_cutoff_drops_out_below_the_threshold_but_zero_is_still_off(light):
     )
     dim = solve(house, RoomSettings(bias_stops=-6.0), light, _input(lux=10.0, occupied=True))
     assert 0 < dim.level < 11
+
+
+def test_a_night_level_below_the_cutoff_still_lights(light):
+    """A latent trap the cutoff fix closes.
+
+    While the cutoff was unconditional, any ``night_level`` below ``min_cutoff`` was
+    silently zeroed — getting up at 3 am would have produced *no* light, with nothing in
+    the log. It never fired on the live house (night_level 68, cutoff 11), so this is a
+    trap removed rather than a break repaired; the default night_level of 3 sits one
+    above the default cutoff of 1, which is uncomfortably close for something that fails
+    silently and only at night.
+    """
+    house = HouseSettings(night_level=3, min_cutoff=11, ambience_start_lux=50.0)
+    result = solve(
+        house, RoomSettings(), light,
+        _input(lux=5.0, occupied=True, night_active=True, asleep=False),
+    )
+    assert result.level == 3
