@@ -432,7 +432,19 @@ def solve(
     # 0 there means "unmodified", so the room falls back to the house rather than
     # switching the feature off in that one room.
     ambience = room.ambience_level or house.ambience_level
-    dark_and_awake = mode is Mode.NORMAL and ambience_open and not data.asleep
+    # ⚠️ **Two conditions, and NIGHT MODE IS NOT ONE OF THEM.** Owner, 2026-08-13:
+    # *"Ambience is always on while awake when below threshold. Focus on ALWAYS on."*
+    #
+    # This carried `mode is Mode.NORMAL` until that sentence, which meant the glow
+    # vanished from the whole house the moment the night latch engaged — including at
+    # 3 am when he is up and walking around, which is precisely when a resting glow in
+    # the rooms he is *not* in earns its keep. Night mode is not a reason to remove it;
+    # being **asleep** is, and that is already the second condition.
+    #
+    # Night mode still owns the rooms it lights: it sets a level at step 8, so those
+    # rooms are non-zero here and ambience leaves them alone. It only fills the rooms
+    # night mode left dark.
+    dark_and_awake = ambience_open and not data.asleep
     lit_here = data.occupied or house.ambience_ignores_occupancy
     if ambience > 0 and dark_and_awake and lit_here:
         if level == 0:

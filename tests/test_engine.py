@@ -712,3 +712,71 @@ def test_a_night_level_below_the_cutoff_still_lights(light):
         _input(lux=5.0, occupied=True, night_active=True, asleep=False),
     )
     assert result.level == 3
+
+
+# --------------------------------------------------------------------------------
+# "Ambience is always on while awake when below threshold. Focus on ALWAYS on."
+# "night level is NOT always on but only based on occupancy."      — 2026-08-13
+# --------------------------------------------------------------------------------
+
+NIGHT = dict(ambience_level=9, night_level=68, ambience_start_lux=50.0, min_cutoff=11)
+
+
+def test_ambience_survives_the_night_latch_while_he_is_awake(light):
+    """The 3 am case. Night mode latching must not take the glow out of the whole house
+    — being awake is the condition, and he is awake."""
+    house = HouseSettings(**NIGHT, ambience_ignores_occupancy=True)
+    result = solve(
+        house, RoomSettings(), light,
+        _input(lux=5.0, occupied=False, night_active=True, asleep=False),
+    )
+    assert result.level == 9
+    assert "ambience_replaces_off" in dict(result.trace)
+
+
+def test_night_mode_owns_the_room_it_lights_and_ambience_fills_the_rest(light):
+    """Night level is occupancy-driven; ambience is everywhere else. They do not fight:
+    night mode sets a level, so ambience never sees a zero to replace."""
+    house = HouseSettings(**NIGHT, ambience_ignores_occupancy=True)
+    here = solve(
+        house, RoomSettings(), light,
+        _input(lux=5.0, occupied=True, night_active=True, asleep=False),
+    )
+    assert here.level == 68, "the occupied room should hold the night level"
+
+    elsewhere = solve(
+        house, RoomSettings(), light,
+        _input(lux=5.0, occupied=False, night_active=True, asleep=False),
+    )
+    assert elsewhere.level == 9
+
+
+def test_asleep_is_what_removes_the_glow_not_night_mode(light):
+    house = HouseSettings(**NIGHT, ambience_ignores_occupancy=True)
+    result = solve(
+        house, RoomSettings(), light,
+        _input(lux=5.0, occupied=False, night_active=True, asleep=True, dnd=True),
+    )
+    assert result.level == 0
+
+
+def test_the_bedroom_transitions_from_dark_to_the_night_level_on_waking(light):
+    """Owner: "If the sleep > awake the bedroom will transition on to the night level."
+
+    Asleep, the room he is in is genuinely dark — a night level there is a light on, not
+    a gentler off. Awake, it becomes the night level so he can see.
+    """
+    house = HouseSettings(**NIGHT)
+    bedroom = RoomSettings(night_off=True)
+
+    asleep = solve(
+        house, bedroom, light,
+        _input(lux=5.0, occupied=True, night_active=True, asleep=True, dnd=True),
+    )
+    assert asleep.level == 0
+
+    awake = solve(
+        house, bedroom, light,
+        _input(lux=5.0, occupied=True, night_active=True, asleep=False),
+    )
+    assert awake.level == 68
