@@ -244,7 +244,7 @@ async def test_unload_is_clean(hass: HomeAssistant, entry) -> None:
 # The DND enum — polarity, explicitly
 # --------------------------------------------------------------------------------
 #
-# Brandon, 2026-08-13: "When in priority only it means I'm sleeping."
+# Owner, 2026-08-13: "When in priority only it means I'm sleeping."
 #
 #   priority_only  ⇒ ASLEEP  ⇒ night mode, ambience OFF
 #   off            ⇒ AWAKE   ⇒ normal mode, ambience allowed
@@ -326,19 +326,23 @@ async def test_a_reconnecting_bulb_is_not_a_human_touch(hass: HomeAssistant, ent
 
 
 # --------------------------------------------------------------------------------
-# The night LATCH — replayed against the measured 2026-08-13 DND sequence
+# The night LATCH — replayed against a real, measured DND sequence
 # --------------------------------------------------------------------------------
 #
-#   22:49  priority_only   he goes to bed
-#   05:59  off             HE GETS OUT OF BED  <- night must NOT end here
-#   07:25  priority_only
-#   07:58  off
+# The shape that matters, taken from 72 h of a real phone's DND sensor:
+#
+#   late evening   priority_only   goes to bed
+#   early morning  off             GETS OUT OF BED  <- night must NOT end here
+#   shortly after  priority_only   back to bed
+#   later          off             up for the day
 #
 # Night mode is latched: it starts on sleep and ends on the world's terms (outdoor lux,
-# or the lead-in to his alarm), never on his posture.
+# or the lead-in to the next alarm), never on the sleeper's posture. A phone's DND clears
+# the moment someone stands up, so "night = DND is on right now" relights the house at
+# full demand on a 3 am trip to the bathroom.
 
 
-async def test_night_latches_on_and_survives_him_getting_up(hass: HomeAssistant, entry, world) -> None:
+async def test_night_latches_on_and_survives_getting_up(hass: HomeAssistant, entry, world) -> None:
     world(lux=1.0, occupied=True)
     assert await _setup(hass, entry)
     co = entry.runtime_data.coordinator
@@ -346,8 +350,8 @@ async def test_night_latches_on_and_survives_him_getting_up(hass: HomeAssistant,
     assert await _mode(hass, entry, "priority_only") == "night"
     assert co._night_latched is True
 
-    # 05:59 — he gets out of bed and the phone clears DND by itself.
-    assert await _mode(hass, entry, "off") == "night", "night ended when he stood up"
+    # Early morning — they get out of bed and the phone clears DND by itself.
+    assert await _mode(hass, entry, "off") == "night", "night ended when they stood up"
     assert co._night_latched is True
     assert int(hass.states.get("sensor.kitchen_target_level").state) == co.house.night_level
 

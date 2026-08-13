@@ -73,7 +73,7 @@ class HouseSettings:
     gate_debounce_rising_s: float = 0.0
     """⚠️ THE DEBOUNCE RULE: default 0, and 0 must mean *no* debounce. Three layers
     already debounce before HA sees anything (Sonoff 15 s in hardware, z2m
-    no_occupancy_since, then us). Never raise these without Brandon's explicit
+    no_occupancy_since, then us). Never raise these without the owner's explicit
     approval."""
 
     # -- Step 3: demand (log falloff) ---------------------------------------------
@@ -105,7 +105,7 @@ class HouseSettings:
     ambience_level: int = 0
     """Step 9. A low-light *floor* while awake and the gate reads dark. 0 ⇒ feature off."""
     ambience_ignores_occupancy: bool = True
-    """RESOLVED by Brandon 2026-08-13: *"Ambience is correctly stated as on with
+    """RESOLVED by the owner 2026-08-13: *"Ambience is correctly stated as on with
     conditions true: below threshold and awake."* Two conditions — occupancy is not one
     of them, so the ambience floor survives an empty room. (The brief's step order put
     the occupancy gate after the floor, which would have gone dark instead; that reading
@@ -169,7 +169,7 @@ class RoomSettings:
     night_off: bool = False
     """**Asleep** ⇒ this room goes fully OFF, not to the night level.
 
-    Brandon, 2026-08-13: *"in the bedroom… when asleep bedroom goes all off. If awake in
+    Owner, 2026-08-13: *"in the bedroom… when asleep bedroom goes all off. If awake in
     the night, it returns to the same state as the house (night mode during dark)."*
     Keyed on ``asleep``, NOT on ``night_active``: once he is up (DND clears) the bedroom
     rejoins the house at the night level rather than staying dark in the one room he is
@@ -203,7 +203,7 @@ class EngineInput:
     dnd: bool
     """DND on ⇒ asleep ⇒ NIGHT.
 
-    A measured signal, not an inference: Brandon's Pixel 8a in **priority-only** DND
+    A measured signal, not an inference: the owner's Pixel 8a in **priority-only** DND
     means he is asleep. One signal, three uses — night mode, the ambience gate, and the
     bedroom's night-off rule."""
     clock_hour: float
@@ -211,8 +211,8 @@ class EngineInput:
     """⚠️ **LATCHED, and NOT the same as ``asleep``.** This is the correction that
     matters most in the whole engine.
 
-    Measured from 72 h of history: the Pixel's DND **clears the moment Brandon gets out
-    of bed** (2026-08-13: on at 22:49, *off at 05:59*, on again 07:25). So treating night
+    Measured from 72 h of history: the Pixel's DND **clears the moment the owner gets out
+    of bed** (measured: DND on late evening, *off first thing*, on again shortly after). So treating night
     mode as "DND is on right now" means the instant he stands up at 3 am the house leaves
     night mode, recomputes from a pitch-dark lux reading, and lights every occupied room
     at full demand — roughly level 206 of 254, straight into his face.

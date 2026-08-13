@@ -665,7 +665,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
 
         ⚠️ The obvious fallbacks are both bad. Treating an unknown reading as **0 lx**
         means a dead sensor drives every room to full demand all day — the worst outcome
-        in a house whose owner is light-sensitive and whose whole reason for automating
+        in a house whose whole reason for automating
         lighting was to avoid exactly that. Treating it as **bright** leaves rooms dark
         when occupied.
 
@@ -747,7 +747,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
 
         Prefer the sun integration's own attributes over computing solar geometry — and
         note the latitude comes from ``hass.config``, not a constant. The prototype
-        hardcoded 45.5°N; this house is at 54.05°N, where the winter sun caps at 12.5°.
+        hardcoded 45.5°N; this installation is near 54°N, where the winter sun caps at 12.5°.
         """
         sun = self.hass.states.get("sun.sun")
         if sun is None:

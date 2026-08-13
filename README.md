@@ -1,13 +1,34 @@
 # Solace
 
+![status: alpha](https://img.shields.io/badge/status-alpha-orange)
+![hacs: custom repository](https://img.shields.io/badge/HACS-custom%20repository-41BDF5)
+
 A lighting **calculation engine** for Home Assistant, as a HACS custom integration.
 
 Rooms are added inside the integration as config subentries — not one automation per
 light. One outdoor lux sensor drives the whole house; everything else is a tunable.
 
-> **v0.3, explicitly beta.** Two prior lighting systems in this house were built and torn
-> down. This is the third attempt, and the name is reused deliberately while **none of the
-> old code is**. Only independently re-verified findings carried forward.
+> ## ⚠️ ALPHA — v0.4.0
+>
+> **This is alpha software driving one person's house, published in the open because
+> there is no reason not to. It is not a product, and there is no support.**
+>
+> * It **writes to your lights**. A bad setting turns a room off, or on at 3 am.
+> * There is **no migration guarantee** between versions. A release may rename settings
+>   or reset your config entry.
+> * It is tested against exactly one house: Aqara CCT/RGB and IKEA bulbs over
+>   zigbee2mqtt, mmWave presence sensors, one outdoor illuminance sensor. Other hardware
+>   is entirely unexercised.
+> * Several defaults encode **measurements from that hardware** (bulb Kelvin ranges,
+>   fade rates, a gamma of 2.39). They may be wrong for yours.
+>
+> Use it as a reference, or fork it. If you install it, keep a way to control your lights
+> by hand — the engine is the only thing writing to them, and when it is wrong you will
+> want a switch.
+>
+> Two prior lighting systems in this house were built and torn down. This is the third
+> attempt; the name is reused deliberately while **none of the old code is**. Only
+> independently re-verified findings carried forward.
 
 ## The rule that shapes everything
 

@@ -39,7 +39,7 @@ DEFAULT_DND_SLEEP_STATES = ("on", "priority_only")
 plain `state == "on"` test never matches it, so night mode would simply never engage —
 silently, because nothing errors.
 
-Brandon, 2026-08-13: *"When in priority only it means I'm sleeping."* So `priority_only`
+Owner, 2026-08-13: *"When in priority only it means I'm sleeping."* So `priority_only`
 is the sleep signal, and `alarms_only` / `total_silence` deliberately are **not**.
 `"on"` is kept so the setting also works if pointed at a plain input_boolean.
 
@@ -47,7 +47,7 @@ The 2026-07 automation hit the same wall and solved it with a bridging input_boo
 reading the enum directly removes that moving part."""
 
 CONF_SLEEP_TOGGLE = "sleep_toggle_entity"
-"""Optional manual sleep switch, OR-ed with the phone's DND. Brandon's "Sleep now"
+"""Optional manual sleep switch, OR-ed with the phone's DND. The owner's "Sleep now"
 button — a third sleep signal for when the phone has not caught up yet."""
 CONF_ALARM_ENTITY = "alarm_entity"
 """`sensor.pixel_8a_next_alarm`. Night mode ends `alarm_lead_minutes` before it."""

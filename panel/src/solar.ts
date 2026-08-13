@@ -7,7 +7,7 @@
  * inherently an estimate.
  *
  * ⚠️ Latitude is a parameter, never a constant. The prototype hardcoded 45.5°N; this
- * house is at 54.05°N, where the winter sun caps at 12.5° elevation and the onset curve
+ * installation is near 54°N, where the winter sun caps at 12.5° elevation and the onset curve
  * has a completely different shape. It comes from `hass.config.latitude` via the
  * snapshot.
  */

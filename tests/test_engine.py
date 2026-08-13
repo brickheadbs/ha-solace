@@ -394,7 +394,7 @@ def test_solution_carries_a_full_trace(house, room, light):
 
 
 # --------------------------------------------------------------------------------
-# Bedroom at night, and ambience-vs-occupancy (both settled by Brandon 2026-08-13)
+# Bedroom at night, and ambience-vs-occupancy (both settled by the owner 2026-08-13)
 # --------------------------------------------------------------------------------
 
 
@@ -416,10 +416,10 @@ def test_getting_up_relights_the_bedroom_at_the_night_level(house, light):
     """THE BUG THIS REPLACES — the one that would have burned him at 06:00.
 
     Measured over 72 h: the phone's DND clears the *moment he gets out of bed*
-    (on 22:49 → off 05:59 → on 07:25). So `asleep` goes False while `night_active`
+    (on late evening → off on rising → on again shortly after). So `asleep` goes False while `night_active`
     stays latched, and the bedroom must come back at the NIGHT level.
 
-    Brandon: "If I wake up and get out of bed, it will turn off and the lights come on
+    The owner: "If I wake up and get out of bed, it will turn off and the lights come on
     to the low night setting and I can see."
     """
     bedroom = RoomSettings(name="Bedroom", night_off=True)
@@ -448,7 +448,7 @@ def test_night_off_does_nothing_while_awake(house, light):
 
 
 def test_ambience_survives_an_empty_room(house, light):
-    """Brandon: ambience conditions are "below threshold and awake" — two conditions.
+    """The owner: ambience conditions are "below threshold and awake" — two conditions.
     Occupancy is not one of them."""
     house = HouseSettings(ambience_level=20)
     assert house.ambience_ignores_occupancy is True

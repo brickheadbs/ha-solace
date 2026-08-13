@@ -51,7 +51,7 @@ __all__ = [
 
 MAX_LEVEL = 254
 """Levels are 0-254 integers, never percent. At 1 % a percent UI can only command 2.54,
-and the 1-10 % band is exactly where Brandon lives. z2m passes floats through and the
+and the 1-10 % band is exactly where the owner lives. z2m passes floats through and the
 *bulb* truncates (verified: sent 63.75, bulb reported 63)."""
 
 
@@ -184,7 +184,7 @@ def ramp_bias(hour: float, house: HouseSettings) -> float:
     )
     if axis < points[0].hour:
         # No bias before the ramp opens. This is a deliberate STEP at the first point,
-        # not a glide up to it: the blueprint Brandon uses today has no bias at 19:00
+        # not a glide up to it: the blueprint the owner uses today has no bias at 19:00
         # and "evening early" at 20:00, and gliding from 18:00 would invent a bias he
         # never asked for. A step here is a *mode* change and gets the mode-change
         # transition; the glide between points is what has to be continuous.
@@ -372,7 +372,7 @@ def solve(
 
     # 9→12b. AMBIENCE FLOOR — deliberately applied *after* the gates, not at step 9.
     #
-    # Brandon, 2026-08-13: ambience is on when *"below threshold and awake"* — two
+    # Owner, 2026-08-13: ambience is on when *"below threshold and awake"* — two
     # conditions, and occupancy is not one of them. That only works downstream of the
     # occupancy gate: applied at step 9 (where the brief put it) the gate would zero it
     # a moment later and an empty room would go dark, which is the opposite of an
