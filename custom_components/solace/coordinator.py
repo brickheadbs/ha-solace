@@ -35,6 +35,7 @@ from homeassistant.util import dt as dt_util
 from .colour import resolve_colour
 from .const import (
     CONF_ALARM_ENTITY,
+    CONF_AWAY_ENTITY,
     CONF_DND_ENTITY,
     CONF_DND_SLEEP_STATES,
     CONF_LIGHTS,
@@ -43,6 +44,7 @@ from .const import (
     CONF_PER_LIGHT,
     CONF_PRESENCE,
     CONF_RAMP,
+    CONF_REMOTES,
     CONF_SLEEP_TOGGLE,
     CONF_ZONES,
     DEFAULT_DND_SLEEP_STATES,
@@ -66,6 +68,7 @@ from .models import (
     Solution,
     ZoneSettings,
 )
+from .remotes import RemoteDispatcher
 from .writer import LightWriter, infer_family
 
 _LOGGER = logging.getLogger(__name__)
@@ -156,6 +159,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
             ),
         )
         self.writer = LightWriter(hass)
+        self.remotes = RemoteDispatcher(self)
         self.rooms: dict[str, RoomState] = {}
         self._store: Store = Store(hass, STORAGE_VERSION, STORAGE_KEY)
         self._lux_history: list[float] = []
@@ -354,14 +358,26 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
             # by reading rather than by watching.
             for zone in subentry.data.get(CONF_ZONES) or ():
                 triggers.extend(zone.get("presence") or ())
-        for key in (CONF_SLEEP_TOGGLE, CONF_ALARM_ENTITY):
+        for key in (CONF_SLEEP_TOGGLE, CONF_ALARM_ENTITY, CONF_AWAY_ENTITY):
             if extra := (self.config_entry.options.get(key) or self.config_entry.data.get(key)):
                 triggers.append(extra)
+        # Always listen for away_mode helper and watch bedtime sensors if present in HA
+        for extra_sensor in (
+            "input_boolean.away_mode",
+            "binary_sensor.google_pixel_watch_2_bedtime_mode",
+            "sensor.google_pixel_watch_2_do_not_disturb_sensor",
+        ):
+            if extra_sensor not in triggers and self.hass.states.get(extra_sensor) is not None:
+                triggers.append(extra_sensor)
+
         triggers = [t for t in triggers if t]
         if triggers:
             self._unsubscribes.append(
                 async_track_state_change_event(self.hass, triggers, self._on_world_change)
             )
+
+        # Register remote controller event listeners
+        self.remotes.async_register()
 
         # Colour runs on its own clock — small stepped absolutes, never a long fade.
         self._unsubscribes.append(
@@ -372,6 +388,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
 
     @callback
     def async_shutdown_listeners(self) -> None:
+        self.remotes.async_unregister()
         while self._unsubscribes:
             self._unsubscribes.pop()()
 
@@ -406,19 +423,19 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
 
         self._update_night_latch(asleep, lux, house)
 
+        away = self._away()
+        sunrise_progress = self._sunrise_progress(house)
+        bedtime_dwell_active = self._bedtime_dwell_active(clock_hour, house)
+
         for subentry in self._subentries():
             room = self.rooms.setdefault(
                 subentry.subentry_id,
                 RoomState(subentry_id=subentry.subentry_id, name=subentry.title),
             )
             settings = self.room_settings(subentry)
-            # "Either kitchen sensor turning on lights the whole kitchen" — presence is
-            # a LIST and any-on wins. A single sensor per room could not express that.
-            # Area presence — ANY sensor in the area. "Either kitchen sensor turning on
-            # lights the whole kitchen" is an area-level question.
+            # Area presence — ANY sensor in the area.
             occupied = self._any_on(subentry.data.get(CONF_PRESENCE), default=True)
-            # Zone presence — "is THIS end of the room occupied", which is what drives
-            # diminish. An undivided area falls back to the old room-level near sensor.
+            # Zone presence — "is THIS end of the room occupied", which is what drives diminish.
             zone_presence = {z.get("zone_id"): z.get("presence") for z in (subentry.data.get(CONF_ZONES) or ())}
             area_near_clear = not self._any_on(
                 subentry.data.get(CONF_NEAR_PRESENCE), default=True
@@ -450,21 +467,22 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                 try:
                     await self._async_apply_light(
                         entity_id, subentry, house, settings, room, lux, dnd, clock_hour,
-                        occupied, near_clear, manual, asleep, zone,
+                        occupied, near_clear, manual, asleep, away, sunrise_progress, bedtime_dwell_active, zone,
                     )
                 except Exception:  # noqa: BLE001
-                    # One unreachable bulb must not take down the room, and must never
-                    # fail the *first* refresh — that would put the whole entry into a
-                    # ConfigEntryNotReady retry loop and leave the house with no engine
-                    # at all. Log it and keep driving everything else.
                     _LOGGER.exception("Solace: failed to apply %s", entity_id)
 
-            room.last_mode = Mode.NIGHT if self._night_active() else Mode.NORMAL
+            if away:
+                room.last_mode = Mode.AWAY
+            elif sunrise_progress is not None:
+                room.last_mode = Mode.SUNRISE
+            elif self._night_active():
+                room.last_mode = Mode.NIGHT
+            else:
+                room.last_mode = Mode.NORMAL
 
         self._retune_interval(lux)
         self.last_tick = now
-        # One tick only. The next tick is ordinary tracking again, so it must not inherit
-        # the tuning glide and start snapping.
         self._tuning = False
         return self.rooms
 
@@ -487,6 +505,9 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         near_clear: bool,
         manual: bool,
         asleep: bool,
+        away: bool,
+        sunrise_progress: float | None,
+        bedtime_dwell_active: bool,
         zone: ZoneSettings | None = None,
     ) -> None:
         state = self.hass.states.get(entity_id)
@@ -510,9 +531,10 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                 clock_hour=clock_hour,
                 night_active=self._night_active(),
                 asleep=asleep,
+                away=away,
+                sunrise_progress=sunrise_progress,
+                bedtime_dwell_active=bedtime_dwell_active,
                 ambience_open=room.ambience_open,
-                # The debounced answer, not a hint. Without this the engine recomputes
-                # the raw gate and the debounce moves the sensor but never the lights.
                 ambience_resolved=room.ambience_open,
                 diminish_active=near_clear and diminish_pct > 0,
                 manual_level=current if manual else None,
@@ -523,8 +545,6 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
             zone=zone,
         )
         room.solutions[entity_id] = solution
-        # Recorded on EVERY tick, including the ones that write nothing — the limiter
-        # compares this tick's source with the last COMPUTED one, not the last written.
         room.last_source[entity_id] = solution.source
 
         # Manual wins: compute and display, but never write.
@@ -636,8 +656,83 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         steps = max(1, span / finest)
         return max(house.colour_glide_minutes * 60.0 / steps, house.colour_step_transition_s * 2)
 
+    def _clear_sleep_toggle(self) -> None:
+        """Clear the manual sleep toggle helper when night mode ends."""
+        entity_id = self.config_entry.options.get(
+            CONF_SLEEP_TOGGLE
+        ) or self.config_entry.data.get(CONF_SLEEP_TOGGLE)
+        if not entity_id:
+            return
+        state = self.hass.states.get(entity_id)
+        if state is not None and state.state == "on":
+            _LOGGER.info("Solace: auto-clearing sleep toggle helper %s", entity_id)
+            domain = entity_id.split(".")[0]
+            if self.hass.services.has_service(domain, "turn_off"):
+                self.hass.async_create_task(
+                    self.hass.services.async_call(
+                        domain,
+                        "turn_off",
+                        {"entity_id": entity_id},
+                        context=self.writer.new_context(),
+                    )
+                )
+            elif self.hass.services.has_service("homeassistant", "turn_off"):
+                self.hass.async_create_task(
+                    self.hass.services.async_call(
+                        "homeassistant",
+                        "turn_off",
+                        {"entity_id": entity_id},
+                        context=self.writer.new_context(),
+                    )
+                )
+            else:
+                self.hass.states.async_set(entity_id, "off")
+
+    def _away(self) -> bool:
+        """Is Away mode armed?"""
+        entity_id = self.config_entry.options.get(
+            CONF_AWAY_ENTITY
+        ) or self.config_entry.data.get(CONF_AWAY_ENTITY) or "input_boolean.away_mode"
+        return self._is_on(entity_id, default=False)
+
+    def _sunrise_progress(self, house: HouseSettings) -> float | None:
+        """0.0 to 1.0 progress through pre-alarm virtual sunrise fade."""
+        if not house.sunrise_fade_enabled:
+            return None
+        entity_id = self.config_entry.options.get(
+            CONF_ALARM_ENTITY
+        ) or self.config_entry.data.get(CONF_ALARM_ENTITY)
+        if not entity_id:
+            return None
+        state = self.hass.states.get(entity_id)
+        if state is None or state.state in ("unknown", "unavailable"):
+            return None
+        alarm = dt_util.parse_datetime(state.state)
+        if alarm is None:
+            return None
+        now = dt_util.utcnow()
+        fade_window = timedelta(minutes=house.sunrise_fade_minutes)
+        start = alarm - fade_window
+        if start <= now <= alarm:
+            total = fade_window.total_seconds()
+            elapsed = (now - start).total_seconds()
+            return max(0.0, min(1.0, elapsed / total if total > 0 else 1.0))
+        return None
+
+    def _bedtime_dwell_active(self, clock_hour: float, house: HouseSettings) -> bool:
+        """Is bedtime wind-down active in bedroom?"""
+        if not house.bedtime_dwell_enabled:
+            return False
+        if self._night_active() or self._asleep():
+            return False
+        anchor = house.evening_axis_hour
+        axis = (clock_hour - anchor) % 24.0
+        dwell_axis = (house.bedtime_dwell_hour - anchor) % 24.0
+        release_axis = (house.morning_release_hour - anchor) % 24.0
+        return dwell_axis <= axis < release_axis
+
     def _asleep(self) -> bool:
-        """Is he asleep RIGHT NOW — phone DND, or the manual sleep toggle."""
+        """Is he asleep RIGHT NOW — phone DND, watch bedtime mode, or the manual sleep toggle."""
         if self._dnd():
             return True
         return self._is_on(
@@ -662,61 +757,49 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         now = dt_util.utcnow()
         lead = timedelta(minutes=house.alarm_lead_minutes)
 
-        # ⚠️ **BOUNDED ON BOTH SIDES.** `now >= alarm - lead` alone is True forever once
-        # the alarm is in the past, and `sensor.pixel_8a_next_alarm` DOES go stale: the
-        # phone only republishes it after an alarm fires (measured 2026-08-13 — the
-        # 06:00 value was still being reported at 06:47). On any night with no alarm set
-        # for tomorrow it holds yesterday's time indefinitely.
-        #
-        # The consequence is the exact failure the latch exists to prevent: he falls
-        # asleep, the latch engages, the stale alarm unlatches it on the very next tick,
-        # and at 3 am the engine recomputes from a pitch-dark lux reading and lights
-        # every occupied room at full demand.
-        #
-        # So an alarm older than `alarm_stale_minutes` is not a wake-up, it is a leftover.
-        # Night mode then ends on lux at dawn, which is the correct fallback.
         if alarm < now - timedelta(minutes=house.alarm_stale_minutes):
             return False
         return now >= alarm - lead
 
     def _update_night_latch(self, asleep: bool, lux: float, house: HouseSettings) -> None:
-        """Night mode is LATCHED. This is the correction that matters most.
+        """Night mode is LATCHED.
 
-        Measured over 72 h: the phone's DND clears the moment he gets out of bed. So a
-        night mode defined as "DND is on right now" ends the instant he stands up at
-        3 am — the engine then recomputes from a pitch-dark lux reading and lights every
-        occupied room at full demand, straight into his face.
-
-        Enter on sleep. Leave on the world's terms, not his posture:
+        Enter on sleep. Leave on the world's terms:
           * outdoor lux above ``night_release_lux`` (dawn), or
           * ``alarm_lead_minutes`` before the next alarm.
 
-        Getting up does **not** end it — which is exactly the described behaviour: the
-        lights come on at the low night setting and he can see.
-
-        ⚠️ While he is asleep the latch is re-asserted every tick, so neither release can
-        fire underneath him. That is also why there is no per-room "ignore the lux
-        release" exemption: the bedroom cannot be released while he is still in it
-        asleep, because being asleep is what holds the latch.
+        When night mode ends, auto-clear any manual sleep toggle helper so daytime
+        lighting is never stuck latched in night mode across full sunlight.
         """
-        if asleep:
+        if self._dnd():
             if not self._night_latched:
-                _LOGGER.debug("Solace: entering night mode (asleep)")
+                _LOGGER.debug("Solace: entering night mode (dnd/bedtime sensor)")
             self._night_latched = True
             return
+
+        if asleep:
+            # If asleep only via manual sleep toggle, allow dawn lux / alarm to unlatch
+            if self._alarm_released(house) or lux >= house.night_release_lux:
+                _LOGGER.info("Solace: leaving night mode (dawn/alarm override on sleep toggle)")
+                self._night_latched = False
+                self._clear_sleep_toggle()
+                return
+            if not self._night_latched:
+                _LOGGER.debug("Solace: entering night mode (sleep toggle)")
+            self._night_latched = True
+            return
+
         if not self._night_latched:
             return
+
         if self._alarm_released(house):
             _LOGGER.debug("Solace: leaving night mode (alarm lead)")
             self._night_latched = False
+            self._clear_sleep_toggle()
         elif lux >= house.night_release_lux:
-            # ⚠️ CLEAR the latch, do not merely mask it. Masking (an "is released" flag
-            # consulted per room) leaves `_night_latched` True forever, so the next time
-            # it simply gets dark the house drops back into night mode without him ever
-            # having gone to sleep. Caught live: a test left the latch set, and the
-            # following run read `night` at dusk on a fully awake house.
             _LOGGER.debug("Solace: leaving night mode (lux %s)", lux)
             self._night_latched = False
+            self._clear_sleep_toggle()
 
     def _night_active(self) -> bool:
         return self._night_latched
@@ -832,24 +915,37 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         return value
 
     def _dnd(self) -> bool:
-        """Asleep?
+        """Asleep? Checks configured DND entity and Pixel Watch bedtime sensors."""
+        candidates = []
+        dnd_opt = (
+            self.config_entry.options.get(CONF_DND_ENTITY)
+            or self.config_entry.data.get(CONF_DND_ENTITY)
+        )
+        if isinstance(dnd_opt, list):
+            candidates.extend(dnd_opt)
+        elif isinstance(dnd_opt, str) and dnd_opt:
+            candidates.append(dnd_opt)
 
-        NOT an on/off test. The phone's DND sensor is a four-value enum, so `== "on"`
-        would never match and night mode would never engage — with no error to show for
-        it. Match against the configured sleep states instead.
-        """
-        entity_id = self.config_entry.options.get(
-            CONF_DND_ENTITY
-        ) or self.config_entry.data.get(CONF_DND_ENTITY)
-        if not entity_id:
+        for watch_sensor in (
+            "binary_sensor.google_pixel_watch_2_bedtime_mode",
+            "sensor.google_pixel_watch_2_do_not_disturb_sensor",
+        ):
+            if watch_sensor not in candidates and self.hass.states.get(watch_sensor) is not None:
+                candidates.append(watch_sensor)
+
+        if not candidates:
             return False
-        state = self.hass.states.get(entity_id)
-        if state is None or state.state in ("unknown", "unavailable"):
-            return False
+
         sleep_states = self.config_entry.options.get(
             CONF_DND_SLEEP_STATES
         ) or DEFAULT_DND_SLEEP_STATES
-        return state.state in sleep_states
+
+        for entity_id in candidates:
+            state = self.hass.states.get(entity_id)
+            if state is not None and state.state not in ("unknown", "unavailable"):
+                if state.state in sleep_states:
+                    return True
+        return False
 
     def _any_on(self, entity_ids, *, default: bool) -> bool:
         """True if ANY of these entities is on. Accepts a bare string or a list."""

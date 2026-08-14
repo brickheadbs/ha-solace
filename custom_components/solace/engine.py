@@ -154,14 +154,22 @@ def demand(lux: float, house: HouseSettings) -> float:
 # --------------------------------------------------------------------------------
 
 
-def mode_for(night_active: bool) -> Mode:
-    """Night mode follows the LATCH, not the live sleep signal.
+def mode_for(
+    night_active: bool,
+    away: bool = False,
+    sunrise_progress: float | None = None,
+) -> Mode:
+    """Operating mode follows away state, virtual sunrise, and night latch.
 
     ⚠️ It is tempting to write ``Mode.NIGHT if dnd else Mode.NORMAL``. That is wrong, and
     it was wrong here for a day. DND clears when he gets out of bed (measured), so that
     version leaves night mode the moment he stands up at 3 am and relights the house at
     full demand. The latch is computed by the coordinator; see ``EngineInput.night_active``.
     """
+    if away:
+        return Mode.AWAY
+    if sunrise_progress is not None:
+        return Mode.SUNRISE
     return Mode.NIGHT if night_active else Mode.NORMAL
 
 
@@ -296,15 +304,26 @@ def rate_limit(current: int, target: int, step: int) -> int:
     return current + delta
 
 
-def past_dead_zone(new_level: int, last_written: int | None, dead_zone: int) -> bool:
+def past_dead_zone(
+    new_level: int,
+    last_written: int | None,
+    dead_zone: int,
+    source: str = "demand",
+    last_source: str | None = None,
+) -> bool:
     """Step 16. A change smaller than the dead zone writes nothing at all.
 
-    Always write when the answer is "off" or "on from off" — a dead zone that swallows
-    an off command is worse than chatter.
+    Always write when the answer is "off" or "on from off", on state/source changes,
+    or on explicit non-demand modes (ambience, night, sunrise, away, manual) so small
+    steps (e.g. 1 level) take effect cleanly.
     """
     if last_written is None:
         return True
     if new_level == 0 or last_written == 0:
+        return new_level != last_written
+    if last_source is not None and last_source != source:
+        return new_level != last_written
+    if source in ("ambience", "night", "sunrise", "away", "manual"):
         return new_level != last_written
     return abs(new_level - last_written) >= max(dead_zone, 1)
 
@@ -348,17 +367,13 @@ def solve(
     trace.append(("demand", round(demand_value, 4)))
 
     # 4. Mode.
-    mode = mode_for(data.night_active)
-    ramp = 0.0 if mode is Mode.NIGHT else ramp_bias(data.clock_hour, house)
+    mode = mode_for(data.night_active, away=data.away, sunrise_progress=data.sunrise_progress)
+    ramp = 0.0 if mode in (Mode.NIGHT, Mode.AWAY, Mode.SUNRISE) else ramp_bias(data.clock_hour, house)
     trace.append(("mode", mode.value))
     trace.append(("ramp_stops", round(ramp, 4)))
 
     # 5. Bias — additive stops, four levels plus the ramp. Additive so a parent dial
     #    moves everything while children keep their offsets.
-    #
-    #    house → area → zone → light. The zone layer comes from the zone the light
-    #    belongs to; an undivided area falls back to its own `zone_bias_stops`, so a
-    #    room with no sub-zones behaves exactly as before.
     zone_stops = zone.bias_stops if zone is not None else room.zone_bias_stops
     stops = (
         house.bias_stops
@@ -375,8 +390,25 @@ def solve(
     trace.append(("fraction", round(fraction, 4)))
     trace.append(("level_raw", level))
 
+    # Away mode: instantly shut off all lights across the house
+    if mode is Mode.AWAY:
+        level = 0
+        trace.append(("away", True))
+
+    # Virtual sunrise wake-up fade
+    elif mode is Mode.SUNRISE:
+        if room.sunrise_enabled or room.night_off:
+            progress = max(0.0, min(1.0, data.sunrise_progress or 0.0))
+            eased = progress ** 1.5
+            target_level = max(level, 30)
+            level = int(round(eased * target_level))
+            trace.append(("virtual_sunrise", level))
+        else:
+            level = 0 if (room.night_off and data.asleep) else house.night_level
+            trace.append(("sunrise_other_room", level))
+
     # 8. Night override — a fixed level, not a scaling.
-    if mode is Mode.NIGHT:
+    elif mode is Mode.NIGHT:
         if room.night_off and data.asleep:
             # The bedroom's rule, keyed on ASLEEP (not on the night latch): a night level
             # in the room he is asleep in is not a gentler version of off, it is a light
@@ -388,88 +420,43 @@ def solve(
             level = house.night_level
             trace.append(("night_override", level))
 
+    # Bedtime wind-down (auto dwell) in bedroom before sleep
+    if mode is Mode.NORMAL and data.bedtime_dwell_active and (room.bedtime_dwell_enabled or room.night_off) and data.occupied:
+        if level > house.bedtime_dwell_level:
+            level = house.bedtime_dwell_level
+            trace.append(("bedtime_dwell", level))
+
     # 10. Diminish — a reduction that STAYS; never an off. Per ZONE: the end of the room
     #     nobody is standing in dims, the rest of it does not.
     demand_level = level
     diminish_pct = zone.diminish_pct if zone is not None else room.diminish_pct
-    if diminish_pct > 0 and data.diminish_active and level > 0:
+    if diminish_pct > 0 and data.diminish_active and level > 0 and mode not in (Mode.AWAY, Mode.SUNRISE):
         level = int(round(level * (1.0 - diminish_pct / 100.0)))
         trace.append(("diminish", level))
 
     # 11. Occupancy. The only thing that switches normal lighting off outright.
-    #
-    # ⚠️ The ambience threshold used to be ANDed in here, and that was the bug: at 247 lx
-    # an occupied room computed level 18 and was then zeroed, because 247 > 50. Normal
-    # lighting does not need a second ceiling — `demand` already reaches zero on its own
-    # at `lux_full + lux_window`, which is what makes that window mean what the panel
-    # says it means.
-    if not data.occupied:
+    if not data.occupied and mode not in (Mode.AWAY,):
         level = 0
         trace.append(("unoccupied", True))
 
     # 12. Min cutoff — below it, off rather than a useless glow.
-    #
-    # ⚠️ **Disabled while the ambience threshold reads dark** (owner, 2026-08-13: the
-    # ambience settings "also disable the Minimum cutoff so that lights can go as low as
-    # 1 at night when low levels are actually needed"). The cutoff exists to stop a
-    # pointless glow competing with daylight; after dark a level of 1 is not pointless,
-    # it is the whole point. So the floor drops out rather than being tuned down, and the
-    # dimmest reachable level becomes 1 instead of `min_cutoff`.
     cutoff = 0 if ambience_open else house.min_cutoff
-    if 0 < level < cutoff:
+    if 0 < level < cutoff and mode not in (Mode.AWAY, Mode.SUNRISE):
         level = 0
         trace.append(("below_cutoff", cutoff))
 
     # 12b. AMBIENCE — **the replacement for OFF**, not a floor under demand.
-    #
-    # Owner, 2026-08-13, after this was built the wrong way twice:
-    #
-    #     "Ambient ALWAYS confuses agents. It replaces the OFF state below threshold
-    #      while awake."
-    #
-    # That is the whole definition. Read it as a state machine, not an arithmetic clamp:
-    # a light that would be **dark** shows the resting glow instead, provided it is dark
-    # outside and he is awake. A light that is already **lit** is left alone — ambience
-    # never touches a working demand level.
-    #
-    # This is applied after the occupancy check and the cutoff on purpose, because those
-    # are the two things that produce the OFF it replaces. Applied at step 9 (where the
-    # brief put it) they would zero it a moment later.
-    #
-    # It is skipped in NIGHT — the night level is deliberately the only thing driving the
-    # house while asleep. 0 ⇒ feature off. The room's own value overrides the house's;
-    # 0 there means "unmodified", so the room falls back to the house rather than
-    # switching the feature off in that one room.
     ambience = room.ambience_level or house.ambience_level
-    # ⚠️ **Two conditions, and NIGHT MODE IS NOT ONE OF THEM.** Owner, 2026-08-13:
-    # *"Ambience is always on while awake when below threshold. Focus on ALWAYS on."*
-    #
-    # This carried `mode is Mode.NORMAL` until that sentence, which meant the glow
-    # vanished from the whole house the moment the night latch engaged — including at
-    # 3 am when he is up and walking around, which is precisely when a resting glow in
-    # the rooms he is *not* in earns its keep. Night mode is not a reason to remove it;
-    # being **asleep** is, and that is already the second condition.
-    #
-    # Night mode still owns the rooms it lights: it sets a level at step 8, so those
-    # rooms are non-zero here and ambience leaves them alone. It only fills the rooms
-    # night mode left dark.
     dark_and_awake = ambience_open and not data.asleep
     lit_here = data.occupied or house.ambience_ignores_occupancy
-    if ambience > 0 and dark_and_awake and lit_here:
+    if ambience > 0 and dark_and_awake and lit_here and mode not in (Mode.AWAY, Mode.SUNRISE):
         if level == 0:
-            # The headline case. Off becomes the glow.
             level = ambience
             trace.append(("ambience_replaces_off", level))
         elif demand_level >= ambience and level < ambience:
-            # Diminish took a lit room below its resting glow. A sub-zone going quiet
-            # must not take the room darker than it would be if nothing were happening
-            # at all. (Owner: "If diminished drops below, Ambient wins.")
             level = ambience
             trace.append(("ambience_clamp", level))
         elif demand_level < ambience and level < house.demand_floor_level:
-            # Demand itself is below the glow — a brightish room genuinely needs less
-            # light, and lifting it back up would light a room the daylight already lit.
-            # Demand wins, floored at ~1 % so it dims rather than snapping off.
             level = house.demand_floor_level
             trace.append(("demand_floor", level))
 
@@ -486,8 +473,12 @@ def solve(
     steps_taken = dict(trace)
     if data.manual_level is not None:
         source = "manual"
+    elif mode is Mode.AWAY:
+        source = "away"
     elif level <= 0:
         source = "off"
+    elif "virtual_sunrise" in steps_taken:
+        source = "sunrise"
     elif "ambience_replaces_off" in steps_taken:
         source = "ambience"
     elif mode is Mode.NIGHT:
@@ -496,18 +487,6 @@ def solve(
         source = "demand"
 
     # 15. Rate limit — **demand tracking only, and only between two demand ticks.**
-    #
-    # ⚠️ Its two exemptions (`current <= 0` for on, `target <= 0` for off) were how a
-    # state change escaped the limiter. Ambience made both unreachable: with a resting
-    # glow the light is *never* off and the target is *never* 0. So walking into a room
-    # became "tracking" and crawled up at `rate_limit_step` a tick — measured live at
-    # step 2 with a 600 s interval, which is 15 hours to cross the room's range. That is
-    # the "I went into other rooms and nothing happened" report, and it was introduced by
-    # ambience, not by the limiter.
-    #
-    # Hunting is what the limiter is for, and hunting only happens while the source stays
-    # `demand` and lux wobbles underneath it. Any change of source is a state change and
-    # goes straight through, with `transition:` doing the smoothing in hardware.
     tracking = source == "demand" and data.last_source == "demand"
     if tracking:
         level = rate_limit(data.current_level, level, house.rate_limit_step)
@@ -516,7 +495,13 @@ def solve(
         trace.append(("rate_limit_skipped", source))
 
     # 16. Dead zone.
-    write = past_dead_zone(level, data.last_written_level, house.dead_zone)
+    write = past_dead_zone(
+        level,
+        data.last_written_level,
+        house.dead_zone,
+        source=source,
+        last_source=data.last_source,
+    )
     trace.append(("should_write", write))
 
     return Solution(

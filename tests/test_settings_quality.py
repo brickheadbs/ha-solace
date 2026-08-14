@@ -18,7 +18,12 @@ import pytest
 from custom_components.solace.const import HOUSE_SETTINGS, ROOM_SETTINGS
 from custom_components.solace.models import HouseSettings, RoomSettings
 
-BOOLEANS = {"ambience_ignores_occupancy"}
+BOOLEANS = {
+    "ambience_ignores_occupancy",
+    "sunrise_fade_enabled",
+    "bedtime_dwell_enabled",
+    "sunrise_enabled",
+}
 """Rendered as switches. Two states is the whole point, not coarseness."""
 
 COUNTS = {

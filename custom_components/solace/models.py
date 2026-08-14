@@ -24,6 +24,7 @@ __all__ = [
     "LightSettings",
     "EngineInput",
     "Solution",
+    "RemoteSettings",
 ]
 
 
@@ -40,10 +41,12 @@ class Family(str, Enum):
 
 
 class Mode(str, Enum):
-    """DND is the definition of "asleep" — one signal, three uses (brief, decided 2026-08-11)."""
+    """Engine operating modes."""
 
     NORMAL = "normal"
     NIGHT = "night"
+    AWAY = "away"
+    SUNRISE = "sunrise"
 
 
 @dataclass(frozen=True, slots=True)
@@ -210,11 +213,41 @@ class HouseSettings:
     out after dark precisely so low levels are reachable. Ambience does not raise a low
     demand up to itself; demand wins, down to here."""
 
+    # -- Virtual sunrise wake-up fade ----------------------------------------------
+    sunrise_fade_enabled: bool = True
+    """Gradually brightens bedroom lights before alarm time to simulate natural sunrise."""
+    sunrise_fade_minutes: float = 30.0
+    """Duration of the pre-alarm sunrise brightening curve."""
+
+    # -- Bedtime wind-down (bedroom auto-dwell) ------------------------------------
+    bedtime_dwell_enabled: bool = True
+    """Settle bedroom lights to a low warm glow before sleep when occupied late evening."""
+    bedtime_dwell_hour: float = 22.5
+    """Clock hour after which bedtime wind-down engages in bedroom."""
+    bedtime_dwell_level: int = 15
+    """Dimmest comfortable level for late evening wind-down before sleeping."""
+
     # -- Display only ---------------------------------------------------------------
     gamma: float = 2.39
     """Measured mean on Aqara CCT (per-point 2.23-2.47). **Display column only** — gamma
     correction is OUT of the command path (ha-lighting-system §2, it "didn't really seem
     to help"). Kept so the panel can show "level 102 → 18 % light"."""
+
+
+@dataclass(frozen=True, slots=True)
+class RemoteSettings:
+    """A physical remote controller (e.g. Styrbar) mapped to room actions."""
+
+    remote_id: str
+    name: str = "Remote"
+    room_id: str = ""
+    action_entity: str = ""
+    button_on: str = "toggle_auto_manual"
+    button_off: str = "turn_off"
+    button_up: str = "nudge_bias_up"
+    button_down: str = "nudge_bias_down"
+    button_left: str = "toggle_manual"
+    button_right: str = "toggle_sleep"
 
 
 @dataclass(frozen=True, slots=True)
@@ -277,6 +310,10 @@ class RoomSettings:
     phone already reports it."""
     manual_hold_minutes: float = 30.0
     """A touch holds manual for N minutes; the switch holds indefinitely."""
+    sunrise_enabled: bool = False
+    """Enable virtual sunrise wake-up fade in this room."""
+    bedtime_dwell_enabled: bool = False
+    """Enable bedtime auto-dwell wind-down in this room."""
     zones: tuple[ZoneSettings, ...] = ()
     """Sub-zones. Empty ⇒ the area is undivided and every light takes
     ``zone_bias_stops`` / ``diminish_pct`` from the area itself."""
@@ -328,6 +365,12 @@ class EngineInput:
     """Is he asleep **right now** — DND on, or the sleep toggle held. Distinct from
     ``night_active``: asleep drives the bedroom fully dark and suppresses the ambience
     glow; night_active drives the level everywhere."""
+    away: bool = False
+    """Away mode armed — forces all room lighting off immediately."""
+    sunrise_progress: float | None = None
+    """0.0 to 1.0 progress through pre-alarm virtual sunrise fade."""
+    bedtime_dwell_active: bool = False
+    """Bedtime wind-down active in bedroom before sleep."""
     ambience_open: bool = True
     """The gate's *previous* state — it is hysteretic, so it is an input as well as an
     output. Used only when ``ambience_resolved`` is None."""
@@ -376,12 +419,7 @@ class Solution:
     stops: float
     fraction: float
     source: str = "demand"
-    """WHY the level is what it is: ``demand``, ``ambience``, ``night`` or ``off``.
-
-    Rate limiting is for *hunting* — lux wobbles, demand wobbles, the bulb chases it. A
-    change of source is not hunting, it is a state change (someone walked in, night
-    latched, the glow took over), and throttling those to a couple of levels a tick is
-    how "I walked into the room and nothing happened" happens."""
+    """WHY the level is what it is: ``demand``, ``ambience``, ``night`` or ``off``."""
     trace: tuple[tuple[str, object], ...] = field(default=())
 
     def with_trace(self, step: str, value: object) -> Solution:

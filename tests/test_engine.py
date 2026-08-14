@@ -860,3 +860,60 @@ def test_the_first_tick_after_a_restart_is_not_throttled(light):
         _input(lux=5.0, occupied=True, current_level=11, last_source=None),
     )
     assert cold.level > 100
+
+
+# --------------------------------------------------------------------------------
+# Away Mode, Virtual Sunrise, Bedtime Auto Dwell, and Dead Zone Bypass
+# --------------------------------------------------------------------------------
+
+
+def test_away_mode_forces_all_lights_off(house, room, light):
+    """Away mode forces level 0 and Mode.AWAY."""
+    got = solve(house, room, light, _input(lux=5.0, occupied=True, away=True))
+    assert got.mode is Mode.AWAY
+    assert got.level == 0
+    assert got.source == "away"
+
+
+def test_virtual_sunrise_fades_bedroom_lights(house, light):
+    """Virtual sunrise gradually ramps bedroom lights before alarm."""
+    bedroom = RoomSettings(name="Bedroom", night_off=True)
+    # At 0% progress -> level 0
+    start = solve(house, bedroom, light, _input(lux=1.0, sunrise_progress=0.0))
+    assert start.mode is Mode.SUNRISE
+    assert start.level == 0
+
+    # At 50% progress -> mid-level ramp
+    mid = solve(house, bedroom, light, _input(lux=1.0, sunrise_progress=0.5))
+    assert mid.mode is Mode.SUNRISE
+    assert mid.level > 0
+    assert mid.source == "sunrise"
+
+    # At 100% progress -> full daytime/target level
+    full = solve(house, bedroom, light, _input(lux=1.0, sunrise_progress=1.0))
+    assert full.mode is Mode.SUNRISE
+    assert full.level >= mid.level
+
+
+def test_bedtime_dwell_caps_level_in_bedroom_late_evening(house, light):
+    """Bedtime dwell caps bedroom level to bedtime_dwell_level when occupied."""
+    bedroom = RoomSettings(name="Bedroom", night_off=True, bedtime_dwell_enabled=True)
+    house_dwell = HouseSettings(bedtime_dwell_level=15)
+    got = solve(
+        house_dwell, bedroom, light,
+        _input(lux=1.0, occupied=True, clock_hour=23.0, bedtime_dwell_active=True),
+    )
+    assert got.level <= 15
+    assert ("bedtime_dwell", 15) in got.trace
+
+
+def test_dead_zone_bypassed_on_source_change(house, room, light):
+    """A 1-level delta on an ambience or state transition must not be blocked by dead_zone."""
+    house_dz = HouseSettings(dead_zone=5)
+    # Ambience transition with 1-level difference (e.g. from 10 to 11)
+    got = solve(
+        house_dz, room, light,
+        _input(lux=5.0, occupied=False, current_level=10, last_written_level=10, last_source="demand", ambience_resolved=True),
+    )
+    # If level changes to ambience (say 11), should_write must be True
+    assert got.should_write is True

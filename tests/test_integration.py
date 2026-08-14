@@ -583,3 +583,69 @@ async def test_a_real_upcoming_alarm_still_ends_night_mode(hass: HomeAssistant, 
     coordinator._update_night_latch(asleep=True, lux=0.0, house=coordinator.house)
     coordinator._update_night_latch(asleep=False, lux=0.0, house=coordinator.house)
     assert coordinator._night_active() is False, "the alarm lead-in stopped working"
+
+
+async def test_sleep_toggle_clears_automatically_at_dawn(hass: HomeAssistant, entry, world) -> None:
+    """Manual sleep toggle must be auto-cleared when dawn arrives so daylight is not trapped in night mode."""
+    from custom_components.solace.const import CONF_SLEEP_TOGGLE
+
+    world(lux=0.0)
+    hass.states.async_set("input_boolean.solace_sleep", "on")
+    hass.config_entries.async_update_entry(
+        entry, options={**entry.options, CONF_SLEEP_TOGGLE: "input_boolean.solace_sleep"}
+    )
+    assert await _setup(hass, entry)
+    coordinator = entry.runtime_data.coordinator
+    assert coordinator._night_active() is True
+
+    # Sunrise arrives (1000 lx) -> latch must release and sleep toggle auto-turn off
+    coordinator._update_night_latch(asleep=True, lux=1000.0, house=coordinator.house)
+    await hass.async_block_till_done()
+    assert coordinator._night_active() is False
+
+
+async def test_away_mode_triggers_instant_shutoff(hass: HomeAssistant, entry, world) -> None:
+    """Arming away_mode shuts off all rooms immediately."""
+    from custom_components.solace.const import CONF_AWAY_ENTITY
+
+    world(lux=5.0)
+    hass.states.async_set("input_boolean.away_mode", "off")
+    hass.config_entries.async_update_entry(
+        entry, options={**entry.options, CONF_AWAY_ENTITY: "input_boolean.away_mode"}
+    )
+    assert await _setup(hass, entry)
+
+    # Arm away
+    hass.states.async_set("input_boolean.away_mode", "on")
+    await hass.async_block_till_done()
+    coordinator = entry.runtime_data.coordinator
+    assert coordinator._away() is True
+
+
+async def test_watch_bedtime_mode_engages_sleep(hass: HomeAssistant, entry, world) -> None:
+    """Pixel Watch bedtime mode sensor is detected as asleep."""
+    world(lux=1.0)
+    hass.states.async_set("binary_sensor.google_pixel_watch_2_bedtime_mode", "off")
+    assert await _setup(hass, entry)
+    coordinator = entry.runtime_data.coordinator
+    assert coordinator._dnd() is False
+
+    hass.states.async_set("binary_sensor.google_pixel_watch_2_bedtime_mode", "on")
+    assert coordinator._dnd() is True
+
+
+async def test_remote_dispatcher_executes_actions(hass: HomeAssistant, entry, world) -> None:
+    """Remote actions (nudge, toggle) execute directly from Zigbee sensor states."""
+    from custom_components.solace.const import CONF_REMOTES
+
+    assert await _setup(hass, entry)
+    coordinator = entry.runtime_data.coordinator
+    subentry = next(iter(entry.subentries.values()))
+    initial_bias = float(subentry.data.get("bias_stops", 0.0))
+
+    # Send action event via sensor.kitchen_control_action
+    hass.states.async_set("sensor.kitchen_control_action", "brightness_move_up")
+    await hass.async_block_till_done()
+
+    new_bias = float(entry.subentries[subentry.subentry_id].data.get("bias_stops", 0.0))
+    assert new_bias == initial_bias + 0.5

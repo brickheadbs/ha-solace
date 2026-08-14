@@ -51,6 +51,10 @@ CONF_SLEEP_TOGGLE = "sleep_toggle_entity"
 button — a third sleep signal for when the phone has not caught up yet."""
 CONF_ALARM_ENTITY = "alarm_entity"
 """`sensor.pixel_8a_next_alarm`. Night mode ends `alarm_lead_minutes` before it."""
+CONF_AWAY_ENTITY = "away_entity"
+"""`input_boolean.away_mode`. Forces all room lighting to 0 immediately when armed."""
+CONF_REMOTES = "remotes"
+"""Physical remote controllers (Styrbar etc) mapped to room actions."""
 
 CONF_LIGHTS = "lights"
 CONF_PRESENCE = "presence"
@@ -190,6 +194,13 @@ HOUSE_SETTINGS: tuple[Setting, ...] = (
     Setting("ramp_onset_minutes", "Evening ramp onset", 0, 240, 1, 30, "min", "mdi:ray-start-arrow"),
     Setting("alarm_stale_minutes", "Ignore alarms older than", 5, 720, 1, 120, "min", "mdi:alarm-off"),
     Setting("demand_floor_level", "Dimmest level while dark", 1, 254, 1, 1, None, "mdi:arrow-collapse-down"),
+    # -- Virtual sunrise wake-up fade ----------------------------------------------
+    Setting("sunrise_fade_enabled", "Virtual sunrise fade", 0, 1, 1, 1, None, "mdi:weather-sunset-up"),
+    Setting("sunrise_fade_minutes", "Virtual sunrise duration", 5, 120, 1, 30, "min", "mdi:timer-sand"),
+    # -- Bedtime wind-down (bedroom auto-dwell) ------------------------------------
+    Setting("bedtime_dwell_enabled", "Bedtime wind-down", 0, 1, 1, 1, None, "mdi:bed-outline"),
+    Setting("bedtime_dwell_hour", "Bedtime wind-down hour", 0, 23.75, 0.25, 22.5, "h", "mdi:bed-clock"),
+    Setting("bedtime_dwell_level", "Bedtime wind-down level", 0, 254, 1, 15, None, "mdi:bed"),
     # Display only
     Setting("gamma", "Gamma (display only)", 1, 4, 0.01, 2.39, None, "mdi:chart-bell-curve"),
 )
@@ -225,6 +236,8 @@ ROOM_SETTINGS: tuple[Setting, ...] = (
         "mdi:hand-back-right",
         scope="room",
     ),
+    Setting("sunrise_enabled", "Virtual sunrise in room", 0, 1, 1, 0, None, "mdi:weather-sunset-up", scope="room"),
+    Setting("bedtime_dwell_enabled", "Bedtime wind-down in room", 0, 1, 1, 0, None, "mdi:bed-outline", scope="room"),
 )
 
 HOUSE_DEFAULTS = {s.key: s.default for s in HOUSE_SETTINGS}

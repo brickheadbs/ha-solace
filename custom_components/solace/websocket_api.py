@@ -32,6 +32,7 @@ from homeassistant.util import dt as dt_util
 from .colour import resolve_colour
 from .const import (
     CONF_ALARM_ENTITY,
+    CONF_AWAY_ENTITY,
     CONF_DND_ENTITY,
     CONF_LIGHTS,
     CONF_LUX_SENSOR,
@@ -39,6 +40,7 @@ from .const import (
     CONF_PER_LIGHT,
     CONF_PRESENCE,
     CONF_RAMP,
+    CONF_REMOTES,
     CONF_SLEEP_TOGGLE,
     CONF_ZONES,
     DOMAIN,
@@ -71,6 +73,7 @@ def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_room_action)
     websocket_api.async_register_command(hass, ws_set_zones)
     websocket_api.async_register_command(hass, ws_merge_areas)
+    websocket_api.async_register_command(hass, ws_set_remotes)
 
 
 # ---------------------------------------------------------------------------- helpers
@@ -251,8 +254,9 @@ def _snapshot(hass: HomeAssistant, coordinator: SolaceCoordinator) -> dict[str, 
         "room_schema": [_schema_row(s) for s in ROOM_SETTINGS],
         "links": {
             key: entry.options.get(key) or entry.data.get(key)
-            for key in (CONF_LUX_SENSOR, CONF_DND_ENTITY, CONF_SLEEP_TOGGLE, CONF_ALARM_ENTITY)
+            for key in (CONF_LUX_SENSOR, CONF_DND_ENTITY, CONF_SLEEP_TOGGLE, CONF_ALARM_ENTITY, CONF_AWAY_ENTITY)
         },
+        "remotes": coordinator.remotes.get_configured_remotes(),
         "world": {
             "lux": coordinator._lux(),  # noqa: SLF001
             "clock_hour": round(clock_hour, 4),
@@ -263,6 +267,9 @@ def _snapshot(hass: HomeAssistant, coordinator: SolaceCoordinator) -> dict[str, 
             "kelvin": house_colour.kelvin,
             "asleep": coordinator._asleep(),  # noqa: SLF001
             "night_active": coordinator._night_active(),  # noqa: SLF001
+            "away": coordinator._away(),  # noqa: SLF001
+            "sunrise_progress": coordinator._sunrise_progress(house),  # noqa: SLF001
+            "bedtime_dwell_active": coordinator._bedtime_dwell_active(clock_hour, house),  # noqa: SLF001
             "latitude": hass.config.latitude,
             # Longitude and the timezone NAME are both needed by the year chart, not just
             # latitude: a crossing computed from solar geometry is in *solar* time, and
@@ -673,3 +680,38 @@ async def ws_merge_areas(hass: HomeAssistant, connection, msg: dict[str, Any]) -
 
     await entry.runtime_data.coordinator.async_request_refresh()
     connection.send_result(msg["id"], {"zones": len(zones), "lights": len(lights)})
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "solace/set_remotes",
+        vol.Required("remotes"): [
+            {
+                vol.Required("remote_id"): cv.string,
+                vol.Required("name"): cv.string,
+                vol.Optional("room_id", default=""): cv.string,
+                vol.Optional("room_name", default=""): cv.string,
+                vol.Optional("action_entity", default=""): cv.string,
+                vol.Optional("button_on", default="toggle_auto_manual"): cv.string,
+                vol.Optional("button_off", default="turn_off"): cv.string,
+                vol.Optional("button_up", default="nudge_bias_up"): cv.string,
+                vol.Optional("button_down", default="nudge_bias_down"): cv.string,
+                vol.Optional("button_left", default="toggle_manual"): cv.string,
+                vol.Optional("button_right", default="toggle_sleep"): cv.string,
+            }
+        ],
+    }
+)
+@websocket_api.async_response
+async def ws_set_remotes(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    """Save remote controller mappings and re-register event dispatchers."""
+    entry = _entry(hass)
+    if entry is None:
+        connection.send_error(msg["id"], "not_loaded", "Solace is not set up")
+        return
+    hass.config_entries.async_update_entry(
+        entry, options={**entry.options, CONF_REMOTES: msg["remotes"]}
+    )
+    entry.runtime_data.coordinator.remotes.async_unregister()
+    entry.runtime_data.coordinator.remotes.async_register()
+    connection.send_result(msg["id"])

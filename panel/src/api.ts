@@ -92,6 +92,9 @@ export interface World {
   kelvin: number;
   asleep: boolean;
   night_active: boolean;
+  away: boolean;
+  sunrise_progress: number | null;
+  bedtime_dwell_active: boolean;
   latitude: number;
   longitude: number;
   time_zone: string;
@@ -100,6 +103,20 @@ export interface World {
   updated_at: string | null;
   interval_s: number | null;
   healthy: boolean;
+}
+
+export interface RemoteRow {
+  remote_id: string;
+  name: string;
+  room_id?: string;
+  room_name?: string;
+  action_entity?: string;
+  button_on?: string;
+  button_off?: string;
+  button_up?: string;
+  button_down?: string;
+  button_left?: string;
+  button_right?: string;
 }
 
 /** How one bulb family walks the colour curve. See `fade.py::fade_profile`. */
@@ -120,6 +137,7 @@ export interface Snapshot {
   house_schema: Schema[];
   room_schema: Schema[];
   links: Record<string, string | null>;
+  remotes?: RemoteRow[];
   world: World;
   /** Present only when at least one light is configured. */
   fade?: { interval_s: number; families: FamilyFade[] };
@@ -196,3 +214,6 @@ export const roomAction = (
     action,
     ...(level === undefined ? {} : { level }),
   });
+
+export const setRemotes = (hass: Hass, remotes: RemoteRow[]) =>
+  hass.connection.sendMessagePromise({ type: "solace/set_remotes", remotes });

@@ -22,15 +22,17 @@ import { subscribe } from "./api";
 import "./tab-colour";
 import "./tab-home";
 import "./tab-lighting";
+import "./tab-remotes";
 import { tokens } from "./tokens";
 import "./ui";
 
-type Tab = "home" | "lighting" | "colour";
+type Tab = "home" | "lighting" | "colour" | "remotes";
 
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: "home", label: "Home" },
   { id: "lighting", label: "Lighting" },
   { id: "colour", label: "Colour" },
+  { id: "remotes", label: "Remotes" },
 ];
 
 @customElement("solace-panel")
@@ -120,6 +122,75 @@ export class SolacePanel extends LitElement {
         color: var(--sol-cyan);
         border-bottom-color: var(--sol-cyan);
       }
+      .status-banner {
+        background: var(--sol-card-inner, rgba(0, 0, 0, 0.2));
+        border-bottom: 1px solid var(--sol-border, rgba(255, 255, 255, 0.08));
+        padding: 10px 18px;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        font-size: 12.5px;
+      }
+      .status-group {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 14px;
+      }
+      .status-item {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        color: var(--sol-text-2);
+      }
+      .status-item ha-icon {
+        --mdc-icon-size: 16px;
+        color: var(--sol-cyan);
+      }
+      .status-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        padding: 3px 8px;
+        border-radius: 6px;
+        font-size: 11.5px;
+        font-weight: 500;
+      }
+      .badge-normal {
+        background: rgba(76, 175, 80, 0.15);
+        color: #81c784;
+      }
+      .badge-night {
+        background: rgba(156, 39, 176, 0.15);
+        color: #ce93d8;
+      }
+      .badge-away {
+        background: rgba(239, 83, 80, 0.15);
+        color: #ef5350;
+      }
+      .badge-sunrise {
+        background: rgba(255, 152, 0, 0.15);
+        color: #ffb74d;
+      }
+      .room-badges {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .room-chip {
+        font-size: 11.5px;
+        padding: 2px 7px;
+        border-radius: 4px;
+        background: var(--sol-control);
+        color: var(--sol-text-3);
+      }
+      .room-chip.lit {
+        color: var(--sol-text-1);
+        border: 1px solid var(--sol-cyan);
+      }
       main {
         max-width: 1180px;
         margin: 0 auto;
@@ -158,9 +229,6 @@ export class SolacePanel extends LitElement {
   }
 
   updated(changed: Map<string, unknown>) {
-    // `hass` is replaced on every state change in HA, but the *connection* is stable —
-    // so this only reconnects if the subscription was never established (a panel opened
-    // before the integration finished loading).
     if (changed.has("hass") && this.hass && !this.unsub) this.connect();
   }
 
@@ -178,6 +246,51 @@ export class SolacePanel extends LitElement {
     }
   }
 
+  private renderStatusHeader() {
+    if (!this.snap) return nothing;
+    const w = this.snap.world;
+    let modeBadge = html`<span class="status-badge badge-normal">Normal</span>`;
+    if (w.away) {
+      modeBadge = html`<span class="status-badge badge-away"><ha-icon icon="mdi:airplane"></ha-icon> Away Mode</span>`;
+    } else if (w.sunrise_progress !== null && w.sunrise_progress !== undefined) {
+      modeBadge = html`<span class="status-badge badge-sunrise"><ha-icon icon="mdi:weather-sunset-up"></ha-icon> Sunrise Fade (${Math.round(w.sunrise_progress * 100)}%)</span>`;
+    } else if (w.night_active) {
+      modeBadge = html`<span class="status-badge badge-night"><ha-icon icon="mdi:weather-night"></ha-icon> Night Latched</span>`;
+    } else if (w.bedtime_dwell_active) {
+      modeBadge = html`<span class="status-badge badge-night"><ha-icon icon="mdi:bed"></ha-icon> Bedtime Wind-Down</span>`;
+    }
+
+    const luxStr = Math.round(w.lux).toLocaleString() + " lx";
+    const luxDesc = w.lux > 5000 ? "Full Sun" : w.lux > 500 ? "Daylight" : w.lux > 50 ? "Twilight" : "Dark";
+
+    return html`
+      <div class="status-banner">
+        <div class="status-group">
+          <span class="status-item">
+            <ha-icon icon="mdi:white-balance-sunny"></ha-icon>
+            <strong>${luxStr}</strong> (${luxDesc})
+          </span>
+          <span class="status-item">
+            <ha-icon icon="mdi:home-clock"></ha-icon>
+            ${modeBadge}
+          </span>
+          <span class="status-item">
+            <ha-icon icon="mdi:thermometer"></ha-icon>
+            ${w.kelvin} K
+          </span>
+        </div>
+        <div class="room-badges">
+          ${this.snap.rooms.map((r) => {
+            const lit = (r.level ?? 0) > 0;
+            return html`<span class="room-chip ${lit ? "lit" : ""}">
+              ${r.name}: ${r.manual.active ? "Manual" : lit ? `L${r.level}` : "Off"}
+            </span>`;
+          })}
+        </div>
+      </div>
+    `;
+  }
+
   private renderTab() {
     if (!this.snap) return nothing;
     switch (this.tab) {
@@ -185,6 +298,8 @@ export class SolacePanel extends LitElement {
         return html`<sol-tab-lighting .hass=${this.hass} .snap=${this.snap}></sol-tab-lighting>`;
       case "colour":
         return html`<sol-tab-colour .hass=${this.hass} .snap=${this.snap}></sol-tab-colour>`;
+      case "remotes":
+        return html`<sol-tab-remotes .hass=${this.hass} .snap=${this.snap}></sol-tab-remotes>`;
       default:
         return html`<sol-tab-home .hass=${this.hass} .snap=${this.snap}></sol-tab-home>`;
     }
@@ -215,6 +330,7 @@ export class SolacePanel extends LitElement {
             </button>`
           )}
         </nav>
+        ${this.renderStatusHeader()}
       </header>
       <main>
         ${this.snap

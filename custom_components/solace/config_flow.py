@@ -39,13 +39,14 @@ from homeassistant.helpers.selector import (
 
 from .const import (
     CONF_ALARM_ENTITY,
+    CONF_AWAY_ENTITY,
     CONF_DND_ENTITY,
     CONF_LIGHTS,
     CONF_LUX_SENSOR,
     CONF_NEAR_PRESENCE,
     CONF_PER_LIGHT,
-    CONF_SLEEP_TOGGLE,
     CONF_PRESENCE,
+    CONF_SLEEP_TOGGLE,
     DEFAULT_LUX_SENSOR,
     DOMAIN,
     HOUSE_SETTINGS,
@@ -122,6 +123,10 @@ class SolaceConfigFlow(ConfigFlow, domain=DOMAIN):
                     vol.Optional(CONF_ALARM_ENTITY): EntitySelector(
                         EntitySelectorConfig(domain=["sensor"], device_class="timestamp")
                     ),
+                    # Away mode — turns off all lights immediately when armed.
+                    vol.Optional(CONF_AWAY_ENTITY): EntitySelector(
+                        EntitySelectorConfig(domain=["input_boolean", "switch", "binary_sensor"])
+                    ),
                 }
             ),
         )
@@ -160,11 +165,7 @@ class SolaceOptionsFlow(OptionsFlow):
         current = self.config_entry.options
         data = self.config_entry.data
         schema: dict[Any, Any] = {}
-        # The two house-level entity links live here as well as in the initial flow.
-        # Without them there is no way to attach the sleep toggle or the alarm sensor to
-        # an entry that already exists — the setup step only runs once, and this
-        # integration has no reconfigure step.
-        for key in (CONF_SLEEP_TOGGLE, CONF_ALARM_ENTITY):
+        for key in (CONF_SLEEP_TOGGLE, CONF_ALARM_ENTITY, CONF_AWAY_ENTITY):
             existing = current.get(key, data.get(key))
             field = (
                 vol.Optional(key, description={"suggested_value": existing})

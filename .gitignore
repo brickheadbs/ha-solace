@@ -6,5 +6,6 @@ __pycache__/
 # Panel build tooling. The BUILT bundle at custom_components/solace/frontend/ IS
 # committed on purpose — HACS copies files, it never runs a build, so an un-built tree
 # installs as a blank sidebar page.
+panel/node_modules
 panel/node_modules/
 panel/package-lock.json
