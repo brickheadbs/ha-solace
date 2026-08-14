@@ -25,48 +25,64 @@ DEFAULT_REMOTES: list[dict[str, Any]] = [
         "name": "Entry Control",
         "room_name": "Entry",
         "action_entity": "sensor.entry_control_action",
-        "button_on": "toggle_auto_manual",
+        "button_on": "cycle_preset_levels",
         "button_off": "turn_off",
         "button_up": "nudge_bias_up",
         "button_down": "nudge_bias_down",
         "button_left": "toggle_manual",
         "button_right": "toggle_sleep",
+        "hold_up": "nudge_bias_up",
+        "hold_down": "nudge_bias_down",
+        "hold_left": "none",
+        "hold_right": "leaving_5_min",
     },
     {
         "remote_id": "kitchen_control",
         "name": "Kitchen Control",
         "room_name": "Kitchen",
         "action_entity": "sensor.kitchen_control_action",
-        "button_on": "toggle_auto_manual",
+        "button_on": "cycle_preset_levels",
         "button_off": "turn_off",
         "button_up": "nudge_bias_up",
         "button_down": "nudge_bias_down",
         "button_left": "toggle_manual",
         "button_right": "toggle_sleep",
+        "hold_up": "nudge_bias_up",
+        "hold_down": "nudge_bias_down",
+        "hold_left": "none",
+        "hold_right": "leaving_5_min",
     },
     {
         "remote_id": "bedroom_control",
         "name": "Bedroom Control",
         "room_name": "Bedroom",
         "action_entity": "sensor.bedroom_control_action",
-        "button_on": "toggle_auto_manual",
+        "button_on": "cycle_preset_levels",
         "button_off": "turn_off",
         "button_up": "nudge_bias_up",
         "button_down": "nudge_bias_down",
         "button_left": "toggle_manual",
         "button_right": "toggle_sleep",
+        "hold_up": "nudge_bias_up",
+        "hold_down": "nudge_bias_down",
+        "hold_left": "none",
+        "hold_right": "leaving_5_min",
     },
     {
         "remote_id": "living_office_control",
         "name": "Living Office Control",
         "room_name": "Living",
         "action_entity": "sensor.living_office_control_action",
-        "button_on": "toggle_auto_manual",
+        "button_on": "cycle_preset_levels",
         "button_off": "turn_off",
         "button_up": "nudge_bias_up",
         "button_down": "nudge_bias_down",
         "button_left": "toggle_manual",
         "button_right": "toggle_sleep",
+        "hold_up": "nudge_bias_up",
+        "hold_down": "nudge_bias_down",
+        "hold_left": "none",
+        "hold_right": "leaving_5_min",
     },
 ]
 
@@ -123,16 +139,26 @@ class RemoteDispatcher:
 
         _LOGGER.debug("Solace Remote [%s] triggered action: %s", remote.get("name"), action)
 
-        # Map Styrbar / generic actions to logical buttons
+        # Map Styrbar / generic actions to logical buttons (Press vs Hold)
         button = None
-        if action in ("on", "arrow_up_click", "arrow_up_hold", "brightness_move_up", "brightness_step_up"):
+        # --- Press Layer ---
+        if action in ("on", "arrow_up_click"):
             button = remote.get("button_up") or remote.get("button_on")
-        elif action in ("off", "arrow_down_click", "arrow_down_hold", "brightness_move_down", "brightness_step_down"):
+        elif action in ("off", "arrow_down_click"):
             button = remote.get("button_down") or remote.get("button_off")
-        elif action in ("arrow_left_click", "arrow_left_hold"):
+        elif action == "arrow_left_click":
             button = remote.get("button_left")
-        elif action in ("arrow_right_click", "arrow_right_hold"):
+        elif action == "arrow_right_click":
             button = remote.get("button_right")
+        # --- Hold Layer ---
+        elif action in ("brightness_move_up", "brightness_step_up", "arrow_up_hold"):
+            button = remote.get("hold_up") or remote.get("button_up") or remote.get("button_on")
+        elif action in ("brightness_move_down", "brightness_step_down", "arrow_down_hold"):
+            button = remote.get("hold_down") or remote.get("button_down") or remote.get("button_off")
+        elif action == "arrow_left_hold":
+            button = remote.get("hold_left") or remote.get("button_left")
+        elif action == "arrow_right_hold":
+            button = remote.get("hold_right") or remote.get("button_right")
 
         if not button or button == "none":
             return
@@ -150,10 +176,44 @@ class RemoteDispatcher:
 
         room = self.coordinator.rooms.get(subentry.subentry_id) if subentry else None
 
-        if action_name == "toggle_auto_manual" and room and subentry:
+        if action_name == "cycle_preset_levels" and subentry:
+            # Auto (None) -> 50% (127) -> 80% (203) -> 100% (254) -> Auto
+            PRESETS = [127, 203, 254]
+            current_manual = room.manual_level if room else None
+            is_manual_active = room.manual_switch or room.manual_touched if room else False
+            if not is_manual_active or current_manual is None:
+                next_level = PRESETS[0]
+                if room:
+                    room.manual_switch = True
+                    room.manual_level = next_level
+                _LOGGER.info("Solace Remote: Preset cycle -> 50%% (%s) for %s", next_level, subentry.title)
+            else:
+                idx = -1
+                for i, p in enumerate(PRESETS):
+                    if abs(current_manual - p) <= 20:
+                        idx = i
+                        break
+                if idx == -1 or idx == len(PRESETS) - 1:
+                    if room:
+                        room.manual_switch = False
+                        room.manual_touched = False
+                        room.manual_level = None
+                        room.manual_since = None
+                    _LOGGER.info("Solace Remote: Preset cycle -> Auto for %s", subentry.title)
+                else:
+                    next_level = PRESETS[idx + 1]
+                    if room:
+                        room.manual_switch = True
+                        room.manual_level = next_level
+                    _LOGGER.info("Solace Remote: Preset cycle -> %s for %s", next_level, subentry.title)
+            await self.coordinator.async_persist()
+            await self.coordinator.async_request_refresh()
+
+        elif action_name == "toggle_auto_manual" and room and subentry:
             if room.manual_switch or room.manual_touched:
                 room.manual_switch = False
                 room.manual_touched = False
+                room.manual_level = None
                 room.manual_since = None
                 _LOGGER.info("Solace Remote: Resumed auto for %s", subentry.title)
             else:
@@ -170,6 +230,7 @@ class RemoteDispatcher:
         elif action_name == "turn_off" and subentry:
             if room:
                 room.manual_touched = True
+                room.manual_level = 0
                 room.manual_since = self.hass.loop.time()
             for entity_id in subentry.data.get("lights", []):
                 await self.coordinator.writer.async_turn_off(
@@ -204,3 +265,20 @@ class RemoteDispatcher:
                 {"entity_id": sleep_entity},
                 context=self.coordinator.writer.new_context(),
             )
+
+        elif action_name == "leaving_5_min":
+            _LOGGER.info("Solace Remote: Triggered Leaving in 5 minutes countdown")
+            if self.hass.services.has_service("input_button", "press"):
+                await self.hass.services.async_call(
+                    "input_button",
+                    "press",
+                    {"entity_id": "input_button.leaving_soon"},
+                    context=self.coordinator.writer.new_context(),
+                )
+            elif self.hass.services.has_service("input_boolean", "turn_on"):
+                await self.hass.services.async_call(
+                    "input_boolean",
+                    "turn_on",
+                    {"entity_id": "input_boolean.leaving_pending"},
+                    context=self.coordinator.writer.new_context(),
+                )

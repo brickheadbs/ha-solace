@@ -161,3 +161,33 @@ export const eveningTimeForLux = (
   value: number,
   place: Place
 ): number | null => eveningClockTime(doy, elevationForLux(value), place);
+
+/** Clear sky illuminance for a given solar elevation in degrees. */
+export const luxForElevation = (elev: number): number => {
+  if (elev >= LUX_TABLE[0][0]) return LUX_TABLE[0][1];
+  if (elev <= LUX_TABLE[LUX_TABLE.length - 1][0]) return LUX_TABLE[LUX_TABLE.length - 1][1];
+  for (let i = 0; i < LUX_TABLE.length - 1; i++) {
+    const [ea, la] = LUX_TABLE[i];
+    const [eb, lb] = LUX_TABLE[i + 1];
+    if (elev <= ea && elev >= eb) {
+      const t = (elev - eb) / (ea - eb);
+      return Math.exp(Math.log(lb) + t * (Math.log(la) - Math.log(lb)));
+    }
+  }
+  return 0.002;
+};
+
+/** Convert local clock hour (0..24) to solar elevation in degrees for a given day. */
+export const clockHourToElevation = (
+  doy: number,
+  clockHour: number,
+  place: Place
+): number => {
+  const dayMs = Date.UTC(place.year, 0, 1) + (doy - 1) * 86_400_000;
+  const approxUtcMs = dayMs + clockHour * 3_600_000;
+  const off = offsetHours(approxUtcMs, place.timeZone);
+  const utcHour = (clockHour - off + 24) % 24;
+  const solarNoonUtc = 12 - place.lon / 15 - equationOfTime(doy) / 60;
+  const solarHour = 12 + (utcHour - solarNoonUtc);
+  return elevationAt(doy, solarHour, place.lat);
+};

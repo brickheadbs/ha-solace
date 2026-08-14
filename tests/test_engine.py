@@ -917,3 +917,37 @@ def test_dead_zone_bypassed_on_source_change(house, room, light):
     )
     # If level changes to ambience (say 11), should_write must be True
     assert got.should_write is True
+
+
+def test_sunrise_fade_cannot_exceed_demand_zero_in_summer(house, light):
+    """If demand is 0 (sun is up at 4am in summer), virtual sunrise produces 0 level."""
+    bedroom = RoomSettings(name="Bedroom", night_off=True, sunrise_enabled=True)
+    # High outdoor lux (e.g. 5000 lx, demand 0)
+    got = solve(
+        house, bedroom, light,
+        _input(lux=5000.0, sunrise_progress=0.75, occupied=True),
+    )
+    assert got.mode is Mode.SUNRISE
+    assert got.level == 0
+
+
+def test_bedtime_dwell_and_night_mode_exempt_from_cutoff(house, light):
+    """Bedtime dwell dim levels (e.g. 15) must not be zeroed by min_cutoff (e.g. 25)."""
+    bedroom = RoomSettings(name="Bedroom", night_off=True, bedtime_dwell_enabled=True)
+    house_cutoff = HouseSettings(min_cutoff=25, bedtime_dwell_level=15)
+    # High demand (level 254) -> capped to bedtime_dwell_level 15 -> not zeroed by cutoff 25
+    got_high = solve(
+        house_cutoff, bedroom, light,
+        _input(lux=1.0, occupied=True, bedtime_dwell_active=True),
+    )
+    assert got_high.level == 15
+    assert ("below_cutoff", 25) not in got_high.trace
+
+    # Dim demand (level 3) -> kept at 3 -> not zeroed by cutoff 25
+    got_low = solve(
+        house_cutoff, bedroom, light,
+        _input(lux=500.0, occupied=True, bedtime_dwell_active=True),
+    )
+    assert got_low.level == 3
+    assert ("below_cutoff", 25) not in got_low.trace
+

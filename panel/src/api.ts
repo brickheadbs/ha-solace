@@ -117,6 +117,10 @@ export interface RemoteRow {
   button_down?: string;
   button_left?: string;
   button_right?: string;
+  hold_up?: string;
+  hold_down?: string;
+  hold_left?: string;
+  hold_right?: string;
 }
 
 /** How one bulb family walks the colour curve. See `fade.py::fade_profile`. */

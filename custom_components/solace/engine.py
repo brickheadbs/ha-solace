@@ -400,11 +400,12 @@ def solve(
         if room.sunrise_enabled or room.night_off:
             progress = max(0.0, min(1.0, data.sunrise_progress or 0.0))
             eased = progress ** 1.5
-            target_level = max(level, 30)
+            # Special sunrise mode cannot exceed demand (e.g. bright sun at 4am in summer -> 0)
+            target_level = level
             level = int(round(eased * target_level))
             trace.append(("virtual_sunrise", level))
         else:
-            level = 0 if (room.night_off and data.asleep) else house.night_level
+            level = 0 if (room.night_off and data.asleep) else min(house.night_level, level)
             trace.append(("sunrise_other_room", level))
 
     # 8. Night override — a fixed level, not a scaling.
@@ -440,8 +441,8 @@ def solve(
         trace.append(("unoccupied", True))
 
     # 12. Min cutoff — below it, off rather than a useless glow.
-    cutoff = 0 if ambience_open else house.min_cutoff
-    if 0 < level < cutoff and mode not in (Mode.AWAY, Mode.SUNRISE):
+    cutoff = 0 if (ambience_open or data.bedtime_dwell_active or mode is Mode.NIGHT) else house.min_cutoff
+    if 0 < level < cutoff and mode not in (Mode.AWAY, Mode.SUNRISE, Mode.NIGHT) and not data.bedtime_dwell_active:
         level = 0
         trace.append(("below_cutoff", cutoff))
 

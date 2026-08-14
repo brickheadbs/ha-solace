@@ -23,7 +23,7 @@ const HELP = {
   zoneBias:
     "A layer between the room and its individual lights. Use it when part of a room wants a different level from the rest.",
   ambience:
-    "A low-light floor for this room while you are awake and it is dark outside. It only ever raises the level, never lowers it. 0 means this room follows the house-wide floor.",
+    "A resting glow floor for this room while you are awake and it is dark outside. Replaces off — never lowers a light that is already active. 0 means this room follows the house-wide setting.",
   diminish:
     "Kitchen behaviour. When the near sensor reads clear the lights reduce by this much and stay there — they never switch off from diminish alone. 0 means no effect.",
   perLight:
@@ -48,17 +48,20 @@ export class SolTabHome extends LitElement {
   /** Local echo so a dragged slider tracks the thumb rather than the round trip. */
   @state() private draft: Record<string, number> = {};
   private timer?: number;
+  private _debounceTimers: Map<string, number> = new Map();
 
   connectedCallback() {
     super.connectedCallback();
-    // The manual countdown is per-second, and the coordinator ticks in minutes — so the
-    // countdown has to be driven locally or it would jump in 2-minute steps.
     this.timer = window.setInterval(() => this.requestUpdate(), 1000);
   }
 
   disconnectedCallback() {
     super.disconnectedCallback();
     if (this.timer) clearInterval(this.timer);
+    for (const t of this._debounceTimers.values()) {
+      clearTimeout(t);
+    }
+    this._debounceTimers.clear();
   }
 
   static styles = [
@@ -154,12 +157,23 @@ export class SolTabHome extends LitElement {
         align-items: center;
         gap: 10px;
       }
-      .room-head ha-icon {
-        --mdc-icon-size: 21px;
+      .room-head .room-icon {
+        --mdc-icon-size: 26px;
         color: var(--sol-faint);
+        transition: color 0.15s ease;
       }
-      .room-head ha-icon.lit {
+      .room-head .room-icon.lit {
         color: var(--sol-amber);
+      }
+      .room-head .motion-icon {
+        --mdc-icon-size: 14px;
+        color: var(--sol-faint);
+        margin-left: -4px;
+        margin-right: 4px;
+        transition: color 0.15s ease;
+      }
+      .room-head .motion-icon.motion-active {
+        color: var(--sol-amber, #ffb74d);
       }
       .room-head .title {
         flex: 1;
@@ -180,10 +194,10 @@ export class SolTabHome extends LitElement {
 
       .status {
         display: flex;
-        gap: 18px;
+        gap: 24px;
         background: var(--sol-block);
         border-radius: var(--sol-r-block);
-        padding: 9px 12px;
+        padding: 9px 14px;
         margin-top: 11px;
       }
       .status div {
@@ -194,10 +208,6 @@ export class SolTabHome extends LitElement {
       .status .v {
         font-size: 13px;
         font-variant-numeric: tabular-nums;
-      }
-      .status .v.amber {
-        color: var(--sol-amber);
-        font-weight: 500;
       }
 
       .manual-block {
@@ -246,6 +256,22 @@ export class SolTabHome extends LitElement {
         display: flex;
         align-items: center;
         gap: 5px;
+      }
+
+      .tape-measure {
+        display: flex;
+        flex-direction: column;
+        flex: 1;
+        min-width: 0;
+        position: relative;
+      }
+      .tape-ticks {
+        display: flex;
+        justify-content: space-between;
+        font-size: 9.5px;
+        color: var(--sol-text-4);
+        padding: 2px 2px 0;
+        font-variant-numeric: tabular-nums;
       }
 
       .disclose {
@@ -394,15 +420,43 @@ export class SolTabHome extends LitElement {
   }
 
   private async pushHouse(key: string, value: number, final: boolean) {
-    this.draft = { ...this.draft, [this.key("h", key)]: value };
-    await setHouse(this.hass, { [key]: value });
-    if (final) this.clearDraft(this.key("h", key));
+    const draftKey = this.key("h", key);
+    this.draft = { ...this.draft, [draftKey]: value };
+
+    const existing = this._debounceTimers.get(draftKey);
+    if (existing) clearTimeout(existing);
+
+    if (final) {
+      this._debounceTimers.delete(draftKey);
+      await setHouse(this.hass, { [key]: value });
+      this.clearDraft(draftKey);
+    } else {
+      const timer = window.setTimeout(async () => {
+        this._debounceTimers.delete(draftKey);
+        await setHouse(this.hass, { [key]: value });
+      }, 1000);
+      this._debounceTimers.set(draftKey, timer);
+    }
   }
 
   private async pushRoom(id: string, key: string, value: number | boolean, final = true) {
-    if (typeof value === "number") this.draft = { ...this.draft, [this.key(id, key)]: value };
-    await setRoom(this.hass, id, { [key]: value });
-    if (final) this.clearDraft(this.key(id, key));
+    const draftKey = this.key(id, key);
+    if (typeof value === "number") this.draft = { ...this.draft, [draftKey]: value };
+
+    const existing = this._debounceTimers.get(draftKey);
+    if (existing) clearTimeout(existing);
+
+    if (final || typeof value === "boolean") {
+      this._debounceTimers.delete(draftKey);
+      await setRoom(this.hass, id, { [key]: value });
+      if (typeof value === "number") this.clearDraft(draftKey);
+    } else {
+      const timer = window.setTimeout(async () => {
+        this._debounceTimers.delete(draftKey);
+        await setRoom(this.hass, id, { [key]: value });
+      }, 1000);
+      this._debounceTimers.set(draftKey, timer);
+    }
   }
 
   private async pushLight(id: string, entity: string, key: string, value: number | null) {
@@ -457,9 +511,6 @@ export class SolTabHome extends LitElement {
     const gamma = this.snap.house.gamma ?? 2.39;
     const key = this.key("h", "bias_stops");
     const value = this.local(key, this.snap.house.bias_stops ?? 0);
-    // The consequence uses the brightest room's current level as the reference point —
-    // a house-wide "→ level N" has to be *some* room, and the brightest is the one the
-    // eye is actually judging.
     const ref = Math.max(0, ...this.snap.rooms.map((r) => r.level ?? 0));
     return html`<div class="house">
       <div class="name">
@@ -471,7 +522,7 @@ export class SolTabHome extends LitElement {
         .value=${value}
         .min=${-2}
         .max=${2}
-        .step=${0.25}
+        .step=${0.1}
         @value-changed=${(e: CustomEvent) =>
           this.pushHouse("bias_stops", e.detail.value, e.detail.final)}
       ></sol-slider>
@@ -506,7 +557,7 @@ export class SolTabHome extends LitElement {
           .value=${adj}
           .min=${-2}
           .max=${2}
-          .step=${0.25}
+          .step=${0.1}
           @value-changed=${(e: CustomEvent) => {
             this.draft = { ...this.draft, [key]: e.detail.value };
             this.pushLight(room.subentry_id, light.entity_id, "bias_stops", e.detail.value);
@@ -538,9 +589,6 @@ export class SolTabHome extends LitElement {
 
   /**
    * Per-light rows, grouped under their zone.
-   *
-   * An area with no zones renders a flat list exactly as before — the grouping only
-   * appears once there is something to group.
    */
   private renderGrouped(room: RoomRow) {
     if (!room.zones.length) return room.lights.map((l) => this.renderLight(room, l));
@@ -563,9 +611,9 @@ export class SolTabHome extends LitElement {
               .value=${zone.bias_stops}
               .min=${-2}
               .max=${2}
-              .step=${0.25}
+              .step=${0.1}
               @value-changed=${(e: CustomEvent) =>
-                this.pushZone(room, zone, { bias_stops: e.detail.value }, e.detail.final)}
+                this.pushZone(room, zone, { bias_stops: e.detail.value })}
             ></sol-slider>
             <span class="zv tab-num">${stopLabel(zone.bias_stops)}</span>
             ${zone.presence.length
@@ -599,14 +647,10 @@ export class SolTabHome extends LitElement {
   private async pushZone(
     room: RoomRow,
     zone: ZoneRow,
-    patch: Partial<ZoneRow>,
-    final = true
+    patch: Partial<ZoneRow>
   ) {
-    const next = room.zones.map((z) =>
-      z.zone_id === zone.zone_id ? { ...z, ...patch } : z
-    );
+    const next = room.zones.map((z) => (z.zone_id === zone.zone_id ? { ...z, ...patch } : z));
     await setZones(this.hass, room.subentry_id, next);
-    if (!final) return;
   }
 
   private renderRoom(room: RoomRow) {
@@ -620,11 +664,21 @@ export class SolTabHome extends LitElement {
     const zoneKey = this.key(room.subentry_id, "zone_bias_stops");
     const zone = this.local(zoneKey, Number(room.settings.zone_bias_stops ?? 0));
 
+    const ambKey = this.key(room.subentry_id, "ambience_level");
+    const ambVal = this.local(ambKey, Number(room.settings.ambience_level ?? 0));
+
     return html`<div class="room">
       <div class="room-head">
-        <ha-icon class=${lit ? "lit" : ""} icon=${this.roomIcon(room.name)}></ha-icon>
+        <ha-icon class="room-icon ${lit ? "lit" : ""}" icon=${this.roomIcon(room.name)}></ha-icon>
         <div class="title">
-          <h3>${room.name}</h3>
+          <div style="display:flex;align-items:center;gap:4px">
+            <h3>${room.name}</h3>
+            <ha-icon
+              class="motion-icon ${room.occupied ? "motion-active" : ""}"
+              icon="mdi:motion-sensor"
+              title="${room.occupied ? "Occupied" : "Clear"}"
+            ></ha-icon>
+          </div>
           <div class="sub">
             ${room.lights.length} light${room.lights.length === 1 ? "" : "s"} ·
             ${room.occupied ? "occupied" : "clear"} ·
@@ -681,10 +735,6 @@ export class SolTabHome extends LitElement {
               >
             </div>
             <div>
-              <span class="eyebrow">Settled</span>
-              <span class="v amber tab-num">${room.level ?? "—"}</span>
-            </div>
-            <div>
               <span class="eyebrow">Output</span>
               <span class="v tab-num"
                 >${room.level === null ? "—" : `${lightPct(room.level, gamma)} %`}</span
@@ -702,7 +752,7 @@ export class SolTabHome extends LitElement {
           .value=${bias}
           .min=${-2}
           .max=${2}
-          .step=${0.25}
+          .step=${0.1}
           @value-changed=${(e: CustomEvent) =>
             this.pushRoom(room.subentry_id, "bias_stops", e.detail.value, e.detail.final)}
         ></sol-slider>
@@ -710,24 +760,51 @@ export class SolTabHome extends LitElement {
         <span class="cons">${consequence(room.level, gamma)}</span>
       </div>
 
+      <!-- Tape-measure Ambience Slider -->
       <div class="bias-row">
-        <span class="lab">Zone bias <sol-help .text=${HELP.zoneBias}></sol-help></span>
-        <sol-slider
-          .value=${zone}
-          .min=${-1}
-          .max=${1}
-          .step=${0.25}
-          @value-changed=${(e: CustomEvent) =>
-            this.pushRoom(room.subentry_id, "zone_bias_stops", e.detail.value, e.detail.final)}
-        ></sol-slider>
-        <span class="readout tab-num">${stopLabel(zone)}</span>
+        <span class="lab">Ambience <sol-help .text=${HELP.ambience}></sol-help></span>
+        <div class="tape-measure">
+          <sol-slider
+            tone="cyan"
+            noReset
+            .value=${ambVal}
+            .min=${0}
+            .max=${254}
+            .step=${1}
+            @value-changed=${(e: CustomEvent) =>
+              this.pushRoom(room.subentry_id, "ambience_level", e.detail.value, e.detail.final)}
+          ></sol-slider>
+          <div class="tape-ticks">
+            <span>0%</span>
+            <span>10%</span>
+            <span>25%</span>
+            <span>50%</span>
+            <span>75%</span>
+            <span>100%</span>
+          </div>
+        </div>
+        <span class="readout tab-num">
+          ${ambVal === 0 ? "Follows house" : `L${ambVal} (${lightPct(ambVal, gamma)} %)`}
+        </span>
       </div>
+
+      ${room.zones && room.zones.length > 1
+        ? html`<div class="bias-row">
+            <span class="lab">Zone bias <sol-help .text=${HELP.zoneBias}></sol-help></span>
+            <sol-slider
+              .value=${zone}
+              .min=${-1}
+              .max=${1}
+              .step=${0.1}
+              @value-changed=${(e: CustomEvent) =>
+                this.pushRoom(room.subentry_id, "zone_bias_stops", e.detail.value, e.detail.final)}
+            ></sol-slider>
+            <span class="readout tab-num">${stopLabel(zone)}</span>
+          </div>`
+        : nothing}
 
       ${room.has_near && !room.zones.some((z) => z.presence.length)
         ? html`<div class="bias-row">
-            <!-- Only for an UNDIVIDED area. Once zones carry their own presence, this
-                 row and the per-zone ones would be two diminish controls with different
-                 meanings sitting on the same card. -->
             <span class="lab">Diminish <sol-help .text=${HELP.diminish}></sol-help></span>
             <span class="pill ${room.near_clear ? "off" : "on"}"
               >near ${room.near_clear ? "clear" : "occupied"}</span
@@ -773,18 +850,6 @@ export class SolTabHome extends LitElement {
         : nothing}
 
       <div class="footer">
-        <span class="lab">Ambience <sol-help flip .text=${HELP.ambience}></sol-help></span>
-        <sol-number
-          .value=${Number(room.settings.ambience_level ?? 0)}
-          .min=${0}
-          .max=${254}
-          .width=${56}
-          suffix=${Number(room.settings.ambience_level ?? 0) === 0
-            ? `follows house (${this.snap.house.ambience_level ?? 0})`
-            : `= ${lightPct(Number(room.settings.ambience_level), gamma)} % light`}
-          @value-changed=${(e: CustomEvent) =>
-            this.pushRoom(room.subentry_id, "ambience_level", e.detail.value)}
-        ></sol-number>
         <span class="grow"></span>
         <span class="lab">
           <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
