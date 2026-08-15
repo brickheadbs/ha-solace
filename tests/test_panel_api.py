@@ -268,3 +268,60 @@ async def test_families_are_counted_from_live_lights_not_a_hardcoded_list(
     assert counted == len(lights)
     families = {f["family"] for f in snap["fade"]["families"]}
     assert families == {light["family"] for light in lights}
+
+
+async def test_ws_set_curve_timelines_persist_and_update(
+    hass: HomeAssistant, entry, hass_ws_client: WebSocketGenerator
+) -> None:
+    """Test curve WebSocket setters update config entry and live snapshot."""
+    await _setup(hass, entry)
+    client = await hass_ws_client(hass)
+
+    # 1. Set Lux Curve
+    await client.send_json(
+        {
+            "id": _id(),
+            "type": "solace/set_lux_curve",
+            "lux_curve": [
+                {"lux": 2500, "demand_pct": 0},
+                {"lux": 0, "demand_pct": 100},
+                {"lux": 50, "demand_pct": 90},
+            ],
+        }
+    )
+    assert (await client.receive_json())["success"]
+    await hass.async_block_till_done()
+
+    # 2. Set Brightness Timeline
+    await client.send_json(
+        {
+            "id": _id(),
+            "type": "solace/set_brightness_timeline",
+            "brightness_timeline": [
+                {"hour": 22.5, "level": 50},
+                {"hour": 7.0, "level": 180},
+            ],
+        }
+    )
+    assert (await client.receive_json())["success"]
+    await hass.async_block_till_done()
+
+    # 3. Set Colour Timeline
+    await client.send_json(
+        {
+            "id": _id(),
+            "type": "solace/set_colour_timeline",
+            "colour_timeline": [
+                {"hour": 23.0, "kelvin": 2200},
+                {"hour": 12.0, "kelvin": 4000},
+            ],
+        }
+    )
+    assert (await client.receive_json())["success"]
+    await hass.async_block_till_done()
+
+    # Verify snapshot
+    snap = await _get(client)
+    assert [p["lux"] for p in snap["lux_curve"]] == [0.0, 50.0, 2500.0]
+    assert [p["hour"] for p in snap["brightness_timeline"]] == [7.0, 22.5]
+    assert [p["hour"] for p in snap["colour_timeline"]] == [12.0, 23.0]

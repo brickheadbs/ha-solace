@@ -36,9 +36,12 @@ from .colour import resolve_colour
 from .const import (
     CONF_ALARM_ENTITY,
     CONF_AWAY_ENTITY,
+    CONF_BRIGHTNESS_TIMELINE,
+    CONF_COLOUR_TIMELINE,
     CONF_DND_ENTITY,
     CONF_DND_SLEEP_STATES,
     CONF_LIGHTS,
+    CONF_LUX_CURVE,
     CONF_LUX_SENSOR,
     CONF_NEAR_PRESENCE,
     CONF_PER_LIGHT,
@@ -66,6 +69,7 @@ from .models import (
     RampPoint,
     RoomSettings,
     Solution,
+    SplinePoint,
     ZoneSettings,
 )
 from .remotes import RemoteDispatcher
@@ -230,6 +234,30 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         fields["ramp"] = tuple(
             RampPoint(hour=float(p["hour"]), stops=float(p["stops"])) for p in ramp
         )
+        if CONF_LUX_CURVE in options and options[CONF_LUX_CURVE]:
+            fields["lux_curve"] = tuple(
+                SplinePoint(
+                    float(p.get("lux", p.get("x", 0.0))),
+                    float(p.get("demand_pct", p.get("demand", p.get("y", 0.0)))),
+                )
+                for p in options[CONF_LUX_CURVE]
+            )
+        if CONF_BRIGHTNESS_TIMELINE in options and options[CONF_BRIGHTNESS_TIMELINE]:
+            fields["brightness_timeline"] = tuple(
+                SplinePoint(
+                    float(p.get("hour", p.get("x", 0.0))),
+                    float(p.get("level", p.get("y", 254.0))),
+                )
+                for p in options[CONF_BRIGHTNESS_TIMELINE]
+            )
+        if CONF_COLOUR_TIMELINE in options and options[CONF_COLOUR_TIMELINE]:
+            fields["colour_timeline"] = tuple(
+                SplinePoint(
+                    float(p.get("hour", p.get("x", 0.0))),
+                    float(p.get("kelvin", p.get("y", 2200.0))),
+                )
+                for p in options[CONF_COLOUR_TIMELINE]
+            )
         return HouseSettings(**fields)
 
     def room_settings(self, subentry: ConfigSubentry) -> RoomSettings:
@@ -238,16 +266,22 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
             name=subentry.title,
             bias_stops=float(data.get("bias_stops", 0.0)),
             zone_bias_stops=float(data.get("zone_bias_stops", 0.0)),
-            diminish_pct=float(data.get("diminish_pct", 0.0)),
+            diminish_stops=float(data.get("diminish_stops", 0.0)),
+            diminish_pct=float(data.get("diminish_pct", 40.0 if data.get("diminish_stops", 0.0) <= 0 and "diminish_pct" not in data else data.get("diminish_pct", 0.0))),
             ambience_level=int(data.get("ambience_level", 0)),
             night_off=bool(data.get("night_off", False)),
             manual_hold_minutes=float(data.get("manual_hold_minutes", 30.0)),
+            manual_mode=bool(data.get("manual_mode", False)),
+            sunrise_enabled=bool(data.get("sunrise_enabled", False)),
+            sunset_enabled=bool(data.get("sunset_enabled", False)),
+            bedtime_dwell_enabled=bool(data.get("bedtime_dwell_enabled", False)),
             zones=tuple(
                 ZoneSettings(
                     zone_id=str(z.get("zone_id") or z.get("name") or ""),
                     name=str(z.get("name") or z.get("zone_id") or "Zone"),
                     lights=tuple(z.get("lights") or ()),
                     bias_stops=float(z.get("bias_stops", 0.0)),
+                    diminish_stops=float(z.get("diminish_stops", 0.0)),
                     diminish_pct=float(z.get("diminish_pct", 0.0)),
                 )
                 for z in (data.get(CONF_ZONES) or ())
@@ -553,23 +587,32 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
 
         if solution.level <= 0:
             if current > 0:
-                await self.writer.async_turn_off(entity_id, house.transition_off_s)
+                await self.writer.async_turn_off(entity_id, house.transition_clear_to_off_s)
                 room.last_written[entity_id] = 0
             return
 
         was_off = current == 0
+        last_src = room.last_source.get(entity_id)
+
         if was_off:
-            transition = house.transition_on_s
+            if solution.source == "ambience":
+                transition = house.transition_wake_l3_s
+            else:
+                transition = house.transition_turn_on_l1_s
+        elif self._tuning:
+            # A slider is being dragged in the dashboard.
+            transition = house.transition_manual_drag_s
+        elif solution.mode is Mode.NIGHT and room.last_mode is not Mode.NIGHT:
+            transition = house.transition_night_s
+        elif solution.source == "diminish" and last_src == "demand":
+            transition = house.transition_diminish_l2_s
+        elif solution.source == "ambience" and last_src in ("demand", "diminish"):
+            transition = house.transition_clear_to_l3_s
         elif solution.mode is not room.last_mode:
             transition = house.transition_mode_s
-        elif self._tuning:
-            # A slider is being dragged. This is the fourth transition, and the whole
-            # reason it exists: a 10-second glide per drag step is unusable.
-            transition = house.transition_setting_s
         else:
-            # Tracking moves are small by construction (rate limit + dead zone), so they
-            # reuse the mode-change glide rather than adding a fifth knob.
-            transition = house.transition_mode_s
+            # 5m tracking / steady-state lux morphing
+            transition = house.transition_tracking_s
 
         # An OFF bulb rejects a colour command — it wakes at its old colour. So colour
         # has to ride in the same turn-on, and only then.
