@@ -739,7 +739,9 @@ export class SolTabSettings extends LitElement {
                   viewBox="0 0 ${VW} ${VH}"
                   @click="${(e: MouseEvent) => this.handleSvgClick("sunrise", e)}"
                   @mousemove="${(e: MouseEvent) => {
-                    const rect = e.currentTarget.getBoundingClientRect();
+                    const target = e.currentTarget as SVGSVGElement | null;
+                    if (!target) return;
+                    const rect = target.getBoundingClientRect();
                     const px = (e.clientX - rect.left) * (VW / rect.width);
                     const py = (e.clientY - rect.top) * (VH / rect.height);
                     if (px >= X0 && px <= X1 && py >= Y0 && py <= Y1) {
@@ -973,7 +975,9 @@ export class SolTabSettings extends LitElement {
                   viewBox="0 0 ${VW} ${VH}"
                   @click="${(e: MouseEvent) => this.handleSvgClick("sunset", e)}"
                   @mousemove="${(e: MouseEvent) => {
-                    const rect = e.currentTarget.getBoundingClientRect();
+                    const target = e.currentTarget as SVGSVGElement | null;
+                    if (!target) return;
+                    const rect = target.getBoundingClientRect();
                     const px = (e.clientX - rect.left) * (VW / rect.width);
                     const py = (e.clientY - rect.top) * (VH / rect.height);
                     if (px >= X0 && px <= X1 && py >= Y0 && py <= Y1) {

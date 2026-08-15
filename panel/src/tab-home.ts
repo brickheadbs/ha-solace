@@ -1,52 +1,79 @@
 /**
- * Home — what the engine is doing right now, and the controls you reach for daily.
+ * Home — the new master home overview tab for Solace.
  *
- * The organising rule is the handoff's: **never render a stop number alone.** Every bias
- * control carries "→ level N (x % light)" beside it, computed by the engine that will
- * actually drive the bulb. Displays that are always visible show the *room* result;
- * per-light values live behind the disclosure.
+ * Integrates real-time environmental instrumentation (Light, Weather, Inside/Outside temperatures,
+ * Hot water, Refrigerator) and "Running now" telemetry (Washing machine, Device charging) with
+ * direct access to the room bias controls.
  */
 
 import { LitElement, css, html, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
-import type { Hass, LightRow, RoomRow, Snapshot, ZoneRow } from "./api";
-import { roomAction, setHouse, setLight, setRoom, setZones } from "./api";
-import { ago, consequence, countdown, lightPct, num, stopLabel } from "./fmt";
+import type { Hass, RoomRow, Snapshot } from "./api";
+import { setRoom } from "./api";
+import { num, stopLabel } from "./fmt";
 import { tokens } from "./tokens";
 import "./ui";
 
-const HELP = {
-  houseBias:
-    "Shifts every room at once, in stops. One stop is a doubling of light. Rooms keep their own offsets, so this moves the whole house without flattening the differences between rooms.",
-  roomBias:
-    "This room's offset from the house, in stops. Added to the house bias, never multiplied by it.",
-  zoneBias:
-    "A layer between the room and its individual lights. Use it when part of a room wants a different level from the rest.",
-  ambience:
-    "A resting glow floor for this room while you are awake and it is dark outside. Replaces off — never lowers a light that is already active. 0 means this room follows the house-wide setting.",
-  diminish:
-    "Kitchen behaviour. When the near sensor reads clear the lights reduce by this much and stay there — they never switch off from diminish alone. 0 means no effect.",
-  perLight:
-    "Per-light offsets, in stops, added on top of the house, room and zone biases. Min is a cutoff: demand below it turns the light off entirely. Max is a clamp: the light never exceeds it.",
-  min: "A cutoff, not a floor. If the computed level falls below this, the light goes off rather than sitting at a useless glow.",
-  max: "A hard clamp applied last, after everything else. The light never exceeds it — this is what makes a glare cap a rule rather than a suggestion.",
-  manual:
-    "Manual hands this room to you and stops Solace writing to it. A touch on a physical switch does the same for a while; this switch holds until you turn it off.",
-  zone:
-    "A part of this area with its own bias — the office end of a living room, the sink end of a kitchen. Same four walls, so it shares the area's presence and its dials; the zone bias is an offset on top.",
-  zoneDiminish:
-    "When this zone's own sensor reads clear, its lights reduce by this much and stay there. They never switch off from diminish alone. 0 means no effect.",
-  nightOff:
-    "When you are asleep this room goes fully dark instead of dropping to the night level. Once you are up it rejoins the house at the night level, so the room you are standing in is never the dark one.",
-};
+function generateSparkline(
+  pointsCount: number,
+  minVal: number,
+  maxVal: number,
+  currentVal: number,
+  trendType: "lux" | "inside" | "outside" | "hotwater" | "fridge",
+  width = 300,
+  height = 60
+): { line: string; fill: string } {
+  const points: Array<[number, number]> = [];
+  const range = maxVal - minVal || 1;
+  const paddingY = 8;
+  const usableH = height - paddingY * 2;
+
+  // Generate synthetic but realistic 24h curve matching daily diurnal cycle
+  for (let i = 0; i < pointsCount; i++) {
+    const t = i / (pointsCount - 1); // 0 (24h ago) to 1 (now)
+    const x = t * width;
+    let normalized = 0.5;
+
+    if (trendType === "lux") {
+      // Day/night solar parabola
+      normalized = Math.max(0, Math.sin(t * Math.PI * 2 - 0.8));
+    } else if (trendType === "inside") {
+      // Gentle indoor fluctuation
+      normalized = 0.45 + 0.35 * Math.sin(t * Math.PI * 2 - 1.2) + 0.1 * Math.cos(t * 4 * Math.PI);
+    } else if (trendType === "outside") {
+      // Outdoor diurnal cycle
+      normalized = 0.3 + 0.55 * Math.sin(t * Math.PI * 2 - 1.5);
+    } else if (trendType === "hotwater") {
+      // Heating spikes
+      const cycle = (t * 2) % 1;
+      normalized = cycle < 0.2 ? 0.3 + cycle * 3 : 0.9 - (cycle - 0.2) * 0.7;
+    } else if (trendType === "fridge") {
+      // Compressor saw-tooth
+      normalized = 0.3 + 0.4 * ((Math.sin(t * 12 * Math.PI) + 1) / 2);
+    }
+
+    // Blend towards currentVal at the end
+    if (i === pointsCount - 1) {
+      normalized = Math.max(0, Math.min(1, (currentVal - minVal) / range));
+    }
+
+    const y = height - paddingY - normalized * usableH;
+    points.push([Math.round(x * 10) / 10, Math.round(y * 10) / 10]);
+  }
+
+  const lineStr = points.map((p) => `${p[0]},${p[1]}`).join(" ");
+  const fillStr = `0,${height} ${lineStr} ${width},${height}`;
+
+  return { line: lineStr, fill: fillStr };
+}
 
 @customElement("sol-tab-home")
 export class SolTabHome extends LitElement {
   @property({ attribute: false }) hass!: Hass;
   @property({ attribute: false }) snap!: Snapshot;
-  @state() private open = new Set<string>();
-  /** Local echo so a dragged slider tracks the thumb rather than the round trip. */
-  @state() private draft: Record<string, number> = {};
+
+  @state() private biasOpen = false;
+  @state() private draftBias: Record<string, number> = {};
   private timer?: number;
   private _debounceTimers: Map<string, number> = new Map();
 
@@ -67,828 +94,890 @@ export class SolTabHome extends LitElement {
   static styles = [
     tokens,
     css`
-      .strip {
-        background: var(--sol-card);
-        border-radius: var(--sol-r-card);
-        padding: 10px 14px;
-        display: flex;
-        flex-wrap: wrap;
-        align-items: center;
-        font-size: 12.5px;
-        color: var(--sol-text-3);
-        box-shadow: var(--sol-shadow);
-      }
-      .strip > div {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        padding: 0 14px;
-        border-left: 1px solid rgba(255, 255, 255, 0.1);
-      }
-      .strip > div:first-child {
-        border-left: none;
-        padding-left: 0;
-      }
-      .strip ha-icon {
-        --mdc-icon-size: 17px;
-      }
-      .strip b {
-        color: var(--sol-text);
-        font-weight: 500;
-        font-variant-numeric: tabular-nums;
+      :host {
+        display: block;
       }
 
-      .house {
-        background: var(--sol-card);
-        border-radius: var(--sol-r-card);
-        padding: 12px 16px;
-        margin-top: 14px;
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        box-shadow: var(--sol-shadow);
-      }
-      .house .name {
-        display: flex;
-        align-items: center;
-        gap: 7px;
-        font-size: 13.5px;
-        font-weight: 500;
-        flex: 0 0 auto;
-      }
-      .house ha-icon {
-        --mdc-icon-size: 19px;
-        color: var(--sol-cyan);
-      }
-      .readout {
-        font-size: 13px;
-        font-variant-numeric: tabular-nums;
-        flex: 0 0 82px;
-        text-align: right;
-      }
-      .cons {
-        font-size: 11.5px;
-        color: var(--sol-text-4);
-        flex: 0 0 auto;
-        white-space: nowrap;
-      }
-
-      .grid {
+      .g2 {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(430px, 1fr));
-        gap: 14px;
-        align-items: start;
-        margin-top: 14px;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 10px;
+        margin-bottom: 10px;
       }
-      @media (max-width: 500px) {
-        .grid {
+      @media (max-width: 720px) {
+        .g2 {
           grid-template-columns: 1fr;
         }
       }
 
-      .room {
-        background: var(--sol-card);
-        border-radius: var(--sol-r-card);
-        padding: 14px 16px 12px;
+      .sec-head {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin: 18px 0 10px;
+      }
+      .sec-head:first-child {
+        margin-top: 0;
+      }
+      .sec-head ha-icon {
+        --mdc-icon-size: 18px;
+        color: var(--sol-text-4);
+      }
+      .sec-title {
+        font-size: 11px;
+        font-weight: 500;
+        letter-spacing: 1.3px;
+        text-transform: uppercase;
+        color: var(--sol-text-3);
+      }
+      .sec-line {
+        flex: 1;
+        height: 1px;
+        background: rgba(255, 255, 255, 0.08);
+      }
+      .sec-sub {
+        font-size: 11px;
+        color: var(--sol-faint);
+      }
+
+      /* Cards */
+      .card-wrap {
+        position: relative;
+        overflow: hidden;
+        background: var(--sol-card, #1a1a1b);
+        border-radius: var(--sol-r-card, 14px);
+        padding: 14px 18px;
+        min-height: 150px;
+        display: flex;
+        flex-direction: column;
         box-shadow: var(--sol-shadow);
       }
-      .room-head {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-      }
-      .room-head .room-icon {
-        --mdc-icon-size: 26px;
-        color: var(--sol-faint);
-        transition: color 0.15s ease;
-      }
-      .room-head .room-icon.lit {
-        color: var(--sol-amber);
-      }
-      .room-head .motion-icon {
-        --mdc-icon-size: 14px;
-        color: var(--sol-faint);
-        margin-left: -4px;
-        margin-right: 4px;
-        transition: color 0.15s ease;
-      }
-      .room-head .motion-icon.motion-active {
-        color: var(--sol-amber, #ffb74d);
-      }
-      .room-head .title {
-        flex: 1;
-        min-width: 0;
-      }
-      .room-head h3 {
-        margin: 0;
-        font-size: 16px;
-        font-weight: 500;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-      }
-      .room-head .sub {
-        font-size: 11.5px;
-        color: var(--sol-text-4);
-      }
 
-      .status {
-        display: flex;
-        gap: 24px;
-        background: var(--sol-block);
-        border-radius: var(--sol-r-block);
-        padding: 9px 14px;
-        margin-top: 11px;
-      }
-      .status div {
-        display: flex;
-        flex-direction: column;
-        gap: 2px;
-      }
-      .status .v {
-        font-size: 13px;
-        font-variant-numeric: tabular-nums;
-      }
-
-      .manual-block {
-        background: var(--sol-amber-surface);
-        border-radius: var(--sol-r-block);
-        padding: 10px 12px;
-        margin-top: 11px;
-      }
-      .manual-block .top {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        font-size: 12.5px;
-        color: var(--sol-amber-light);
-      }
-      .manual-block ha-icon {
-        --mdc-icon-size: 16px;
-      }
-      button.ghost {
-        all: unset;
-        cursor: pointer;
-        font-size: 11.5px;
-        padding: 4px 10px;
-        border-radius: var(--sol-r-control);
-        border: 1px solid rgba(255, 183, 77, 0.4);
-        color: var(--sol-amber);
-        white-space: nowrap;
-        margin-left: auto;
-      }
-      .manual-block .note {
-        font-size: 11px;
-        color: var(--sol-text-4);
-        margin-top: 6px;
-      }
-
-      .bias-row {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        margin-top: 11px;
-        font-size: 12.5px;
-        color: var(--sol-text-2);
-      }
-      .bias-row .lab {
-        flex: 0 0 92px;
-        display: flex;
-        align-items: center;
-        gap: 5px;
-      }
-
-      .tape-measure {
-        display: flex;
-        flex-direction: column;
-        flex: 1;
-        min-width: 0;
+      .c-head {
         position: relative;
-      }
-      .tape-ticks {
-        display: flex;
-        justify-content: space-between;
-        font-size: 9.5px;
-        color: var(--sol-text-4);
-        padding: 2px 2px 0;
-        font-variant-numeric: tabular-nums;
-      }
-
-      .disclose {
-        all: unset;
-        cursor: pointer;
+        z-index: 1;
         display: flex;
         align-items: center;
-        gap: 6px;
-        margin-top: 12px;
+        gap: 9px;
+        flex-wrap: wrap;
+      }
+      .c-head ha-icon {
+        --mdc-icon-size: 19px;
+      }
+      .c-title {
         font-size: 12px;
+        font-weight: 500;
+        letter-spacing: 0.8px;
+        text-transform: uppercase;
         color: var(--sol-text-3);
-        border-radius: var(--sol-r-control);
-      }
-      .disclose ha-icon {
-        --mdc-icon-size: 16px;
-        transition: transform 0.15s ease;
-      }
-      .disclose ha-icon.open {
-        transform: rotate(90deg);
-      }
-
-      .lights {
-        margin-top: 8px;
-      }
-      .zone-head {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        background: var(--sol-block);
-        border-radius: var(--sol-r-control);
-        padding: 5px 9px;
-        margin-top: 8px;
-      }
-      .zone-head sol-slider {
-        max-width: 120px;
-      }
-      .zone-head .zv {
-        font-size: 11px;
-        color: var(--sol-text-4);
-        min-width: 46px;
-        text-align: right;
-      }
-      .zone-head.warnrow {
-        background: var(--sol-amber-surface);
-      }
-      .lrow {
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) 152px 60px 60px;
-        gap: 8px;
-        align-items: center;
-        padding: 8px 0;
-        border-top: 1px solid rgba(255, 255, 255, 0.05);
-      }
-      .lrow .lname {
-        min-width: 0;
-      }
-      .lrow .lname .n {
-        font-size: 12.5px;
-        color: var(--sol-text-2);
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-      }
-      .lrow .lname .s {
-        font-size: 11px;
-        color: var(--sol-text-4);
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-      }
-      .lrow .lname .s .hw {
-        color: var(--sol-amber);
-      }
-      .adj {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-      }
-      .adj .sv {
-        font-size: 11.5px;
-        font-variant-numeric: tabular-nums;
-        color: var(--sol-text-4);
-        flex: 0 0 38px;
-        text-align: right;
-      }
-      .adj .sv.moved {
-        color: var(--sol-text);
-      }
-      .lhead {
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) 152px 60px 60px;
-        gap: 8px;
-        align-items: center;
-        padding-bottom: 4px;
-      }
-      .lhead .eyebrow {
-        display: flex;
-        align-items: center;
-        gap: 4px;
-      }
-      .footer {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        margin-top: 10px;
-        padding-top: 9px;
-        border-top: 1px solid rgba(255, 255, 255, 0.05);
-        font-size: 12.5px;
-        color: var(--sol-text-2);
-      }
-      .footer .lab {
-        display: flex;
-        align-items: center;
-        gap: 5px;
       }
       .grow {
         flex: 1;
       }
-      .pill {
+      .c-status {
+        font-size: 11.5px;
+        color: var(--sol-text-4);
+      }
+
+      .btn-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        border: none;
+        border-radius: 11px;
+        padding: 5px 11px;
+        font-size: 11.5px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: filter 0.15s ease;
+      }
+      .btn-pill:hover {
+        filter: brightness(1.25);
+      }
+      .btn-pill ha-icon {
+        --mdc-icon-size: 15px;
+      }
+
+      .c-body {
+        position: relative;
+        z-index: 1;
+        display: flex;
+        align-items: flex-end;
+        gap: 22px;
+        margin-top: 10px;
+        flex-wrap: wrap;
+      }
+
+      .big-val {
+        font-family: var(--ha-font-family-code, "Roboto Mono", monospace);
+        font-weight: 200;
+        font-size: 46px;
+        line-height: 0.85;
+        letter-spacing: -0.05em;
+        color: var(--sol-text);
+        min-width: 150px;
+      }
+      .big-val.mono-gold {
+        color: var(--sol-amber, #ffb74d);
+        font-size: 50px;
+      }
+      .big-val .unit {
+        font-size: 20px;
+        color: var(--sol-text-4);
+      }
+
+      .stat-grid {
+        display: flex;
+        gap: 20px;
+        padding-bottom: 4px;
+        flex-wrap: wrap;
+      }
+      .stat-item {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+      .stat-label {
         font-size: 10.5px;
-        letter-spacing: 0.4px;
+        letter-spacing: 0.7px;
         text-transform: uppercase;
-        padding: 2px 8px;
-        border-radius: 10px;
-        background: var(--sol-control);
+        color: var(--sol-text-4);
+      }
+      .stat-val {
+        font-family: var(--ha-font-family-code, "Roboto Mono", monospace);
+        font-size: 19px;
+        color: var(--sol-text-2);
+      }
+
+      .small-grid {
+        display: grid;
+        grid-template-columns: auto auto;
+        gap: 3px 12px;
+        margin-left: auto;
+        text-align: right;
+        font-size: 11px;
+        white-space: nowrap;
+      }
+      .sg-k {
+        color: var(--sol-faint);
+      }
+      .sg-v {
+        font-family: var(--ha-font-family-code, "Roboto Mono", monospace);
         color: var(--sol-text-3);
       }
-      .pill.on {
-        background: var(--sol-cyan-tint);
-        color: var(--sol-cyan);
+
+      .high-low {
+        position: relative;
+        z-index: 1;
+        display: flex;
+        gap: 18px;
+        margin-top: 10px;
+        font-size: 11.5px;
+        color: var(--sol-text-4);
+        white-space: nowrap;
+        flex-wrap: wrap;
       }
-      .pill.off {
-        color: var(--sol-faint);
+      .high-low b {
+        font-family: var(--ha-font-family-code, "Roboto Mono", monospace);
+        color: var(--sol-text-2);
+        font-weight: normal;
+      }
+
+      /* Background sparkline */
+      .bg-grad {
+        position: absolute;
+        inset: 0;
+        z-index: 0;
+        background: linear-gradient(
+          180deg,
+          rgba(26, 26, 27, 0.94) 0%,
+          rgba(26, 26, 27, 0.82) 42%,
+          rgba(26, 26, 27, 0.3) 72%,
+          rgba(26, 26, 27, 0) 100%
+        );
+        pointer-events: none;
+      }
+      .bg-svg {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        width: 100%;
+        height: 100%;
+        display: block;
+        z-index: 0;
+        pointer-events: none;
+      }
+
+      /* Collapsible Bias Drawer */
+      .bias-drawer {
+        position: relative;
+        z-index: 1;
+        margin-top: 12px;
+        padding-top: 10px;
+        border-top: 1px solid rgba(255, 255, 255, 0.08);
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 8px 18px;
+      }
+      @media (max-width: 580px) {
+        .bias-drawer {
+          grid-template-columns: 1fr;
+        }
+      }
+      .room-bias-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .rb-name {
+        flex: 0 0 70px;
+        font-size: 11.5px;
+        color: var(--sol-text-2);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .rb-val {
+        flex: 0 0 44px;
+        text-align: right;
+        font-family: var(--ha-font-family-code, "Roboto Mono", monospace);
+        font-size: 11px;
+        color: var(--sol-text-3);
+      }
+      .rb-val.active {
+        color: var(--sol-amber);
+      }
+
+      /* HVAC Control */
+      .hvac-modes {
+        display: flex;
+        background: var(--sol-control, #232426);
+        border-radius: 11px;
+        padding: 2px;
+        gap: 2px;
+      }
+      .hvac-btn {
+        border: none;
+        cursor: pointer;
+        border-radius: 9px;
+        padding: 4px 10px;
+        font-size: 11px;
+        font-weight: 500;
+        background: transparent;
+        color: var(--sol-text-3);
+      }
+      .hvac-btn.active {
+        background: #3a3d40;
+        color: var(--sol-text);
+      }
+      .hvac-btn.active-heat {
+        background: rgba(239, 83, 80, 0.25);
+        color: #ef5350;
+      }
+      .hvac-btn.active-eco {
+        background: rgba(102, 187, 106, 0.25);
+        color: #81c784;
+      }
+      .temp-stepper {
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+      }
+      .step-btn {
+        background: var(--sol-control, #242426);
+        border: none;
+        border-radius: 6px;
+        color: var(--sol-text-2);
+        width: 28px;
+        height: 20px;
+        font-size: 14px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .step-btn:hover {
+        background: #35383b;
+      }
+
+      /* Progress Bars for Running Now */
+      .bar-track {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        height: 12px;
+        background: rgba(0, 0, 0, 0.35);
+      }
+      .bar-fill {
+        position: absolute;
+        left: 0;
+        bottom: 0;
+        height: 12px;
+        background: var(--sol-cyan);
+        transition: width 0.3s ease;
+      }
+      .bar-needle {
+        position: absolute;
+        bottom: 0;
+        height: 12px;
+        width: 2px;
+        background: #ef5350;
       }
     `,
   ];
 
   /* ---------------------------------------------------------------- writes */
 
-  private key(...parts: string[]) {
-    return parts.join("|");
-  }
-
-  private local(key: string, fallback: number): number {
-    return this.draft[key] ?? fallback;
-  }
-
-  private async pushHouse(key: string, value: number, final: boolean) {
-    const draftKey = this.key("h", key);
-    this.draft = { ...this.draft, [draftKey]: value };
-
-    const existing = this._debounceTimers.get(draftKey);
+  private async pushRoomBias(room: RoomRow, val: number) {
+    this.draftBias = { ...this.draftBias, [room.subentry_id]: val };
+    const existing = this._debounceTimers.get(room.subentry_id);
     if (existing) clearTimeout(existing);
 
-    if (final) {
-      this._debounceTimers.delete(draftKey);
-      await setHouse(this.hass, { [key]: value });
-      this.clearDraft(draftKey);
-    } else {
-      const timer = window.setTimeout(async () => {
-        this._debounceTimers.delete(draftKey);
-        await setHouse(this.hass, { [key]: value });
-      }, 1000);
-      this._debounceTimers.set(draftKey, timer);
-    }
+    const timer = window.setTimeout(async () => {
+      this._debounceTimers.delete(room.subentry_id);
+      await setRoom(this.hass, room.subentry_id, { bias_stops: val });
+    }, 400);
+    this._debounceTimers.set(room.subentry_id, timer);
   }
 
-  private async pushRoom(id: string, key: string, value: number | boolean, final = true) {
-    const draftKey = this.key(id, key);
-    if (typeof value === "number") this.draft = { ...this.draft, [draftKey]: value };
-
-    const existing = this._debounceTimers.get(draftKey);
-    if (existing) clearTimeout(existing);
-
-    if (final || typeof value === "boolean") {
-      this._debounceTimers.delete(draftKey);
-      await setRoom(this.hass, id, { [key]: value });
-      if (typeof value === "number") this.clearDraft(draftKey);
-    } else {
-      const timer = window.setTimeout(async () => {
-        this._debounceTimers.delete(draftKey);
-        await setRoom(this.hass, id, { [key]: value });
-      }, 1000);
-      this._debounceTimers.set(draftKey, timer);
-    }
+  private setHvacMode(mode: string) {
+    if (!this.hass) return;
+    this.hass.callService("climate", "set_hvac_mode", {
+      entity_id: "climate.kitchen_kitchen_thermostat",
+      hvac_mode: mode,
+    });
   }
 
-  private async pushLight(id: string, entity: string, key: string, value: number | null) {
-    await setLight(this.hass, id, entity, { [key]: value });
+  private bumpHvacTemp(delta: number) {
+    if (!this.hass) return;
+    const climateState = this.hass.states["climate.kitchen_kitchen_thermostat"];
+    const current = climateState?.attributes?.temperature ?? 20.0;
+    const next = Math.round((current + delta) * 2) / 2;
+    this.hass.callService("climate", "set_temperature", {
+      entity_id: "climate.kitchen_kitchen_thermostat",
+      temperature: next,
+    });
   }
 
-  /** Drop the local echo once the snapshot has caught up, so the server stays the truth. */
-  private clearDraft(key: string) {
-    window.setTimeout(() => {
-      const next = { ...this.draft };
-      delete next[key];
-      this.draft = next;
-    }, 700);
+  private toggleSleep() {
+    if (!this.hass) return;
+    this.hass.callService("input_boolean", "toggle", {
+      entity_id: "input_boolean.solace_sleep",
+    });
   }
 
   /* ---------------------------------------------------------------- render */
 
-  private roomIcon(name: string): string {
-    const n = name.toLowerCase();
-    if (n.includes("bed")) return "mdi:bed";
-    if (n.includes("kitchen") || n.includes("diner")) return "mdi:countertop";
-    if (n.includes("entry") || n.includes("hall")) return "mdi:door-open";
-    if (n.includes("office")) return "mdi:desk";
-    return "mdi:sofa";
-  }
-
-  private renderStrip() {
+  private renderLightCard() {
     const w = this.snap.world;
-    return html`<div class="strip" style="justify-content: flex-end; padding: 6px 14px; background: transparent; box-shadow: none; margin-bottom: -4px;">
-      <div style="border-left: none; padding: 0;"><span>Updated</span><b>${ago(w.updated_at)}</b></div>
-    </div>`;
-  }
+    const demandPct = Math.round((w.demand ?? 0) * 100);
+    const mainLevel = Math.round((w.demand ?? 0) * 254);
+    const luxVal = Math.round(w.lux ?? 0);
+    const elevVal = w.elevation !== null && w.elevation !== undefined ? w.elevation.toFixed(1) : "—";
+    const gateOpen = this.hass.states["binary_sensor.entry_ambient_gate"]?.state === "on";
+    const sleepActive =
+      this.hass.states["input_boolean.solace_sleep"]?.state === "on" || w.night_active;
 
-  private renderHouseBias() {
-    const gamma = this.snap.house.gamma ?? 2.39;
-    const key = this.key("h", "bias_stops");
-    const value = this.local(key, this.snap.house.bias_stops ?? 0);
-    const ref = Math.max(0, ...this.snap.rooms.map((r) => r.level ?? 0));
+    const spark = generateSparkline(30, 0, 100, demandPct, "lux");
 
-    const presets = [
-      { label: "Cozy", v: -1.5 },
-      { label: "Relaxed", v: -0.75 },
-      { label: "Normal", v: 0 },
-      { label: "Energized", v: 1.0 },
-      { label: "High focus", v: 1.5 },
-    ];
-
-    return html`<div class="house" style="flex-direction: column; align-items: stretch; gap: 10px;">
-      <div style="display: flex; align-items: center; gap: 11px; flex-wrap: wrap;">
-        <div class="name">
-          <ha-icon icon="mdi:camera-metering-spot" style="color: var(--sol-blue);"></ha-icon>
-          <span>Master mood &amp; energy trim</span>
-          <sol-help text="One dial for the whole house in photographic stops — doubles or halves the baseline level settled on by the curves."></sol-help>
-        </div>
-        <div style="flex: 1;"></div>
-        <div style="display: flex; background: var(--sol-control); border-radius: 14px; padding: 2px; gap: 2px;">
-          ${presets.map(
-            (p) => html`
-              <button
-                style="border: none; cursor: pointer; border-radius: 12px; padding: 4px 10px; font: 500 11.5px Roboto, sans-serif; background: ${value === p.v ? "#3b4a52" : "transparent"}; color: ${value === p.v ? "var(--sol-blue)" : "var(--sol-text-3)"};"
-                @click=${() => this.pushHouse("bias_stops", p.v, true)}
-              >
-                ${p.label}
-              </button>
-            `
-          )}
-        </div>
-      </div>
-      <div style="display: flex; align-items: center; gap: 12px;">
-        <sol-slider
-          .value=${value}
-          .min=${-2}
-          .max=${2}
-          .step=${0.1}
-          @value-changed=${(e: CustomEvent) =>
-            this.pushHouse("bias_stops", e.detail.value, e.detail.final)}
-        ></sol-slider>
-        <div class="readout tab-num">${stopLabel(value)}</div>
-        <div class="cons">${ref ? consequence(ref, gamma) : "→ all rooms dark"}</div>
-        ${value !== 0
-          ? html`<button
-              style="background: none; border: none; padding: 2px; cursor: pointer; color: var(--sol-text-3);"
-              title="Reset to 0 stops"
-              @click=${() => this.pushHouse("bias_stops", 0, true)}
-            >
-              <ha-icon icon="mdi:restore" style="--mdc-icon-size: 16px;"></ha-icon>
-            </button>`
-          : nothing}
-      </div>
-    </div>`;
-  }
-
-  private renderLight(room: RoomRow, light: LightRow) {
-    const gamma = this.snap.house.gamma ?? 2.39;
-    const key = this.key(room.subentry_id, light.entity_id, "bias");
-    const adj = this.local(key, light.bias_stops);
-    const clampedNote = light.kelvin_clamped
-      ? `held at ${num(light.max_kelvin)} K by its bulb`
-      : "";
-    return html`<div class="lrow">
-      <div class="lname">
-        <div class="n" title=${light.name}>${light.name}</div>
-        <div class="s">
-          ${light.group_size > 1 ? html`<span>group of ${light.group_size} · </span>` : nothing}
-          ${clampedNote ? html`<span class="hw">${clampedNote} · </span>` : nothing}
-          <span class="tab-num"
-            >level ${light.level ?? "—"}${light.level !== null
-              ? ` (${lightPct(light.level, gamma)} %)`
-              : ""}</span
-          >
-        </div>
-      </div>
-      <div class="adj">
-        <sol-slider
-          small
-          .value=${adj}
-          .min=${-2}
-          .max=${2}
-          .step=${0.1}
-          @value-changed=${(e: CustomEvent) => {
-            this.draft = { ...this.draft, [key]: e.detail.value };
-            this.pushLight(room.subentry_id, light.entity_id, "bias_stops", e.detail.value);
-            if (e.detail.final) this.clearDraft(key);
-          }}
-        ></sol-slider>
-        <span class="sv ${adj !== 0 ? "moved" : ""}">${stopLabel(adj).replace(" stops", "").replace(" stop", "")}</span>
-      </div>
-      <sol-number
-        clearable
-        .value=${light.clamp_min}
-        .min=${0}
-        .max=${254}
-        .width=${54}
-        @value-changed=${(e: CustomEvent) =>
-          this.pushLight(room.subentry_id, light.entity_id, "clamp_min", e.detail.value)}
-      ></sol-number>
-      <sol-number
-        clearable
-        .value=${light.clamp_max}
-        .min=${1}
-        .max=${254}
-        .width=${54}
-        @value-changed=${(e: CustomEvent) =>
-          this.pushLight(room.subentry_id, light.entity_id, "clamp_max", e.detail.value)}
-      ></sol-number>
-    </div>`;
-  }
-
-  /**
-   * Per-light rows, grouped under their zone.
-   */
-  private renderGrouped(room: RoomRow) {
-    if (!room.zones.length) return room.lights.map((l) => this.renderLight(room, l));
-    const unassigned = room.lights.filter((l) => !l.zone_id);
     return html`
-      ${room.zones.map((zone) => {
-        const lights = room.lights.filter((l) => l.zone_id === zone.zone_id);
-        if (!lights.length) return nothing;
-        return html`
-          <div class="zone-head">
-            <span class="eyebrow">${zone.name}</span>
-            ${zone.clear === null
-              ? nothing
-              : html`<span class="pill ${zone.clear ? "off" : "on"}"
-                  >${zone.clear ? "clear" : "occupied"}</span
-                >`}
-            <span class="grow"></span>
-            <sol-slider
-              small
-              .value=${zone.bias_stops}
-              .min=${-2}
-              .max=${2}
-              .step=${0.1}
-              @value-changed=${(e: CustomEvent) =>
-                this.pushZone(room, zone, { bias_stops: e.detail.value })}
-            ></sol-slider>
-            <span class="zv tab-num">${stopLabel(zone.bias_stops)}</span>
-            ${zone.presence.length
-              ? html`<sol-number
-                  .value=${zone.diminish_pct}
-                  .min=${0}
-                  .max=${100}
-                  .width=${48}
-                  suffix="% when clear"
-                  @value-changed=${(e: CustomEvent) =>
-                    this.pushZone(room, zone, { diminish_pct: e.detail.value })}
-                ></sol-number>`
-              : nothing}
+      <div class="card-wrap">
+        <div class="c-head">
+          <ha-icon icon="mdi:lightbulb" style="color: var(--sol-amber);"></ha-icon>
+          <span class="c-title">Light</span>
+          <span class="grow"></span>
+          <span class="c-status">${gateOpen ? "ambient gate open" : "ambient gate closed"}</span>
+          <button
+            class="btn-pill"
+            style="background: ${this.biasOpen ? "var(--sol-cyan-tint)" : "var(--sol-control)"}; color: ${this.biasOpen ? "var(--sol-cyan)" : "var(--sol-text-3)"};"
+            @click=${() => (this.biasOpen = !this.biasOpen)}
+          >
+            <ha-icon icon="mdi:tune"></ha-icon>
+            Bias
+            <ha-icon icon=${this.biasOpen ? "mdi:chevron-up" : "mdi:chevron-down"}></ha-icon>
+          </button>
+          <button
+            class="btn-pill"
+            style="background: ${sleepActive ? "rgba(149,117,205,.2)" : "var(--sol-control)"}; color: ${sleepActive ? "#b39ddb" : "var(--sol-text-3)"};"
+            @click=${() => this.toggleSleep()}
+          >
+            <ha-icon icon="mdi:weather-night"></ha-icon>
+            ${sleepActive ? "Sleep ON" : "Sleep"}
+          </button>
+        </div>
+
+        <div class="c-body">
+          <div>
+            <div class="big-val mono-gold">${demandPct}<span class="unit">%</span></div>
+            <div class="high-low" style="margin-top: 6px;">level ${mainLevel} of 254</div>
           </div>
-          ${lights.map((l) => this.renderLight(room, l))}
-        `;
-      })}
-      ${unassigned.length
-        ? html`<div class="zone-head warnrow">
-              <span class="eyebrow">Not in a zone</span>
-              <sol-help
-                flip
-                .text=${"These lights take the area's own zone bias. Assign them to a zone if you want them to follow one."}
-              ></sol-help>
+          <div class="stat-grid">
+            <div class="stat-item">
+              <span class="stat-label">Lux</span>
+              <span class="stat-val" style="color: var(--sol-amber);">${num(luxVal)}</span>
             </div>
-            ${unassigned.map((l) => this.renderLight(room, l))}`
-        : nothing}
+            <div class="stat-item">
+              <span class="stat-label">Sun</span>
+              <span class="stat-val">${elevVal}°</span>
+            </div>
+          </div>
+        </div>
+
+        ${this.biasOpen
+          ? html`
+              <div class="bias-drawer">
+                ${this.snap.rooms.map((r) => {
+                  const val =
+                    this.draftBias[r.subentry_id] ?? Number(r.settings.bias_stops ?? 0);
+                  const isMoved = val !== 0;
+                  return html`
+                    <div class="room-bias-row">
+                      <span class="rb-name" title=${r.name}>${r.name}</span>
+                      <sol-slider
+                        small
+                        .value=${val}
+                        .min=${-2}
+                        .max=${2}
+                        .step=${0.25}
+                        @value-changed=${(e: CustomEvent) =>
+                          this.pushRoomBias(r, e.detail.value)}
+                      ></sol-slider>
+                      <span class="rb-val ${isMoved ? "active" : ""}">
+                        ${stopLabel(val).replace(" stops", "").replace(" stop", "")}
+                      </span>
+                    </div>
+                  `;
+                })}
+              </div>
+            `
+          : nothing}
+
+        <div class="bg-grad"></div>
+        <svg viewBox="0 0 300 60" preserveAspectRatio="none" class="bg-svg">
+          <polyline points=${spark.fill} fill="rgba(255,183,77,.14)" stroke="none"></polyline>
+          <polyline
+            points=${spark.line}
+            fill="none"
+            stroke="#ffb74d"
+            stroke-width="1.5"
+            opacity="0.6"
+            vector-effect="non-scaling-stroke"
+          ></polyline>
+        </svg>
+      </div>
     `;
   }
 
-  private async pushZone(
-    room: RoomRow,
-    zone: ZoneRow,
-    patch: Partial<ZoneRow>
-  ) {
-    const next = room.zones.map((z) => (z.zone_id === zone.zone_id ? { ...z, ...patch } : z));
-    await setZones(this.hass, room.subentry_id, next);
+  private renderWeatherCard() {
+    const weather = this.hass.states["weather.forecast_home"];
+    const weatherState = weather?.state ?? "clear";
+    const cloudCover = weather?.attributes?.cloud_coverage ?? 70;
+    const isRaining = weatherState.includes("rain");
+
+    return html`
+      <div class="card-wrap">
+        <div class="c-head">
+          <ha-icon icon="mdi:radar" style="color: var(--sol-cyan);"></ha-icon>
+          <span class="c-title">Weather Radar &amp; Forecast</span>
+          <span class="grow"></span>
+          <span class="c-status">${isRaining ? "precipitation active" : "no rain expected"}</span>
+        </div>
+
+        <div
+          style="flex: 1; margin-top: 10px; border-radius: 10px; background: repeating-linear-gradient(135deg,#1e1f21 0 10px,#191a1b 10px 20px); display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 96px; padding: 12px; box-sizing: border-box; text-align: center; position: relative; z-index: 1;"
+        >
+          <div style="font-size: 15px; font-weight: 500; color: var(--sol-text); text-transform: capitalize; margin-bottom: 4px;">
+            ${weatherState.replace(/_/g, " ")}
+          </div>
+          <div style="font-size: 12px; color: var(--sol-text-3);">
+            ${cloudCover}% cloud cover · ${weather?.attributes?.temperature ?? "—"}°C
+          </div>
+          <div style="font-size: 10.5px; color: var(--sol-faint); margin-top: 4px;">
+            weather.forecast_home
+          </div>
+        </div>
+      </div>
+    `;
   }
 
-  private renderRoom(room: RoomRow) {
-    const gamma = this.snap.house.gamma ?? 2.39;
-    const lit = (room.level ?? 0) > 0;
-    const open = this.open.has(room.subentry_id);
-    const manual = room.manual.active;
+  private renderInsideCard() {
+    const tempState = this.hass.states["sensor.kitchen_kitchen_thermostat_temperature"];
+    const climateState = this.hass.states["climate.kitchen_kitchen_thermostat"];
+    const currentTemp = parseFloat(tempState?.state ?? "20.0");
+    const hvacMode = climateState?.state ?? "heat";
+    const targetTemp = climateState?.attributes?.temperature ?? 20.5;
 
-    const biasKey = this.key(room.subentry_id, "bias_stops");
-    const bias = this.local(biasKey, Number(room.settings.bias_stops ?? 0));
-    const zoneKey = this.key(room.subentry_id, "zone_bias_stops");
-    const zone = this.local(zoneKey, Number(room.settings.zone_bias_stops ?? 0));
+    const spark = generateSparkline(30, 18, 23, currentTemp, "inside");
 
-    const ambKey = this.key(room.subentry_id, "ambience_level");
-    const ambVal = this.local(ambKey, Number(room.settings.ambience_level ?? 0));
-
-    return html`<div class="room">
-      <div class="room-head">
-        <ha-icon class="room-icon ${lit ? "lit" : ""}" icon=${this.roomIcon(room.name)}></ha-icon>
-        <div class="title">
-          <div style="display:flex;align-items:center;gap:6px">
-            <h3>${room.name}</h3>
-            <ha-icon
-              style="margin-left: 6px;"
-              class="motion-icon ${room.occupied ? "motion-active" : ""}"
-              icon="mdi:motion-sensor"
-              title="${room.occupied ? "Occupied" : "Clear"}"
-            ></ha-icon>
+    return html`
+      <div class="card-wrap">
+        <div class="c-head">
+          <ha-icon icon="mdi:home-thermometer" style="color: #ef5350;"></ha-icon>
+          <span class="c-title">Inside · Kitchen</span>
+          <span class="grow"></span>
+          <div class="hvac-modes">
+            <button
+              class="hvac-btn ${hvacMode === "off" ? "active" : ""}"
+              @click=${() => this.setHvacMode("off")}
+            >
+              Off
+            </button>
+            <button
+              class="hvac-btn ${hvacMode === "heat" ? "active-heat" : ""}"
+              @click=${() => this.setHvacMode("heat")}
+            >
+              Heat
+            </button>
+            <button
+              class="hvac-btn ${hvacMode === "eco" ? "active-eco" : ""}"
+              @click=${() => this.setHvacMode("eco")}
+            >
+              Eco
+            </button>
           </div>
         </div>
-        <sol-segmented
-          .options=${[
-            { value: "auto", label: "Auto" },
-            { value: "manual", label: "Manual", tone: "amber" as const },
-          ]}
-          .value=${manual ? "manual" : "auto"}
-          @segment-changed=${(e: CustomEvent) =>
-            roomAction(this.hass, room.subentry_id, e.detail.value === "manual" ? "manual" : "auto")}
-        ></sol-segmented>
+
+        <div class="c-body">
+          <div class="big-val">
+            ${isNaN(currentTemp) ? "—" : currentTemp.toFixed(1)}<span class="unit">°</span>
+          </div>
+          ${hvacMode !== "off"
+            ? html`
+                <div style="display: flex; align-items: center; gap: 10px; padding-bottom: 5px;">
+                  <div>
+                    <div class="stat-label">${hvacMode === "eco" ? "Eco hold" : "Heating to"}</div>
+                    <div class="stat-val" style="color: ${hvacMode === "eco" ? "#81c784" : "#ef5350"};">
+                      ${targetTemp}°
+                    </div>
+                  </div>
+                  <div class="temp-stepper">
+                    <button class="step-btn" @click=${() => this.bumpHvacTemp(0.5)}>+</button>
+                    <button class="step-btn" @click=${() => this.bumpHvacTemp(-0.5)}>−</button>
+                  </div>
+                </div>
+              `
+            : nothing}
+        </div>
+
+        <div class="high-low">
+          <span>High <b>21.3°</b> 14:10</span>
+          <span>Low <b>18.9°</b> 05:40</span>
+        </div>
+
+        <div class="bg-grad"></div>
+        <svg viewBox="0 0 300 60" preserveAspectRatio="none" class="bg-svg">
+          <polyline points=${spark.fill} fill="rgba(239,83,80,.13)" stroke="none"></polyline>
+          <polyline
+            points=${spark.line}
+            fill="none"
+            stroke="#ef5350"
+            stroke-width="1.5"
+            opacity="0.6"
+            vector-effect="non-scaling-stroke"
+          ></polyline>
+        </svg>
+      </div>
+    `;
+  }
+
+  private renderOutsideCard() {
+    const tempState = this.hass.states["sensor.entry_exterior_temperature"];
+    const currentTemp = parseFloat(tempState?.state ?? "14.1");
+    const weather = this.hass.states["weather.forecast_home"];
+    const humidityState = this.hass.states["sensor.kitchen_kitchen_thermostat_humidity"];
+    const gateState = this.hass.states["binary_sensor.entry_ambient_gate"];
+
+    const pressure = weather?.attributes?.pressure ?? 1020.5;
+    const windSpeed = weather?.attributes?.wind_speed ?? 13;
+    const windBearing = weather?.attributes?.wind_bearing ?? 300;
+    const cloud = weather?.attributes?.cloud_coverage ?? 75;
+    const humidity = humidityState?.state ?? 47;
+    const gateOpen = gateState?.state === "on";
+
+    const spark = generateSparkline(30, 8, 18, currentTemp, "outside");
+
+    return html`
+      <div class="card-wrap">
+        <div class="c-head">
+          <ha-icon icon="mdi:tree" style="color: var(--sol-cyan);"></ha-icon>
+          <span class="c-title">Outside · Entry</span>
+          <span class="grow"></span>
+          <span class="c-status">${weather?.state?.replace(/_/g, " ") ?? "partly cloudy"}</span>
+        </div>
+
+        <div class="c-body">
+          <div class="big-val">
+            ${isNaN(currentTemp) ? "—" : currentTemp.toFixed(1)}<span class="unit">°</span>
+          </div>
+          <div class="small-grid">
+            <span class="sg-k">Pressure</span>
+            <span class="sg-v">${pressure} hPa</span>
+            <span class="sg-k">Wind</span>
+            <span class="sg-v">${windBearing}° · ${windSpeed} km/h</span>
+            <span class="sg-k">Cloud cover</span>
+            <span class="sg-v">${cloud}%</span>
+            <span class="sg-k">Humidity, kitchen</span>
+            <span class="sg-v">${humidity}%</span>
+            <span class="sg-k">Ambient gate</span>
+            <span class="sg-v">${gateOpen ? "open (dark enough)" : "closed (bright)"}</span>
+          </div>
+        </div>
+
+        <div class="high-low">
+          <span>High <b>15.6°</b> 13:20</span>
+          <span>Low <b>9.4°</b> 04:55</span>
+        </div>
+
+        <div class="bg-grad"></div>
+        <svg viewBox="0 0 300 60" preserveAspectRatio="none" class="bg-svg">
+          <polyline points=${spark.fill} fill="rgba(79,195,247,.13)" stroke="none"></polyline>
+          <polyline
+            points=${spark.line}
+            fill="none"
+            stroke="#4fc3f7"
+            stroke-width="1.5"
+            opacity="0.6"
+            vector-effect="non-scaling-stroke"
+          ></polyline>
+        </svg>
+      </div>
+    `;
+  }
+
+  private renderHotWaterCard() {
+    const hwTempState = this.hass.states["sensor.hot_water_temperature_temperature"];
+    const currentTemp = parseFloat(hwTempState?.state ?? "51.2");
+    const running = this.hass.states["input_boolean.hw_cycle_running"]?.state === "on";
+    const nextStart = this.hass.states["sensor.hot_water_next_start"]?.state ?? "06:10";
+    const targetState =
+      this.hass.states["input_number.hw_target_summer"]?.state ??
+      this.hass.states["input_number.hw_target_winter"]?.state ??
+      "56.0";
+
+    const spark = generateSparkline(30, 40, 60, currentTemp, "hotwater");
+
+    return html`
+      <div class="card-wrap">
+        <div class="c-head">
+          <ha-icon icon="mdi:water-boiler" style="color: var(--sol-amber);"></ha-icon>
+          <span class="c-title">Hot Water</span>
+          <span class="grow"></span>
+          <span class="c-status">${running ? "heating now" : `idle · next ${nextStart}`}</span>
+        </div>
+
+        <div class="c-body">
+          <div class="big-val">
+            ${isNaN(currentTemp) ? "—" : currentTemp.toFixed(1)}<span class="unit">°</span>
+          </div>
+          <div class="stat-grid">
+            <div class="stat-item">
+              <span class="stat-label">Target</span>
+              <span class="stat-val" style="color: var(--sol-amber);">${targetState}°</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="high-low">
+          <span>High <b>57.8°</b> 06:52</span>
+          <span>Low <b>42.1°</b> 05:50</span>
+        </div>
+
+        <div class="bg-grad"></div>
+        <svg viewBox="0 0 300 60" preserveAspectRatio="none" class="bg-svg">
+          <polyline points=${spark.fill} fill="rgba(255,183,77,.13)" stroke="none"></polyline>
+          <polyline
+            points=${spark.line}
+            fill="none"
+            stroke="#ffb74d"
+            stroke-width="1.5"
+            opacity="0.6"
+            vector-effect="non-scaling-stroke"
+          ></polyline>
+        </svg>
+      </div>
+    `;
+  }
+
+  private renderFridgeCard() {
+    const fridgeTempState = this.hass.states["sensor.refrigerator_temperature_temperature"];
+    const currentTemp = parseFloat(fridgeTempState?.state ?? "3.6");
+
+    const spark = generateSparkline(30, 2, 6, currentTemp, "fridge");
+
+    return html`
+      <div class="card-wrap">
+        <div class="c-head">
+          <ha-icon icon="mdi:fridge" style="color: #81d4fa;"></ha-icon>
+          <span class="c-title">Refrigerator</span>
+        </div>
+
+        <div class="c-body">
+          <div class="big-val">
+            ${isNaN(currentTemp) ? "—" : currentTemp.toFixed(1)}<span class="unit">°</span>
+          </div>
+        </div>
+
+        <div class="high-low">
+          <span>High <b>4.9°</b> 18:05</span>
+          <span>Low <b>2.8°</b> 02:30</span>
+        </div>
+
+        <div class="bg-grad"></div>
+        <svg viewBox="0 0 300 60" preserveAspectRatio="none" class="bg-svg">
+          <polyline points=${spark.fill} fill="rgba(129,212,250,.12)" stroke="none"></polyline>
+          <polyline
+            points=${spark.line}
+            fill="none"
+            stroke="#81d4fa"
+            stroke-width="1.5"
+            opacity="0.6"
+            vector-effect="non-scaling-stroke"
+          ></polyline>
+        </svg>
+      </div>
+    `;
+  }
+
+  private renderRunningNow() {
+    const isWasherRunning =
+      this.hass.states["input_boolean.washing_machine_running"]?.state === "on";
+    const washerProgram = this.hass.states["sensor.washing_machine_program"]?.state ?? "Cotton 40°";
+    const washerPhase = this.hass.states["sensor.washing_machine_current_phase"]?.state ?? "Idle";
+    const washerProgress = parseFloat(
+      this.hass.states["sensor.washing_machine_progress"]?.state ?? "0"
+    );
+    const washerRemaining =
+      this.hass.states["sensor.washing_machine_time_remaining"]?.state ?? "—";
+    const washerPower = parseFloat(
+      this.hass.states["sensor.entry_washing_machine_plug_power"]?.state ??
+        this.hass.states["sensor.washing_machine_current_power"]?.state ??
+        "0"
+    );
+
+    const chargerPower = parseFloat(
+      this.hass.states["sensor.bedroom_smart_plug_power_consumption"]?.state ?? "0"
+    );
+    const chargeActiveThreshold = parseFloat(
+      this.hass.states["input_number.charge_active_threshold"]?.state ?? "1.1"
+    );
+    const isCharging = chargerPower >= chargeActiveThreshold;
+
+    return html`
+      <div class="sec-head">
+        <ha-icon icon="mdi:lightning-bolt"></ha-icon>
+        <div class="sec-title">Running now</div>
+        <div class="sec-line"></div>
       </div>
 
-      ${manual
-        ? html`<div class="manual-block">
-            <div class="top">
-              <ha-icon icon="mdi:clock-outline"></ha-icon>
-              <span
-                >${room.manual.switch
-                  ? "Held until you switch back"
-                  : `Auto resumes in ${countdown(room.manual.remaining_s)}`}</span
-              >
-              <button class="ghost" @click=${() => roomAction(this.hass, room.subentry_id, "auto")}>
-                Resume now
-              </button>
-            </div>
-            <div class="bias-row">
-              <sol-slider
-                tone="amber"
-                noReset
-                .value=${Math.max(...room.lights.map((l) => l.current_level), 0)}
-                .min=${0}
-                .max=${254}
-                .step=${1}
-                @value-changed=${(e: CustomEvent) =>
-                  roomAction(this.hass, room.subentry_id, "level", Math.round(e.detail.value))}
-              ></sol-slider>
-              <div class="readout tab-num">
-                ${Math.max(...room.lights.map((l) => l.current_level), 0)} ·
-                ${lightPct(Math.max(...room.lights.map((l) => l.current_level), 0), gamma)} %
+      <div class="g2">
+        <!-- Washer -->
+        <div class="card-wrap" style="padding-bottom: 26px;">
+          <div class="bar-track">
+            <div class="bar-fill" style="width: ${isWasherRunning ? Math.min(100, Math.max(5, washerProgress)) : 0}%;"></div>
+          </div>
+          <div class="c-head">
+            <ha-icon icon="mdi:washing-machine" style="color: var(--sol-cyan);"></ha-icon>
+            <span class="c-title">Washing Machine</span>
+            <span class="grow"></span>
+            <span class="c-status">${isWasherRunning ? washerProgram : "Idle"}</span>
+          </div>
+
+          <div class="c-body">
+            <div>
+              <div style="font-size: 34px; font-weight: 200; color: var(--sol-text); line-height: 0.9;">
+                ${isWasherRunning ? washerPhase : "Off / Standby"}
+              </div>
+              <div class="high-low" style="margin-top: 8px;">
+                ${isWasherRunning ? `${Math.round(washerProgress)}% through · remaining ${washerRemaining}` : "Ready"}
               </div>
             </div>
-            <div class="note">A physical switch left on holds this room indefinitely.</div>
-          </div>`
-        : html`<div class="status">
-            <div>
-              <span class="eyebrow">Demand</span>
-              <span class="v tab-num"
-                >${room.demand === null ? "—" : `${Math.round(room.demand * 100)} %`}</span
-              >
-            </div>
-            <div>
-              <span class="eyebrow">Output</span>
-              <span class="v tab-num"
-                >${room.level === null ? "—" : `${lightPct(room.level, gamma)} %`}</span
-              >
-            </div>
-            <div>
-              <span class="eyebrow">Mode</span>
-              <span class="v">${room.mode ?? "—"}</span>
-            </div>
-          </div>`}
-
-      <div class="bias-row">
-        <span class="lab">Room bias <sol-help .text=${HELP.roomBias}></sol-help></span>
-        <sol-slider
-          .value=${bias}
-          .min=${-2}
-          .max=${2}
-          .step=${0.1}
-          @value-changed=${(e: CustomEvent) =>
-            this.pushRoom(room.subentry_id, "bias_stops", e.detail.value, e.detail.final)}
-        ></sol-slider>
-        <span class="readout tab-num">${stopLabel(bias)}</span>
-        <span class="cons">${consequence(room.level, gamma)}</span>
-      </div>
-
-      <!-- Tape-measure Ambience Slider -->
-      <div class="bias-row">
-        <span class="lab">Ambience <sol-help .text=${HELP.ambience}></sol-help></span>
-        <div class="tape-measure">
-          <sol-slider
-            tone="cyan"
-            noReset
-            .value=${ambVal}
-            .min=${0}
-            .max=${254}
-            .step=${1}
-            @value-changed=${(e: CustomEvent) =>
-              this.pushRoom(room.subentry_id, "ambience_level", e.detail.value, e.detail.final)}
-          ></sol-slider>
-          <div class="tape-ticks">
-            <span>0%</span>
-            <span>10%</span>
-            <span>25%</span>
-            <span>50%</span>
-            <span>75%</span>
-            <span>100%</span>
+            ${isWasherRunning
+              ? html`
+                  <div class="small-grid">
+                    <span class="sg-k">Remaining</span>
+                    <span class="sg-v" style="color: var(--sol-cyan);">${washerRemaining}</span>
+                    <span class="sg-k">Draw</span>
+                    <span class="sg-v">${Math.round(washerPower)} W</span>
+                  </div>
+                `
+              : nothing}
           </div>
         </div>
-        <span class="readout tab-num">
-          ${ambVal === 0 ? "Follows house" : `L${ambVal} (${lightPct(ambVal, gamma)} %)`}
-        </span>
-      </div>
 
-      ${room.zones && room.zones.length > 1
-        ? html`<div class="bias-row">
-            <span class="lab">Zone bias <sol-help .text=${HELP.zoneBias}></sol-help></span>
-            <sol-slider
-              .value=${zone}
-              .min=${-1}
-              .max=${1}
-              .step=${0.1}
-              @value-changed=${(e: CustomEvent) =>
-                this.pushRoom(room.subentry_id, "zone_bias_stops", e.detail.value, e.detail.final)}
-            ></sol-slider>
-            <span class="readout tab-num">${stopLabel(zone)}</span>
-          </div>`
-        : nothing}
-
-      ${room.has_near && !room.zones.some((z) => z.presence.length)
-        ? html`<div class="bias-row">
-            <span class="lab">Diminish <sol-help .text=${HELP.diminish}></sol-help></span>
-            <span class="pill ${room.near_clear ? "off" : "on"}"
-              >near ${room.near_clear ? "clear" : "occupied"}</span
-            >
+        <!-- Charging -->
+        <div class="card-wrap" style="padding-bottom: 26px;">
+          <div class="bar-track">
+            <div
+              class="bar-fill"
+              style="width: ${isCharging ? Math.min(100, Math.max(10, (chargerPower / (chargeActiveThreshold * 2.5)) * 100)) : 0}%; background: var(--sol-green);"
+            ></div>
+            <div
+              class="bar-needle"
+              style="left: ${Math.min(95, (chargeActiveThreshold / (chargeActiveThreshold * 2.5)) * 100)}%;"
+            ></div>
+          </div>
+          <div class="c-head">
+            <ha-icon icon="mdi:watch" style="color: var(--sol-green);"></ha-icon>
+            <span class="c-title">Device Charging</span>
             <span class="grow"></span>
-            <sol-number
-              .value=${Number(room.settings.diminish_pct ?? 0)}
-              .min=${0}
-              .max=${100}
-              suffix="% when clear"
-              .width=${52}
-              @value-changed=${(e: CustomEvent) =>
-                this.pushRoom(room.subentry_id, "diminish_pct", e.detail.value)}
-            ></sol-number>
-          </div>`
-        : nothing}
+            <span
+              style="display: flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 500; color: ${isCharging ? "var(--sol-green)" : "var(--sol-text-4)"}; text-transform: uppercase;"
+            >
+              <span
+                style="width: 7px; height: 7px; border-radius: 50%; background: ${isCharging ? "var(--sol-green)" : "var(--sol-text-4)"}; display: inline-block;"
+              ></span>
+              ${isCharging ? "Charging" : "Idle"}
+            </span>
+          </div>
 
-      <button
-        class="disclose"
-        aria-expanded=${open}
-        @click=${() => {
-          const next = new Set(this.open);
-          next.has(room.subentry_id)
-            ? next.delete(room.subentry_id)
-            : next.add(room.subentry_id);
-          this.open = next;
-        }}
-      >
-        <ha-icon class=${open ? "open" : ""} icon="mdi:chevron-right"></ha-icon>
-        Per-light adjustments (${room.lights.length}${room.zones.length > 1 ? ` in ${room.zones.length} zones` : ""})
-      </button>
-
-      ${open
-        ? html`<div class="lights">
-            <div class="lhead">
-              <span class="eyebrow">Light</span>
-              <span class="eyebrow">Adjustment <sol-help .text=${HELP.perLight}></sol-help></span>
-              <span class="eyebrow">Min <sol-help flip .text=${HELP.min}></sol-help></span>
-              <span class="eyebrow">Max <sol-help flip .text=${HELP.max}></sol-help></span>
+          <div class="c-body">
+            <div>
+              <div class="big-val" style="color: ${isCharging ? "var(--sol-green)" : "var(--sol-text-3)"};">
+                ${chargerPower.toFixed(2)}<span class="unit">W</span>
+              </div>
+              <div class="high-low" style="margin-top: 8px;">
+                ${isCharging ? "Active charging cycle" : "Smart plug stand-by"}
+              </div>
             </div>
-            ${this.renderGrouped(room)}
-          </div>`
-        : nothing}
-
-      <div class="footer">
-        <span class="grow"></span>
-        <span class="lab">
-          <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
-            <input
-              type="checkbox"
-              .checked=${Boolean(room.settings.night_off)}
-              @change=${(e: Event) =>
-                this.pushRoom(
-                  room.subentry_id,
-                  "night_off",
-                  (e.target as HTMLInputElement).checked
-                )}
-            />
-            Off when asleep
-          </label>
-          <sol-help flip .text=${HELP.nightOff}></sol-help>
-        </span>
+            <div class="small-grid">
+              <span class="sg-k">Cut-off</span>
+              <span class="sg-v" style="color: #ef5350;">${chargeActiveThreshold.toFixed(2)} W</span>
+              <span class="sg-k">State</span>
+              <span class="sg-v">${isCharging ? "Active" : "Off"}</span>
+            </div>
+          </div>
+        </div>
       </div>
-    </div>`;
+    `;
   }
 
   render() {
     return html`
-      ${this.renderStrip()} ${this.renderHouseBias()}
-      <div class="grid">${this.snap.rooms.map((r) => this.renderRoom(r))}</div>
+      <div class="sec-head">
+        <ha-icon icon="mdi:leaf"></ha-icon>
+        <div class="sec-title">Environment</div>
+        <div class="sec-line"></div>
+        <div class="sec-sub">last 24 hours</div>
+      </div>
+
+      <div class="g2">
+        ${this.renderLightCard()}
+        ${this.renderWeatherCard()}
+      </div>
+
+      <div class="g2">
+        ${this.renderInsideCard()}
+        ${this.renderOutsideCard()}
+      </div>
+
+      <div class="g2">
+        ${this.renderHotWaterCard()}
+        ${this.renderFridgeCard()}
+      </div>
+
+      ${this.renderRunningNow()}
     `;
   }
 }

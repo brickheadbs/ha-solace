@@ -22,15 +22,17 @@ import { subscribe } from "./api";
 import { kelvinToDerim } from "./derim";
 import "./tab-curves";
 import "./tab-home";
+import "./tab-lighting";
 import "./tab-remotes";
 import "./tab-settings";
 import { tokens } from "./tokens";
 import "./ui";
 
-type Tab = "home" | "curves" | "settings" | "remotes";
+type Tab = "home" | "lighting" | "curves" | "settings" | "remotes";
 
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: "home", label: "Home" },
+  { id: "lighting", label: "Lighting" },
   { id: "curves", label: "Master curves" },
   { id: "settings", label: "Settings & modes" },
   { id: "remotes", label: "Remotes" },
@@ -317,6 +319,8 @@ export class SolacePanel extends LitElement {
   private renderTab() {
     if (!this.snap) return nothing;
     switch (this.tab) {
+      case "lighting":
+        return html`<sol-tab-lighting .hass=${this.hass} .snap=${this.snap}></sol-tab-lighting>`;
       case "curves":
         return html`<sol-tab-curves .hass=${this.hass} .snap=${this.snap}></sol-tab-curves>`;
       case "settings":

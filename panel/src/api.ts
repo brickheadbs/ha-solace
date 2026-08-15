@@ -180,12 +180,29 @@ export interface Snapshot {
   rooms: RoomRow[];
 }
 
-/** The subset of `hass` a panel actually needs. */
+export interface HassEntity {
+  entity_id: string;
+  state: string;
+  attributes: Record<string, any>;
+  last_changed: string;
+  last_updated: string;
+}
+
+/** The subset of `hass` a panel needs. */
 export interface Hass {
   connection: {
     subscribeMessage<T>(cb: (msg: T) => void, sub: object): Promise<() => void>;
     sendMessagePromise<T>(msg: object): Promise<T>;
   };
+  states: Record<string, HassEntity | undefined>;
+  callService(
+    domain: string,
+    service: string,
+    serviceData?: Record<string, unknown>,
+    target?: Record<string, unknown>
+  ): Promise<unknown>;
+  callWS?<T>(msg: object): Promise<T>;
+  callApi?<T>(method: string, path: string, parameters?: object): Promise<T>;
   themes?: { darkMode?: boolean };
   language?: string;
 }
