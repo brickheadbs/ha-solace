@@ -51,7 +51,7 @@ def normal_light() -> LightSettings:
     )
 
 
-def test_master_processing_spline_curves_and_cloudy_boost():
+def test_master_processing_spline_curves():
     """Verify Master Processing generates baseline target brightness and colour from splines."""
     custom_lux = (
         SplinePoint(0.0, 1.0),
@@ -69,22 +69,15 @@ def test_master_processing_spline_curves_and_cloudy_boost():
     house_custom = HouseSettings(
         lux_curve=custom_lux,
         brightness_timeline=custom_bright,
-        cloudy_boost_stops=0.5,
     )
 
-    # 1. Sunny day at 12:00 (100 lx, 0% clouds) -> uses custom_lux curve
-    out_sunny = solve_master(lux=100.0, clock_hour=12.0, house=house_custom, cloud_coverage=0.0)
-    assert out_sunny.spline_demand == 0.8
-    assert out_sunny.cloudy_boost_stops == 0.0
+    # 1. Measured 100 lx at 12:00 -> uses custom_lux curve (demand = 0.8)
+    out = solve_master(lux=100.0, clock_hour=12.0, house=house_custom)
+    assert out.demand == 0.8
+    assert out.time_brightness_level > 200
+    assert out.target_brightness == int(round(0.8 * out.time_brightness_level))
 
-    # 2. Overcast day at 12:00 with dark overcast (100 lx, 100% clouds) -> applies cloudy curve + boost
-    out_cloudy = solve_master(lux=100.0, clock_hour=12.0, house=house_custom, cloud_coverage=100.0)
-    assert out_cloudy.cloudy_boost_stops == 0.5
-    assert out_cloudy.demand == 1.0
-    assert out_cloudy.time_brightness_level > 200
-    assert out_cloudy.target_brightness > 200
-
-    # 2. Bright midday sun (5000 lx) -> 0 demand regardless of boost
+    # 2. Bright midday sun (5000 lx) -> 0 demand
     bright_sun = solve_master(lux=5000.0, clock_hour=12.0, house=house_custom)
     assert bright_sun.demand == 0.0
     assert bright_sun.target_brightness == 0

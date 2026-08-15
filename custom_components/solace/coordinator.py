@@ -42,7 +42,6 @@ from .const import (
     CONF_DND_SLEEP_STATES,
     CONF_LIGHTS,
     CONF_LUX_CURVE,
-    CONF_LUX_CLOUDY_CURVE,
     CONF_LUX_SENSOR,
     CONF_NEAR_PRESENCE,
     CONF_PER_LIGHT,
@@ -229,7 +228,6 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         CURVE_KEYS = {
             "ramp",
             "lux_curve",
-            "lux_cloudy_curve",
             "brightness_timeline",
             "colour_timeline",
             "sunrise_curve",
@@ -281,8 +279,6 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         )
         if CONF_LUX_CURVE in options and options[CONF_LUX_CURVE]:
             fields["lux_curve"] = _parse_spline_points(options[CONF_LUX_CURVE], y_scale=0.01)
-        if CONF_LUX_CLOUDY_CURVE in options and options[CONF_LUX_CLOUDY_CURVE]:
-            fields["lux_cloudy_curve"] = _parse_spline_points(options[CONF_LUX_CLOUDY_CURVE], y_scale=0.01)
         if CONF_BRIGHTNESS_TIMELINE in options and options[CONF_BRIGHTNESS_TIMELINE]:
             fields["brightness_timeline"] = _parse_spline_points(options[CONF_BRIGHTNESS_TIMELINE])
         if CONF_COLOUR_TIMELINE in options and options[CONF_COLOUR_TIMELINE]:

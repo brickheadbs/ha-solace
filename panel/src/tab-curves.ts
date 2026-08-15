@@ -1,6 +1,6 @@
 /**
  * Master Curves Tab — Interactive Spline Curve Editors for:
- * 1. Outdoor lux demand curve (Logarithmic lux vs Demand %) + Cloudy Day Boost
+ * 1. Outdoor lux demand curve (Logarithmic lux vs Demand %)
  * 2. 24h Target Brightness Schedule (0-24h vs 0-254 level)
  * 3. 24h Target Colour Schedule (0-24h vs Derims [100-433 d / 2000-6000K])
  */
@@ -8,7 +8,7 @@
 import { LitElement, css, html, nothing, svg } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import type { BrightnessPoint, ColourPoint, Hass, LuxPoint, Snapshot } from "./api";
-import { setBrightnessTimeline, setColourTimeline, setHouse, setLuxCurve, setLuxCloudyCurve } from "./api";
+import { setBrightnessTimeline, setColourTimeline, setLuxCurve } from "./api";
 import { derimToKelvin, formatDerimWithKelvin, kelvinToDerim } from "./derim";
 import { MonotoneSpline } from "./spline";
 import { tokens } from "./tokens";
@@ -30,15 +30,6 @@ const DEF_LUX: NodeDef[] = [
   { x: 50, y: 90 },
   { x: 500, y: 40 },
   { x: 2500, y: 0 },
-];
-
-const DEF_LUX_CLOUDY: NodeDef[] = [
-  { x: 0, y: 100 },
-  { x: 50, y: 95 },
-  { x: 500, y: 70 },
-  { x: 2500, y: 40 },
-  { x: 7000, y: 20 },
-  { x: 12000, y: 0 },
 ];
 
 const DEF_BRIGHT: NodeDef[] = [
@@ -69,12 +60,8 @@ export class SolTabCurves extends LitElement {
   @state() private hoverKey: CurveKey | null = null;
   @state() private hoverPx = 0;
 
-  // Lux mode toggle
-  @state() private luxMode: "clear" | "cloudy" = "clear";
-
   // Local editable curves
   @state() private localLux: NodeDef[] | null = null;
-  @state() private localLuxCloudy: NodeDef[] | null = null;
   @state() private localBright: NodeDef[] | null = null;
   @state() private localColour: NodeDef[] | null = null;
 
@@ -160,141 +147,75 @@ export class SolTabCurves extends LitElement {
         height: auto;
         display: block;
         touch-action: none;
-        cursor: crosshair;
         user-select: none;
       }
       .foot {
         display: flex;
         align-items: center;
         gap: 10px;
-        flex-wrap: wrap;
-        border-top: 1px solid rgba(255, 255, 255, 0.07);
         margin-top: 6px;
-        padding-top: 8px;
+        flex-wrap: wrap;
       }
       .readout {
+        font-size: 11.5px;
+        color: var(--sol-text-2);
+        font-variant-numeric: tabular-nums;
         display: flex;
         align-items: center;
-        gap: 5px;
-        font-size: 11.5px;
-        color: var(--sol-text-3);
-        font-variant-numeric: tabular-nums;
-        white-space: nowrap;
+        gap: 6px;
       }
       .node-editor {
         display: flex;
         align-items: center;
-        gap: 7px;
+        gap: 6px;
         background: var(--sol-control);
-        border-radius: 8px;
-        padding: 4px 8px;
+        border-radius: 10px;
+        padding: 4px 10px;
       }
       .node-editor input {
-        width: 66px;
-        box-sizing: border-box;
         background: var(--sol-card);
-        border: 1px solid rgba(79, 195, 247, 0.35);
-        border-radius: 5px;
-        padding: 3px 5px;
-        text-align: center;
-        font-size: 11.5px;
-        color: var(--sol-text);
-        outline: none;
-      }
-      .boost-row {
-        display: flex;
-        align-items: center;
-        gap: 11px;
-        flex-wrap: wrap;
-        margin-top: 9px;
-        padding: 9px 11px;
-        background: var(--sol-control);
-        border-radius: 8px;
-      }
-      .lux-mode-toggle {
-        display: inline-flex;
-        background: rgba(255, 255, 255, 0.05);
-        border-radius: 8px;
-        padding: 2px;
-        gap: 2px;
-      }
-      .lux-tab {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        padding: 4px 10px;
+        border: 1px solid var(--sol-border);
         border-radius: 6px;
-        border: none;
-        background: transparent;
-        color: var(--sol-text-3);
-        font: 500 11.5px Roboto, sans-serif;
-        cursor: pointer;
-        transition: all 0.15s ease;
-      }
-      .lux-tab:hover {
         color: var(--sol-text);
-        background: rgba(255, 255, 255, 0.05);
+        font: inherit;
+        font-size: 11.5px;
+        padding: 3px 6px;
+        width: 58px;
+        text-align: center;
       }
-      .lux-tab.active-clear {
-        background: rgba(255, 183, 77, 0.2);
-        color: #ffb74d;
-      }
-      .lux-tab.active-cloudy {
-        background: rgba(56, 189, 248, 0.2);
-        color: #38bdf8;
-      }
-      .hint {
-        font-size: 11px;
-        color: var(--sol-text-4);
-        padding-top: 7px;
-        line-height: 1.5;
-      }
+
+      /* Modal fullscreen precision editor */
       .modal-bg {
         position: fixed;
         inset: 0;
-        z-index: 90;
-        background: rgba(8, 9, 10, 0.88);
+        background: rgba(0, 0, 0, 0.78);
         display: flex;
         align-items: center;
         justify-content: center;
-        padding: 22px;
+        z-index: 9999;
+        padding: 20px;
       }
       .modal-box {
-        width: 100%;
-        max-width: 1500px;
         background: var(--sol-card);
-        border-radius: 12px;
-        padding: 16px 20px;
-        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.7);
+        border: 1px solid var(--sol-border-hi);
+        border-radius: 20px;
+        width: min(980px, 95vw);
+        padding: 20px;
+        box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
       }
     `,
   ];
 
-  private getLuxClearNodes(): NodeDef[] {
-    if (this.localLux) return this.localLux;
-    if (this.snap?.lux_curve?.length) {
-      return this.snap.lux_curve.map((p) => ({
-        x: p.lux,
-        y: p.demand_pct > 1.0 ? p.demand_pct : p.demand_pct * 100.0,
-      }));
-    }
-    return DEF_LUX;
-  }
-
-  private getLuxCloudyNodes(): NodeDef[] {
-    if (this.localLuxCloudy) return this.localLuxCloudy;
-    if (this.snap?.lux_cloudy_curve?.length) {
-      return this.snap.lux_cloudy_curve.map((p) => ({
-        x: p.lux,
-        y: p.demand_pct > 1.0 ? p.demand_pct : p.demand_pct * 100.0,
-      }));
-    }
-    return DEF_LUX_CLOUDY;
-  }
-
   private getNodes(key: CurveKey): NodeDef[] {
     if (key === "lux") {
-      return this.luxMode === "cloudy" ? this.getLuxCloudyNodes() : this.getLuxClearNodes();
+      if (this.localLux) return this.localLux;
+      if (this.snap?.lux_curve?.length) {
+        return this.snap.lux_curve.map((p) => ({
+          x: p.lux,
+          y: p.demand_pct > 1.0 ? p.demand_pct : p.demand_pct * 100.0,
+        }));
+      }
+      return DEF_LUX;
     }
     if (key === "bright") {
       if (this.localBright) return this.localBright;
@@ -319,11 +240,7 @@ export class SolTabCurves extends LitElement {
   private setNodes(key: CurveKey, nodes: NodeDef[]): void {
     const sorted = [...nodes].sort((a, b) => a.x - b.x);
     if (key === "lux") {
-      if (this.luxMode === "cloudy") {
-        this.localLuxCloudy = sorted;
-      } else {
-        this.localLux = sorted;
-      }
+      this.localLux = sorted;
     } else if (key === "bright") {
       this.localBright = sorted;
     } else if (key === "colour") {
@@ -342,21 +259,12 @@ export class SolTabCurves extends LitElement {
 
   private async saveCurve(key: CurveKey): Promise<void> {
     if (key === "lux") {
-      if (this.luxMode === "cloudy") {
-        const nodes = this.getLuxCloudyNodes();
-        const lux_cloudy_curve: LuxPoint[] = nodes.map((n) => ({
-          lux: n.x,
-          demand_pct: n.y,
-        }));
-        await setLuxCloudyCurve(this.hass, lux_cloudy_curve);
-      } else {
-        const nodes = this.getLuxClearNodes();
-        const lux_curve: LuxPoint[] = nodes.map((n) => ({
-          lux: n.x,
-          demand_pct: n.y,
-        }));
-        await setLuxCurve(this.hass, lux_curve);
-      }
+      const nodes = this.getNodes("lux");
+      const lux_curve: LuxPoint[] = nodes.map((n) => ({
+        lux: n.x,
+        demand_pct: n.y,
+      }));
+      await setLuxCurve(this.hass, lux_curve);
     } else if (key === "bright") {
       const nodes = this.getNodes("bright");
       const brightness_timeline: BrightnessPoint[] = nodes.map((n) => ({
@@ -461,7 +369,7 @@ export class SolTabCurves extends LitElement {
       return;
     }
 
-    // Check if clicked near curve to add a node
+    // Check click on curve line to add a node
     if (px >= X0 && px <= X1 && py >= Y0 && py <= Y1) {
       const spline = this.getSpline(key);
       const vx = this.px2x(key, px);
@@ -558,13 +466,7 @@ export class SolTabCurves extends LitElement {
   }
 
   private resetCurve(key: CurveKey): void {
-    if (key === "lux") {
-      if (this.luxMode === "cloudy") {
-        this.setNodes("lux", DEF_LUX_CLOUDY);
-      } else {
-        this.setNodes("lux", DEF_LUX);
-      }
-    }
+    if (key === "lux") this.setNodes("lux", DEF_LUX);
     if (key === "bright") this.setNodes("bright", DEF_BRIGHT);
     if (key === "colour") this.setNodes("colour", DEF_COLOUR.map((p) => ({ x: p.x, y: kelvinToDerim(p.y) })));
   }
@@ -593,42 +495,24 @@ export class SolTabCurves extends LitElement {
 
   private getCardHelp(key: CurveKey): string {
     if (key === "lux") {
-      return "Indoor demand against measured outdoor light. Use Clear Sun vs Overcast toggle to shape each curve. Blended dynamically above 70% cloud coverage. Drag a node to adjust · click the line to add one · double-click to remove.";
+      return "Indoor lighting demand (0–100%) against measured outdoor illuminance (0–10,000 lx). Drag a node to adjust · click the curve to add a node · double-click to remove.";
     }
     if (key === "bright") {
       return "Master brightness level through the day across the 24-hour cycle. Drag a node to adjust level across the day · click to add · double-click to remove.";
     }
-    return "Colour temperature in Derims (100d candle to 433d daylight). Drag a node to shape circadian colour across the day.";
+    return "Master colour temperature schedule across the 24-hour cycle in derims (100d / 2000K to 433d / 6000K). Drag to adjust · click to add · double-click to remove.";
   }
 
   private renderCard(key: CurveKey) {
     return html`
       <div class="card">
         <div class="head">
-          <ha-icon icon="${key === "lux" ? "mdi:weather-sunny" : key === "bright" ? "mdi:clock-outline" : "mdi:palette-outline"}" style="color: var(--sol-blue);"></ha-icon>
+          <ha-icon
+            icon="${key === "lux" ? "mdi:weather-sunny" : key === "bright" ? "mdi:clock-outline" : "mdi:palette-outline"}"
+            style="color: var(--sol-blue);"
+          ></ha-icon>
           <div class="title">${this.getCardTitle(key)}</div>
           <sol-help text="${this.getCardHelp(key)}"></sol-help>
-
-          ${key === "lux"
-            ? html`
-                <div class="lux-mode-toggle">
-                  <button
-                    class="lux-tab ${this.luxMode === "clear" ? "active-clear" : ""}"
-                    @click="${() => { this.luxMode = "clear"; this.selKey = null; this.selIdx = null; }}"
-                  >
-                    <ha-icon icon="mdi:white-balance-sunny" style="--mdc-icon-size: 14px;"></ha-icon>
-                    Clear Sun
-                  </button>
-                  <button
-                    class="lux-tab ${this.luxMode === "cloudy" ? "active-cloudy" : ""}"
-                    @click="${() => { this.luxMode = "cloudy"; this.selKey = null; this.selIdx = null; }}"
-                  >
-                    <ha-icon icon="mdi:weather-cloudy" style="--mdc-icon-size: 14px;"></ha-icon>
-                    Overcast
-                  </button>
-                </div>
-              `
-            : nothing}
 
           <div class="spacer"></div>
           <div class="legend">
@@ -651,52 +535,12 @@ export class SolTabCurves extends LitElement {
           </div>
           <div class="spacer"></div>
           ${this.renderNodeEditor(key)}
-          <div class="sub">${this.getNodes(key).length} nodes ${key === "lux" ? (this.luxMode === "cloudy" ? "(Overcast curve)" : "(Clear Sun curve)") : ""}</div>
+          <div class="sub">${this.getNodes(key).length} nodes</div>
           <button class="btn-sec" @click="${() => this.resetCurve(key)}">
             <ha-icon icon="mdi:restore" style="--mdc-icon-size: 14px;"></ha-icon>
             Reset curve
           </button>
         </div>
-
-        ${key === "lux" ? this.renderCloudyBoost() : nothing}
-      </div>
-    `;
-  }
-
-  private renderCloudyBoost() {
-    const boost = this.snap?.house?.cloudy_boost_stops ?? 0.5;
-    const world = this.snap?.world;
-    const clouds = world?.cloud_coverage;
-    const blendPct = clouds !== null && clouds !== undefined
-      ? Math.round(Math.max(0, Math.min(100, ((clouds - 70) / 30) * 100)))
-      : null;
-
-    return html`
-      <div class="boost-row">
-        <ha-icon icon="mdi:weather-cloudy" style="color: var(--sol-cyan);"></ha-icon>
-        <div style="font-size: 12.5px; color: var(--sol-text-2);">Overcast blend & boost</div>
-        <sol-help text="Overcast curve crossfades in smoothly above 70% cloud coverage. The boost slider adds extra stop gain under heavy overcast conditions."></sol-help>
-        <div style="font-size: 12px; color: var(--sol-text-3); margin-left: 4px;">Boost:</div>
-        <input
-          type="range"
-          min="0"
-          max="2"
-          step="0.25"
-          .value="${String(boost)}"
-          @input="${(e: Event) => {
-            const v = parseFloat((e.target as HTMLInputElement).value);
-            setHouse(this.hass, { cloudy_boost_stops: v });
-          }}"
-          style="flex: 1; min-width: 120px;"
-        />
-        <div style="font-size: 12.5px; font-variant-numeric: tabular-nums; color: var(--sol-text); min-width: 65px;">
-          ${boost > 0 ? "+" : ""}${boost.toFixed(2)} stops
-        </div>
-        ${clouds !== null && clouds !== undefined
-          ? html`<span class="status-badge" style="background: rgba(56, 189, 248, 0.15); color: var(--sol-cyan); font-size: 11px; padding: 3px 8px; border-radius: 6px;">
-              ${Math.round(clouds)}% Clouds · ${blendPct}% Overcast blend
-            </span>`
-          : nothing}
       </div>
     `;
   }
@@ -705,138 +549,6 @@ export class SolTabCurves extends LitElement {
     const world = this.snap?.world;
     const isSel = this.selKey === key;
     const selNodeIdx = isSel ? this.selIdx : null;
-
-    if (key === "lux") {
-      const clearNodes = this.getLuxClearNodes();
-      const cloudyNodes = this.getLuxCloudyNodes();
-      const clearSpline = new MonotoneSpline(clearNodes, false);
-      const cloudySpline = new MonotoneSpline(cloudyNodes, false);
-
-      const N = 240;
-      let dClear = "";
-      let dCloudy = "";
-      for (let i = 0; i <= N; i++) {
-        const px = X0 + (X1 - X0) * (i / N);
-        const vx = this.px2x("lux", px);
-        const vyClear = clearSpline.evaluate(vx);
-        const vyCloudy = cloudySpline.evaluate(vx);
-        const pyClear = Math.max(Y0, Math.min(Y1, this.yp("lux", vyClear)));
-        const pyCloudy = Math.max(Y0, Math.min(Y1, this.yp("lux", vyCloudy)));
-        dClear += (i === 0 ? "M" : " L") + px.toFixed(1) + " " + pyClear.toFixed(1);
-        dCloudy += (i === 0 ? "M" : " L") + px.toFixed(1) + " " + pyCloudy.toFixed(1);
-      }
-      const dClearFill = dClear + ` L${X1} ${Y1} L${X0} ${Y1} Z`;
-      const dCloudyFill = dCloudy + ` L${X1} ${Y1} L${X0} ${Y1} Z`;
-
-      const isClearActive = this.luxMode === "clear";
-      const activeNodes = isClearActive ? clearNodes : cloudyNodes;
-
-      // Live indicators
-      let liveX = 0;
-      let liveY = 0;
-      let hasLive = false;
-      if (world && typeof world.lux === "number") {
-        liveX = this.xp("lux", world.lux);
-        liveY = this.yp("lux", (world.demand ?? 0) * 100);
-        hasLive = true;
-      }
-
-      return html`
-        <svg
-          class="plot"
-          viewBox="0 0 800 340"
-          @pointerdown="${(e: PointerEvent) => this.onPointerDown("lux", e)}"
-          @pointermove="${(e: PointerEvent) => this.onPointerMove("lux", e)}"
-          @pointerup="${() => this.onPointerUp()}"
-          @pointerleave="${() => this.onPointerLeave()}"
-          @dblclick="${(e: PointerEvent) => this.onDoubleClick("lux", e)}"
-          @contextmenu="${(e: MouseEvent) => this.onContextMenu("lux", e)}"
-        >
-          <!-- Background -->
-          <rect x="${X0}" y="${Y0}" width="${X1 - X0}" height="${Y1 - Y0}" fill="#151617"></rect>
-
-          <!-- Grid Lines & Labels -->
-          ${this.renderGrid("lux")}
-
-          <!-- Fills -->
-          <path d="${dClearFill}" fill="rgba(255,183,77,0.06)" stroke="none"></path>
-          <path d="${dCloudyFill}" fill="rgba(56,189,248,0.06)" stroke="none"></path>
-
-          <!-- Clear Sun Curve Path (Gold) -->
-          <path
-            d="${dClear}"
-            fill="none"
-            stroke="#ffb74d"
-            stroke-width="${isClearActive ? "2.5" : "1.6"}"
-            stroke-dasharray="${isClearActive ? "none" : "5 4"}"
-            opacity="${isClearActive ? "1.0" : "0.45"}"
-            stroke-linecap="round"
-          ></path>
-
-          <!-- Overcast Curve Path (Cyan) -->
-          <path
-            d="${dCloudy}"
-            fill="none"
-            stroke="#38bdf8"
-            stroke-width="${!isClearActive ? "2.5" : "1.6"}"
-            stroke-dasharray="${!isClearActive ? "none" : "5 4"}"
-            opacity="${!isClearActive ? "1.0" : "0.45"}"
-            stroke-linecap="round"
-          ></path>
-
-          <!-- Live World Pulse Cursor -->
-          ${hasLive
-            ? svg`
-                <g>
-                  <circle cx="${liveX}" cy="${liveY}" r="7" fill="rgba(255,255,255,0.18)">
-                    <animate attributeName="r" values="6;14;6" dur="2.6s" repeatCount="indefinite"></animate>
-                    <animate attributeName="opacity" values="0.6;0;0.6" dur="2.6s" repeatCount="indefinite"></animate>
-                  </circle>
-                  <circle cx="${liveX}" cy="${liveY}" r="4" fill="#ffffff" stroke="rgba(0,0,0,0.5)" stroke-width="1"></circle>
-                </g>
-              `
-            : nothing}
-
-          <!-- Inactive curve dimmed nodes -->
-          ${(isClearActive ? cloudyNodes : clearNodes).map((n) => {
-            const cx = this.xp("lux", n.x);
-            const cy = this.yp("lux", n.y);
-            return svg`
-              <circle
-                cx="${cx}"
-                cy="${cy}"
-                r="3.5"
-                fill="${isClearActive ? "#38bdf8" : "#ffb74d"}"
-                opacity="0.4"
-              ></circle>
-            `;
-          })}
-
-          <!-- Active Curve Control Nodes -->
-          ${activeNodes.map((n, i) => {
-            const cx = this.xp("lux", n.x);
-            const cy = this.yp("lux", n.y);
-            const selected = isSel && selNodeIdx === i;
-            const nodeColor = isClearActive ? "#ffb74d" : "#38bdf8";
-            return svg`
-              <circle
-                cx="${cx}"
-                cy="${cy}"
-                r="${selected ? 8 : 6}"
-                fill="${selected ? "#ffffff" : nodeColor}"
-                stroke="${selected ? nodeColor : "#ffffff"}"
-                stroke-width="1.8"
-                style="cursor: pointer;"
-              ></circle>
-            `;
-          })}
-
-          <!-- Outer plot border -->
-          <rect x="${X0}" y="${Y0}" width="${X1 - X0}" height="${Y1 - Y0}" fill="none" stroke="rgba(255,255,255,0.13)" stroke-width="1"></rect>
-        </svg>
-      `;
-    }
-
     const nodes = this.getNodes(key);
     const spline = this.getSpline(key);
 
@@ -856,11 +568,29 @@ export class SolTabCurves extends LitElement {
     let liveX = 0;
     let liveY = 0;
     let hasLive = false;
-    if (world) {
+    if (key === "lux" && world && typeof world.lux === "number") {
+      liveX = this.xp("lux", world.lux);
+      liveY = this.yp("lux", (world.demand ?? 0) * 100);
+      hasLive = true;
+    } else if (key !== "lux" && world) {
       liveX = this.xp(key, world.clock_hour);
       liveY = this.yp(key, spline.evaluate(world.clock_hour));
       hasLive = true;
     }
+
+    const strokeColor =
+      key === "lux"
+        ? "#ffb74d"
+        : key === "colour"
+        ? "url(#kgrad)"
+        : "var(--sol-blue)";
+
+    const fillColor =
+      key === "lux"
+        ? "rgba(255, 183, 77, 0.08)"
+        : key === "colour"
+        ? "rgba(255, 205, 150, 0.07)"
+        : "rgba(79, 195, 247, 0.09)";
 
     return html`
       <svg
@@ -880,14 +610,14 @@ export class SolTabCurves extends LitElement {
         ${this.renderGrid(key)}
 
         <!-- Sun VLines (for 24h timelines) -->
-        ${this.renderSolarVlines(key)}
+        ${key !== "lux" ? this.renderSolarVlines(key) : nothing}
 
         <!-- Fill & Stroke -->
-        <path d="${dFill}" fill="${key === "colour" ? "rgba(255,205,150,0.07)" : "rgba(79,195,247,0.09)"}" stroke="none"></path>
+        <path d="${dFill}" fill="${fillColor}" stroke="none"></path>
         <path
           d="${d}"
           fill="none"
-          stroke="${key === "colour" ? "url(#kgrad)" : "var(--sol-blue)"}"
+          stroke="${strokeColor}"
           stroke-width="2.5"
           stroke-linecap="round"
         ></path>
@@ -1111,7 +841,7 @@ export class SolTabCurves extends LitElement {
   }
 
   private getCardTitle(key: CurveKey): string {
-    if (key === "lux") return "Outdoor lux demand curves (Clear Sun vs Overcast)";
+    if (key === "lux") return "Outdoor lux demand curve";
     if (key === "bright") return "24h target brightness schedule";
     return "24h target colour schedule (Derims)";
   }
@@ -1119,8 +849,7 @@ export class SolTabCurves extends LitElement {
   private renderLegend(key: CurveKey) {
     if (key === "lux") {
       return html`
-        <div class="leg-item"><span class="chip" style="background: #ffb74d;"></span>Clear Sun</div>
-        <div class="leg-item"><span class="chip" style="background: #38bdf8;"></span>Overcast</div>
+        <div class="leg-item"><span class="chip" style="background: #ffb74d;"></span>Demand curve</div>
         <div class="leg-item"><span class="chip" style="background: #ffffff; width: 6px; height: 6px; border-radius: 50%;"></span>Live demand</div>
       `;
     }
@@ -1134,12 +863,10 @@ export class SolTabCurves extends LitElement {
   private getCursorReadout(key: CurveKey): string {
     if (this.hoverKey !== key) return "hover the plot to read values";
     if (key === "lux") {
-      const clearSpline = new MonotoneSpline(this.getLuxClearNodes(), false);
-      const cloudySpline = new MonotoneSpline(this.getLuxCloudyNodes(), false);
+      const spline = new MonotoneSpline(this.getNodes("lux"), false);
       const vx = this.px2x("lux", this.hoverPx);
-      const vyClear = clearSpline.evaluate(vx);
-      const vyCloudy = cloudySpline.evaluate(vx);
-      return `Lux ${Math.round(vx)} lx   Clear: ${Math.round(vyClear)}%   Overcast: ${Math.round(vyCloudy)}%`;
+      const vy = spline.evaluate(vx);
+      return `Lux ${Math.round(vx)} lx   Demand: ${Math.round(vy)}%`;
     }
     const spline = this.getSpline(key);
     const vx = this.px2x(key, this.hoverPx);

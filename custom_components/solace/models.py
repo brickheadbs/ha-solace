@@ -123,13 +123,7 @@ class MasterOutput:
     target_brightness: int
     target_kelvin: int
     demand: float
-    spline_demand: float
-    cloudy_boost_stops: float
     time_brightness_level: int
-    cloud_coverage: float | None = None
-    cloud_alpha: float = 0.0
-    demand_clear: float = 0.0
-    demand_cloudy: float = 0.0
     trace: tuple[tuple[str, object], ...] = field(default=())
 
 
@@ -155,9 +149,6 @@ class HouseSettings:
 
     # -- Master Processing: Splines & Curves --------------------------------------
     lux_curve: tuple[SplinePoint, ...] = DEFAULT_LUX_CURVE
-    lux_cloudy_curve: tuple[SplinePoint, ...] = DEFAULT_LUX_CLOUDY_CURVE
-    cloudy_blend_threshold: float = 70.0
-    cloudy_boost_stops: float = 0.0
     brightness_timeline: tuple[SplinePoint, ...] = DEFAULT_BRIGHTNESS_TIMELINE
     colour_timeline: tuple[SplinePoint, ...] = DEFAULT_COLOUR_TIMELINE
     mood_trim_stops: float = 0.0

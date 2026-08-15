@@ -165,7 +165,6 @@ export interface Snapshot {
   house: Record<string, number>;
   ramp: RampPoint[];
   lux_curve?: LuxPoint[];
-  lux_cloudy_curve?: LuxPoint[];
   brightness_timeline?: BrightnessPoint[];
   colour_timeline?: ColourPoint[];
   sunrise_curve?: ProgressPoint[];
@@ -201,9 +200,6 @@ export const setRamp = (hass: Hass, ramp: RampPoint[]) =>
 
 export const setLuxCurve = (hass: Hass, lux_curve: LuxPoint[]) =>
   hass.connection.sendMessagePromise({ type: "solace/set_lux_curve", lux_curve });
-
-export const setLuxCloudyCurve = (hass: Hass, lux_cloudy_curve: LuxPoint[]) =>
-  hass.connection.sendMessagePromise({ type: "solace/set_lux_cloudy_curve", lux_cloudy_curve });
 
 export const setBrightnessTimeline = (
   hass: Hass,

@@ -231,33 +231,9 @@ def solve_master(
     """Run Master Processing to generate baseline Target Brightness and Target Kelvin."""
     trace: list[tuple[str, object]] = []
 
-    # 1. Lux Demand: evaluate Clear Sun curve and Overcast / Cloudy curve
-    demand_clear = demand(lux, house.lux_curve)
-    demand_cloudy = demand(lux, house.lux_cloudy_curve)
+    # 1. Lux Demand: evaluate Lux Demand curve directly
+    demand_val = demand(lux, house.lux_curve)
     trace.append(("lux", lux))
-    trace.append(("demand_clear", round(demand_clear, 4)))
-    trace.append(("demand_cloudy", round(demand_cloudy, 4)))
-
-    # Cloud blend factor alpha (0.0 = 100% Clear, 1.0 = 100% Overcast)
-    alpha = 0.0
-    if cloud_coverage is not None:
-        thresh = max(0.0, min(99.0, house.cloudy_blend_threshold))
-        if cloud_coverage > thresh:
-            alpha = min(1.0, max(0.0, (cloud_coverage - thresh) / (100.0 - thresh)))
-    trace.append(("cloud_coverage", cloud_coverage))
-    trace.append(("cloud_alpha", round(alpha, 4)))
-
-    spline_demand = (1.0 - alpha) * demand_clear + alpha * demand_cloudy
-    trace.append(("spline_demand", round(spline_demand, 4)))
-
-    # Cloudy day boost
-    cloudy_stops = (
-        house.cloudy_boost_stops * alpha
-        if (spline_demand > 0 and house.cloudy_boost_stops > 0)
-        else 0.0
-    )
-    demand_val = _clamp01(spline_demand * (2.0**cloudy_stops))
-    trace.append(("cloudy_stops", round(cloudy_stops, 2)))
     trace.append(("demand", round(demand_val, 4)))
 
     # 2. 24h Target Brightness Schedule
@@ -279,13 +255,7 @@ def solve_master(
         target_brightness=target_brightness,
         target_kelvin=target_kelvin,
         demand=demand_val,
-        spline_demand=spline_demand,
-        cloudy_boost_stops=cloudy_stops,
         time_brightness_level=time_brightness_level,
-        cloud_coverage=cloud_coverage,
-        cloud_alpha=alpha,
-        demand_clear=demand_clear,
-        demand_cloudy=demand_cloudy,
         trace=tuple(trace),
     )
 

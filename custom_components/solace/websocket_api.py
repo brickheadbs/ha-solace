@@ -77,7 +77,6 @@ def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_set_house)
     websocket_api.async_register_command(hass, ws_set_ramp)
     websocket_api.async_register_command(hass, ws_set_lux_curve)
-    websocket_api.async_register_command(hass, ws_set_lux_cloudy_curve)
     websocket_api.async_register_command(hass, ws_set_brightness_timeline)
     websocket_api.async_register_command(hass, ws_set_colour_timeline)
     websocket_api.async_register_command(hass, ws_set_sunrise_curve)
@@ -271,13 +270,6 @@ def _snapshot(hass: HomeAssistant, coordinator: SolaceCoordinator) -> dict[str, 
                 "demand_pct": round(point.y * 100.0 if point.y <= 1.0 else point.y, 1),
             }
             for point in house.lux_curve
-        ],
-        "lux_cloudy_curve": [
-            {
-                "lux": point.x,
-                "demand_pct": round(point.y * 100.0 if point.y <= 1.0 else point.y, 1),
-            }
-            for point in house.lux_cloudy_curve
         ],
         "brightness_timeline": [
             {"hour": point.x, "level": point.y} for point in house.brightness_timeline
@@ -509,38 +501,6 @@ async def ws_set_lux_curve(hass: HomeAssistant, connection, msg: dict[str, Any])
         key=lambda p: p["lux"],
     )
     hass.config_entries.async_update_entry(entry, options={**entry.options, CONF_LUX_CURVE: points})
-    await entry.runtime_data.coordinator.async_request_refresh()
-    connection.send_result(msg["id"])
-
-
-@websocket_api.websocket_command(
-    {
-        vol.Required("type"): "solace/set_lux_cloudy_curve",
-        vol.Required("lux_cloudy_curve"): [
-            {vol.Required("lux"): vol.Coerce(float), vol.Required("demand_pct"): vol.Coerce(float)}
-        ],
-    }
-)
-@websocket_api.async_response
-async def ws_set_lux_cloudy_curve(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
-    """Outdoor overcast / cloudy lux demand spline curve — user-defined control points."""
-    entry = _entry(hass)
-    if entry is None:
-        connection.send_error(msg["id"], "not_loaded", "Solace is not set up")
-        return
-    points = sorted(
-        [
-            {
-                "lux": float(p["lux"]),
-                "demand_pct": float(p["demand_pct"]) / 100.0
-                if float(p["demand_pct"]) > 1.0
-                else float(p["demand_pct"]),
-            }
-            for p in msg["lux_cloudy_curve"]
-        ],
-        key=lambda p: p["lux"],
-    )
-    hass.config_entries.async_update_entry(entry, options={**entry.options, CONF_LUX_CLOUDY_CURVE: points})
     await entry.runtime_data.coordinator.async_request_refresh()
     connection.send_result(msg["id"])
 

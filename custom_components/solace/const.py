@@ -78,9 +78,7 @@ class Setting:
 
 #: House-wide settings. Order is the order they appear in the UI.
 HOUSE_SETTINGS: tuple[Setting, ...] = (
-    # Master Processing: Curves & Modifiers
-    Setting("cloudy_boost_stops", "Cloudy boost", 0, 4, 0.05, 0, "stops", "mdi:weather-cloudy"),
-    Setting("cloudy_blend_threshold", "Cloudy blend threshold", 0, 100, 1, 75, "%", "mdi:weather-partly-cloudy"),
+    # Master Processing: Modifiers
     Setting("mood_trim_stops", "Master mood trim", -4, 4, 0.05, 0, "stops", "mdi:tune"),
     # Ambient gate
     Setting("ambience_start_lux", "Gate start lux", 0, 2000, 1, 50, "lx", "mdi:weather-sunset-down"),
