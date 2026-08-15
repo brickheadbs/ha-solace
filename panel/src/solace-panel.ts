@@ -19,19 +19,19 @@ import { LitElement, css, html, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import type { Hass, Snapshot } from "./api";
 import { subscribe } from "./api";
-import "./tab-colour";
+import "./tab-curves";
 import "./tab-home";
-import "./tab-lighting";
 import "./tab-remotes";
+import "./tab-settings";
 import { tokens } from "./tokens";
 import "./ui";
 
-type Tab = "home" | "lighting" | "colour" | "remotes";
+type Tab = "home" | "curves" | "settings" | "remotes";
 
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: "home", label: "Home" },
-  { id: "lighting", label: "Lighting" },
-  { id: "colour", label: "Colour" },
+  { id: "curves", label: "Master curves" },
+  { id: "settings", label: "Settings & modes" },
   { id: "remotes", label: "Remotes" },
 ];
 
@@ -294,10 +294,10 @@ export class SolacePanel extends LitElement {
   private renderTab() {
     if (!this.snap) return nothing;
     switch (this.tab) {
-      case "lighting":
-        return html`<sol-tab-lighting .hass=${this.hass} .snap=${this.snap}></sol-tab-lighting>`;
-      case "colour":
-        return html`<sol-tab-colour .hass=${this.hass} .snap=${this.snap}></sol-tab-colour>`;
+      case "curves":
+        return html`<sol-tab-curves .hass=${this.hass} .snap=${this.snap}></sol-tab-curves>`;
+      case "settings":
+        return html`<sol-tab-settings .hass=${this.hass} .snap=${this.snap}></sol-tab-settings>`;
       case "remotes":
         return html`<sol-tab-remotes .hass=${this.hass} .snap=${this.snap}></sol-tab-remotes>`;
       default:

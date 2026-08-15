@@ -512,22 +512,57 @@ export class SolTabHome extends LitElement {
     const key = this.key("h", "bias_stops");
     const value = this.local(key, this.snap.house.bias_stops ?? 0);
     const ref = Math.max(0, ...this.snap.rooms.map((r) => r.level ?? 0));
-    return html`<div class="house">
-      <div class="name">
-        <ha-icon icon="mdi:brightness-6"></ha-icon>
-        <span>Whole house bias</span>
-        <sol-help .text=${HELP.houseBias}></sol-help>
+
+    const presets = [
+      { label: "Cozy", v: -1.5 },
+      { label: "Relaxed", v: -0.75 },
+      { label: "Normal", v: 0 },
+      { label: "Energized", v: 1.0 },
+      { label: "High focus", v: 1.5 },
+    ];
+
+    return html`<div class="house" style="flex-direction: column; align-items: stretch; gap: 10px;">
+      <div style="display: flex; align-items: center; gap: 11px; flex-wrap: wrap;">
+        <div class="name">
+          <ha-icon icon="mdi:camera-metering-spot" style="color: var(--sol-blue);"></ha-icon>
+          <span>Master mood &amp; energy trim</span>
+          <sol-help text="One dial for the whole house in photographic stops — doubles or halves the baseline level settled on by the curves."></sol-help>
+        </div>
+        <div style="flex: 1;"></div>
+        <div style="display: flex; background: var(--sol-control); border-radius: 14px; padding: 2px; gap: 2px;">
+          ${presets.map(
+            (p) => html`
+              <button
+                style="border: none; cursor: pointer; border-radius: 12px; padding: 4px 10px; font: 500 11.5px Roboto, sans-serif; background: ${value === p.v ? "#3b4a52" : "transparent"}; color: ${value === p.v ? "var(--sol-blue)" : "var(--sol-text-3)"};"
+                @click=${() => this.pushHouse("bias_stops", p.v, true)}
+              >
+                ${p.label}
+              </button>
+            `
+          )}
+        </div>
       </div>
-      <sol-slider
-        .value=${value}
-        .min=${-2}
-        .max=${2}
-        .step=${0.1}
-        @value-changed=${(e: CustomEvent) =>
-          this.pushHouse("bias_stops", e.detail.value, e.detail.final)}
-      ></sol-slider>
-      <div class="readout tab-num">${stopLabel(value)}</div>
-      <div class="cons">${ref ? consequence(ref, gamma) : "→ all rooms dark"}</div>
+      <div style="display: flex; align-items: center; gap: 12px;">
+        <sol-slider
+          .value=${value}
+          .min=${-2}
+          .max=${2}
+          .step=${0.1}
+          @value-changed=${(e: CustomEvent) =>
+            this.pushHouse("bias_stops", e.detail.value, e.detail.final)}
+        ></sol-slider>
+        <div class="readout tab-num">${stopLabel(value)}</div>
+        <div class="cons">${ref ? consequence(ref, gamma) : "→ all rooms dark"}</div>
+        ${value !== 0
+          ? html`<button
+              style="background: none; border: none; padding: 2px; cursor: pointer; color: var(--sol-text-3);"
+              title="Reset to 0 stops"
+              @click=${() => this.pushHouse("bias_stops", 0, true)}
+            >
+              <ha-icon icon="mdi:restore" style="--mdc-icon-size: 16px;"></ha-icon>
+            </button>`
+          : nothing}
+      </div>
     </div>`;
   }
 
