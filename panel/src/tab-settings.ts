@@ -6,7 +6,6 @@ import { LitElement, css, html } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import type { Hass, Snapshot } from "./api";
 import { setHouse, setRoom } from "./api";
-import { formatDerimWithKelvin, kelvinToDerim } from "./derim";
 import { tokens } from "./tokens";
 import "./ui";
 
@@ -331,77 +330,8 @@ export class SolTabSettings extends LitElement {
           </div>
         </div>
 
-        <!-- 2. Housewide Night Mode -->
-        <div class="card">
-          <div class="head">
-            <ha-icon icon="mdi:weather-night" style="color: var(--sol-blue);"></ha-icon>
-            <div class="title">Housewide night mode</div>
-          </div>
-          <div class="sub">Overrides curves overnight with one fixed low warm level — Ls.</div>
-
-          <div class="field-row">
-            <div class="field-label">
-              Night level
-              <sol-help text="Fixed level used overnight instead of the curve. Lower it until it only just reads."></sol-help>
-            </div>
-            <input
-              type="range"
-              min="0"
-              max="50"
-              step="1"
-              .value="${String(house.night_level ?? 3)}"
-              @input="${(e: Event) => {
-                const v = parseInt((e.target as HTMLInputElement).value, 10);
-                setHouse(this.hass, { night_level: v });
-              }}"
-              style="flex: 1;"
-            />
-            <div class="field-readout">${house.night_level ?? 3} / 254</div>
-          </div>
-
-          <div class="field-row">
-            <div class="field-label">
-              Night kelvin (derim)
-              <sol-help text="Colour held overnight. Measured in Derims / Kelvin. Lower derim is warmer."></sol-help>
-            </div>
-            <input
-              type="range"
-              min="2000"
-              max="3000"
-              step="50"
-              .value="${String(house.night_kelvin ?? 2200)}"
-              @input="${(e: Event) => {
-                const v = parseInt((e.target as HTMLInputElement).value, 10);
-                setHouse(this.hass, { night_kelvin: v });
-              }}"
-              style="flex: 1;"
-            />
-            <div class="field-readout">${formatDerimWithKelvin(kelvinToDerim(house.night_kelvin ?? 2200))}</div>
-          </div>
-
-          <div class="field-row">
-            <div class="field-label">
-              Dawn release lux
-              <sol-help text="Outdoor lux at which night mode unlatches and normal daytime curves take back over."></sol-help>
-            </div>
-            <input
-              type="range"
-              min="1"
-              max="60"
-              step="1"
-              .value="${String(house.night_release_lux ?? 10)}"
-              @input="${(e: Event) => {
-                const v = parseInt((e.target as HTMLInputElement).value, 10);
-                setHouse(this.hass, { night_release_lux: v });
-              }}"
-              style="flex: 1;"
-            />
-            <div class="field-readout">${house.night_release_lux ?? 10} lx</div>
-          </div>
-        </div>
-
-        <!-- 3. Transitions Matrix -->
-        <div class="card">
+        <!-- 2. Transitions Matrix -->
+        <div class="card full-col">
           <div class="head">
             <ha-icon icon="mdi:speedometer" style="color: var(--sol-blue);"></ha-icon>
             <div class="title">Transitions Matrix</div>
@@ -409,138 +339,125 @@ export class SolTabSettings extends LitElement {
             <div style="font-size: 11px; color: var(--sol-text-4);">seconds</div>
           </div>
 
-          <!-- Up Group -->
-          <div class="trans-grp">
-            <div class="grp-lbl">Up</div>
-            <div class="trans-row">
-              <div class="trans-lbl">Motion turn-on</div>
-              <div class="trans-dots"></div>
-              <div class="trans-path">∗ → L1</div>
-              <input
-                type="number"
-                step="0.5"
-                class="num-input"
-                style="width: 62px;"
-                .value="${String(house.transition_turn_on_l1_s ?? 2.0)}"
-                @change="${(e: Event) => {
-                  setHouse(this.hass, { transition_turn_on_l1_s: parseFloat((e.target as HTMLInputElement).value) });
-                }}"
-              />
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px;">
+            <!-- Up Group -->
+            <div class="trans-grp">
+              <div class="grp-lbl">Up</div>
+              <div class="trans-row">
+                <div class="trans-lbl">Motion turn-on</div>
+                <div class="trans-dots"></div>
+                <div class="trans-path">∗ → L1</div>
+                <input
+                  type="number"
+                  step="0.5"
+                  class="num-input"
+                  style="width: 62px;"
+                  .value="${String(house.transition_turn_on_l1_s ?? 2.0)}"
+                  @change="${(e: Event) => {
+                    setHouse(this.hass, { transition_turn_on_l1_s: parseFloat((e.target as HTMLInputElement).value) });
+                  }}"
+                />
+              </div>
+              <div class="trans-row">
+                <div class="trans-lbl">Dusk ambience wake</div>
+                <div class="trans-dots"></div>
+                <div class="trans-path">Off → L3</div>
+                <input
+                  type="number"
+                  step="0.5"
+                  class="num-input"
+                  style="width: 62px;"
+                  .value="${String(house.transition_wake_l3_s ?? 10.0)}"
+                  @change="${(e: Event) => {
+                    setHouse(this.hass, { transition_wake_l3_s: parseFloat((e.target as HTMLInputElement).value) });
+                  }}"
+                />
+              </div>
             </div>
-            <div class="trans-row">
-              <div class="trans-lbl">Dusk ambience wake</div>
-              <div class="trans-dots"></div>
-              <div class="trans-path">Off → L3</div>
-              <input
-                type="number"
-                step="0.5"
-                class="num-input"
-                style="width: 62px;"
-                .value="${String(house.transition_wake_l3_s ?? 10.0)}"
-                @change="${(e: Event) => {
-                  setHouse(this.hass, { transition_wake_l3_s: parseFloat((e.target as HTMLInputElement).value) });
-                }}"
-              />
-            </div>
-          </div>
 
-          <!-- Down Group -->
-          <div class="trans-grp">
-            <div class="grp-lbl">Down</div>
-            <div class="trans-row">
-              <div class="trans-lbl">Subzone diminish</div>
-              <div class="trans-dots"></div>
-              <div class="trans-path">L1 → L2</div>
-              <input
-                type="number"
-                step="0.5"
-                class="num-input"
-                style="width: 62px;"
-                .value="${String(house.transition_diminish_l2_s ?? 5.0)}"
-                @change="${(e: Event) => {
-                  setHouse(this.hass, { transition_diminish_l2_s: parseFloat((e.target as HTMLInputElement).value) });
-                }}"
-              />
+            <!-- Down Group -->
+            <div class="trans-grp">
+              <div class="grp-lbl">Down</div>
+              <div class="trans-row">
+                <div class="trans-lbl">Subzone diminish</div>
+                <div class="trans-dots"></div>
+                <div class="trans-path">L1 → L2</div>
+                <input
+                  type="number"
+                  step="0.5"
+                  class="num-input"
+                  style="width: 62px;"
+                  .value="${String(house.transition_diminish_l2_s ?? 5.0)}"
+                  @change="${(e: Event) => {
+                    setHouse(this.hass, { transition_diminish_l2_s: parseFloat((e.target as HTMLInputElement).value) });
+                  }}"
+                />
+              </div>
+              <div class="trans-row">
+                <div class="trans-lbl">Empty to ambience</div>
+                <div class="trans-dots"></div>
+                <div class="trans-path">∗ → L3</div>
+                <input
+                  type="number"
+                  step="0.5"
+                  class="num-input"
+                  style="width: 62px;"
+                  .value="${String(house.transition_clear_to_l3_s ?? 5.0)}"
+                  @change="${(e: Event) => {
+                    setHouse(this.hass, { transition_clear_to_l3_s: parseFloat((e.target as HTMLInputElement).value) });
+                  }}"
+                />
+              </div>
+              <div class="trans-row">
+                <div class="trans-lbl">Empty to dark</div>
+                <div class="trans-dots"></div>
+                <div class="trans-path">∗ → Off</div>
+                <input
+                  type="number"
+                  step="0.5"
+                  class="num-input"
+                  style="width: 62px;"
+                  .value="${String(house.transition_clear_to_off_s ?? 4.0)}"
+                  @change="${(e: Event) => {
+                    setHouse(this.hass, { transition_clear_to_off_s: parseFloat((e.target as HTMLInputElement).value) });
+                  }}"
+                />
+              </div>
             </div>
-            <div class="trans-row">
-              <div class="trans-lbl">Empty to ambience</div>
-              <div class="trans-dots"></div>
-              <div class="trans-path">∗ → L3</div>
-              <input
-                type="number"
-                step="0.5"
-                class="num-input"
-                style="width: 62px;"
-                .value="${String(house.transition_clear_to_l3_s ?? 5.0)}"
-                @change="${(e: Event) => {
-                  setHouse(this.hass, { transition_clear_to_l3_s: parseFloat((e.target as HTMLInputElement).value) });
-                }}"
-              />
-            </div>
-            <div class="trans-row">
-              <div class="trans-lbl">Empty to dark</div>
-              <div class="trans-dots"></div>
-              <div class="trans-path">∗ → Off</div>
-              <input
-                type="number"
-                step="0.5"
-                class="num-input"
-                style="width: 62px;"
-                .value="${String(house.transition_clear_to_off_s ?? 4.0)}"
-                @change="${(e: Event) => {
-                  setHouse(this.hass, { transition_clear_to_off_s: parseFloat((e.target as HTMLInputElement).value) });
-                }}"
-              />
-            </div>
-          </div>
 
-          <!-- Continuous & Special -->
-          <div class="trans-grp">
-            <div class="grp-lbl">Continuous &amp; special</div>
-            <div class="trans-row">
-              <div class="trans-lbl">Outdoor lux tracking (5m)</div>
-              <div class="trans-dots"></div>
-              <div class="trans-path">live</div>
-              <input
-                type="number"
-                step="0.5"
-                class="num-input"
-                style="width: 62px;"
-                .value="${String(house.transition_tracking_s ?? 15.0)}"
-                @change="${(e: Event) => {
-                  setHouse(this.hass, { transition_tracking_s: parseFloat((e.target as HTMLInputElement).value) });
-                }}"
-              />
-            </div>
-            <div class="trans-row">
-              <div class="trans-lbl">Night mode switch</div>
-              <div class="trans-dots"></div>
-              <div class="trans-path">∗ → Ls</div>
-              <input
-                type="number"
-                step="0.5"
-                class="num-input"
-                style="width: 62px;"
-                .value="${String(house.transition_night_s ?? 5.0)}"
-                @change="${(e: Event) => {
-                  setHouse(this.hass, { transition_night_s: parseFloat((e.target as HTMLInputElement).value) });
-                }}"
-              />
-            </div>
-            <div class="trans-row">
-              <div class="trans-lbl">Dashboard slider drag</div>
-              <div class="trans-dots"></div>
-              <div class="trans-path">manual</div>
-              <input
-                type="number"
-                step="0.1"
-                class="num-input"
-                style="width: 62px;"
-                .value="${String(house.transition_manual_drag_s ?? 0.5)}"
-                @change="${(e: Event) => {
-                  setHouse(this.hass, { transition_manual_drag_s: parseFloat((e.target as HTMLInputElement).value) });
-                }}"
-              />
+            <!-- Continuous & Special -->
+            <div class="trans-grp">
+              <div class="grp-lbl">Continuous &amp; special</div>
+              <div class="trans-row">
+                <div class="trans-lbl">Outdoor lux tracking (5m)</div>
+                <div class="trans-dots"></div>
+                <div class="trans-path">live</div>
+                <input
+                  type="number"
+                  step="0.5"
+                  class="num-input"
+                  style="width: 62px;"
+                  .value="${String(house.transition_tracking_s ?? 15.0)}"
+                  @change="${(e: Event) => {
+                    setHouse(this.hass, { transition_tracking_s: parseFloat((e.target as HTMLInputElement).value) });
+                  }}"
+                />
+              </div>
+              <div class="trans-row">
+                <div class="trans-lbl">Dashboard slider drag</div>
+                <div class="trans-dots"></div>
+                <div class="trans-path">manual</div>
+                <input
+                  type="number"
+                  step="0.1"
+                  class="num-input"
+                  style="width: 62px;"
+                  .value="${String(house.transition_manual_drag_s ?? 0.5)}"
+                  @change="${(e: Event) => {
+                    setHouse(this.hass, { transition_manual_drag_s: parseFloat((e.target as HTMLInputElement).value) });
+                  }}"
+                />
+              </div>
             </div>
           </div>
         </div>

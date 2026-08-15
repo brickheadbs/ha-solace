@@ -769,7 +769,7 @@ export class SolTabCurves extends LitElement {
     const node = nodes[this.selIdx];
     if (!node) return nothing;
 
-    const xLabel = key === "lux" ? "Lux" : "Hour";
+    const xLabel = key === "lux" ? "Lux" : "Time";
     const yLabel = key === "lux" ? "Demand %" : key === "bright" ? "Level" : "Derim";
 
     return html`
@@ -778,10 +778,12 @@ export class SolTabCurves extends LitElement {
         <div style="font-size: 11px; color: var(--sol-text-2);">${xLabel}</div>
         <input
           type="text"
-          .value="${key === "lux" ? String(Math.round(node.x)) : node.x.toFixed(2)}"
+          style="${key !== "lux" ? "width: 68px;" : ""}"
+          .value="${key === "lux" ? String(Math.round(node.x)) : this.hourToTimeStr(node.x)}"
           @change="${(e: Event) => {
-            const v = parseFloat((e.target as HTMLInputElement).value);
-            if (!isNaN(v)) {
+            const raw = (e.target as HTMLInputElement).value;
+            const v = key === "lux" ? parseFloat(raw) : this.parseTimeToHour(raw);
+            if (v !== null && !isNaN(v)) {
               nodes[this.selIdx!] = { x: v, y: node.y };
               this.setNodes(key, nodes);
             }
@@ -808,6 +810,30 @@ export class SolTabCurves extends LitElement {
         </button>
       </div>
     `;
+  }
+
+  private hourToTimeStr(h: number): string {
+    const norm = ((h % 24) + 24) % 24;
+    const hr = Math.floor(norm);
+    const min = Math.round((norm - hr) * 60);
+    const adjHr = min === 60 ? (hr + 1) % 24 : hr;
+    const adjMin = min === 60 ? 0 : min;
+    return `${String(adjHr).padStart(2, "0")}:${String(adjMin).padStart(2, "0")}`;
+  }
+
+  private parseTimeToHour(str: string): number | null {
+    const trimmed = str.trim();
+    if (!trimmed) return null;
+    if (trimmed.includes(":")) {
+      const parts = trimmed.split(":");
+      const hr = parseFloat(parts[0]);
+      const min = parseFloat(parts[1] || "0");
+      if (isNaN(hr) || isNaN(min)) return null;
+      return Math.max(0, Math.min(24, hr + min / 60.0));
+    }
+    const val = parseFloat(trimmed);
+    if (isNaN(val)) return null;
+    return Math.max(0, Math.min(24, val));
   }
 
   private renderFullscreenModal(key: CurveKey) {
