@@ -180,10 +180,17 @@ def to_level(fraction: float) -> int:
 
 
 def apply_clamp(level: int, light: LightSettings) -> int:
-    """Per-light hardware limits, ONLY when level > 0."""
+    """Per-light hardware max ceiling clamp, ONLY when level > 0."""
     if level <= 0:
         return 0
-    return min(light.clamp_max, max(light.clamp_min, level))
+    return min(light.clamp_max, level)
+
+
+def apply_cutoff(level: int, cutoff: int) -> int:
+    """Cutoff drops to 0 if level is below threshold; does not force levels upward."""
+    if level <= 0 or cutoff <= 0:
+        return level
+    return 0 if level < cutoff else level
 
 
 def rate_limit(current: int, target: int, step: int) -> int:
@@ -307,7 +314,7 @@ def compute_state_table(
     # L1: Occupancy active level (Master Target adjusted by stops bias)
     raw_l1_fraction = clip_to_full(master.demand, total_stops)
     raw_l1 = int(round(raw_l1_fraction * master.time_brightness_level))
-    l1 = apply_clamp(raw_l1, light)
+    l1 = apply_clamp(apply_cutoff(raw_l1, light.clamp_min), light)
 
     # L2: Diminished subzone level (Stops below L1 preferred)
     diminish_stops = zone.diminish_stops if (zone is not None and zone.diminish_stops > 0) else room.diminish_stops
@@ -319,13 +326,13 @@ def compute_state_table(
         raw_l2 = int(round(l1 * (1.0 - dim_pct / 100.0)))
     else:
         raw_l2 = l1
-    l2 = apply_clamp(raw_l2, light)
+    l2 = apply_clamp(apply_cutoff(raw_l2, light.clamp_min), light)
 
-    # L3: Ambience resting floor
+    # L3: Ambience resting floor (cutoffs disabled, max clamp preserved)
     ambience_raw = room.ambience_level or house.ambience_level
     l3 = apply_clamp(ambience_raw, light) if ambience_raw > 0 else 0
 
-    # Ls: Housewide Night level
+    # Ls: Housewide Night level (cutoffs disabled, max clamp preserved)
     ls = apply_clamp(house.night_level, light)
 
     return StateTable(
@@ -496,7 +503,7 @@ def solve(
             trace.append(("bedtime_dwell", level))
 
     # 7. Minimum Cutoff (exempt during ambience, night, sunrise, sunset, bedtime dwell)
-    cutoff = 0 if (ambience_open or mode is Mode.NIGHT or data.bedtime_dwell_active or source in ("ambience", "night", "sunrise", "sunset", "bedtime_dwell")) else house.min_cutoff
+    cutoff = 0 if (ambience_open or mode is Mode.NIGHT or data.bedtime_dwell_active or source in ("ambience", "night", "sunrise", "sunset", "bedtime_dwell")) else max(house.min_cutoff, light.clamp_min)
     if 0 < level < cutoff and mode not in (Mode.AWAY, Mode.SUNRISE, Mode.SUNSET, Mode.NIGHT):
         level = 0
         trace.append(("below_cutoff", cutoff))

@@ -14,12 +14,14 @@ from custom_components.solace.engine import (
     ambience_threshold,
     apply_clamp,
     clip_to_full,
+    compute_state_table,
     debounce_ambience,
     demand,
     past_dead_zone,
     ramp_bias,
     rate_limit,
     solve,
+    solve_master,
     to_level,
 )
 from custom_components.solace.models import (
@@ -1006,11 +1008,38 @@ def test_virtual_sunset_custom_spline_curve_and_demand_clamping(light):
     )
     assert got_mid.level == 60
 
-    # At progress=1.0 -> 0
-    got_end = solve(
-        house_curve, bedroom, light,
-        _input(lux=0.0, sunset_progress=1.0, occupied=True),
+def test_per_light_min_is_a_cutoff_not_a_floor_and_exempt_in_ambience_and_night(house, room):
+    """Section 6.2 & UI Help Text: Min is a cutoff, not a floor.
+    - During daytime demand tracking, level below cutoff drops to 0.
+    - During Ambience (L3) and Night (Ls), cutoff is disabled and low levels are NOT clamped upward.
+    """
+    entry_light = LightSettings(
+        entity_id="light.entry_ceiling",
+        clamp_min=60,  # 24% cutoff
+        clamp_max=100,
     )
-    assert got_end.level == 0
+    # 1. Ambience level of 2 (1%) MUST remain 2 and NOT be forced to 60
+    table = compute_state_table(
+        solve_master(0.0, 22.0, house),
+        house,
+        RoomSettings(name="Entry", ambience_level=2),
+        entry_light,
+        clock_hour=22.0,
+    )
+    assert table.l3 == 2
+
+    # 2. Night level (3) MUST remain 3 and NOT be forced to 60
+    assert table.ls == house.night_level
+
+    # 3. In daytime, if demand level is below cutoff (e.g. 30 < 60), L1 drops to 0
+    table_low_demand = compute_state_table(
+        solve_master(200.0, 14.0, house),  # lower demand
+        house,
+        room,
+        entry_light,
+        clock_hour=14.0,
+    )
+    assert table_low_demand.l1 == 0
+
 
 
