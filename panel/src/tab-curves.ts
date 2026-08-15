@@ -5,7 +5,7 @@
  * 3. 24h Target Colour Schedule (0-24h vs Derims [100-433 d / 2000-6000K])
  */
 
-import { LitElement, css, html, nothing } from "lit";
+import { LitElement, css, html, nothing, svg } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import type { BrightnessPoint, ColourPoint, Hass, LuxPoint, Snapshot } from "./api";
 import { setBrightnessTimeline, setColourTimeline, setHouse, setLuxCurve } from "./api";
@@ -229,7 +229,10 @@ export class SolTabCurves extends LitElement {
     if (key === "lux") {
       if (this.localLux) return this.localLux;
       if (this.snap?.lux_curve?.length) {
-        return this.snap.lux_curve.map((p) => ({ x: p.lux, y: p.demand_pct }));
+        return this.snap.lux_curve.map((p) => ({
+          x: p.lux,
+          y: p.demand_pct > 1.0 ? p.demand_pct : p.demand_pct * 100.0,
+        }));
       }
       return DEF_LUX;
     }
@@ -647,7 +650,7 @@ export class SolTabCurves extends LitElement {
 
         <!-- Live World Pulse Cursor -->
         ${hasLive
-          ? html`
+          ? svg`
               <g>
                 <circle cx="${liveX}" cy="${liveY}" r="7" fill="rgba(255,255,255,0.16)">
                   <animate attributeName="r" values="6;13;6" dur="2.6s" repeatCount="indefinite"></animate>
@@ -663,7 +666,7 @@ export class SolTabCurves extends LitElement {
           const cx = this.xp(key, n.x);
           const cy = this.yp(key, n.y);
           const selected = isSel && selNodeIdx === i;
-          return html`
+          return svg`
             <circle
               cx="${cx}"
               cy="${cy}"
@@ -671,6 +674,7 @@ export class SolTabCurves extends LitElement {
               fill="${selected ? "var(--sol-amber)" : "var(--sol-blue)"}"
               stroke="#111213"
               stroke-width="2"
+              style="cursor: pointer;"
             ></circle>
           `;
         })}
@@ -688,45 +692,45 @@ export class SolTabCurves extends LitElement {
       const yt = [0, 25, 50, 75, 100];
       for (const x of xt) {
         const px = this.xp("lux", x);
-        lines.push(html`<line x1="${px}" y1="${Y0}" x2="${px}" y2="${Y1}" stroke="rgba(255,255,255,0.08)" stroke-width="1"></line>`);
-        lines.push(html`<text x="${px}" y="${Y1 + 16}" fill="var(--sol-text-3)" font-size="10.5px" text-anchor="middle">${x >= 1000 ? x / 1000 + "k" : x}</text>`);
+        lines.push(svg`<line x1="${px}" y1="${Y0}" x2="${px}" y2="${Y1}" stroke="rgba(255,255,255,0.08)" stroke-width="1"></line>`);
+        lines.push(svg`<text x="${px}" y="${Y1 + 16}" fill="rgba(255,255,255,0.45)" font-size="10.5px" font-family="Roboto, sans-serif" text-anchor="middle">${x >= 1000 ? x / 1000 + "k" : x}</text>`);
       }
       for (const y of yt) {
         const py = this.yp("lux", y);
-        lines.push(html`<line x1="${X0}" y1="${py}" x2="${X1}" y2="${py}" stroke="rgba(255,255,255,0.08)" stroke-width="1"></line>`);
-        lines.push(html`<text x="${X0 - 8}" y="${py + 4}" fill="var(--sol-text-3)" font-size="10.5px" text-anchor="end">${y}%</text>`);
+        lines.push(svg`<line x1="${X0}" y1="${py}" x2="${X1}" y2="${py}" stroke="rgba(255,255,255,0.08)" stroke-width="1"></line>`);
+        lines.push(svg`<text x="${X0 - 8}" y="${py + 4}" fill="rgba(255,255,255,0.45)" font-size="10.5px" font-family="Roboto, sans-serif" text-anchor="end">${y}%</text>`);
       }
-      lines.push(html`<text x="${(X0 + X1) / 2}" y="325" fill="var(--sol-text-4)" font-size="11px" text-anchor="middle">outdoor illuminance (lx)</text>`);
+      lines.push(svg`<text x="${(X0 + X1) / 2}" y="325" fill="rgba(255,255,255,0.3)" font-size="11px" font-family="Roboto, sans-serif" text-anchor="middle">outdoor illuminance (lx)</text>`);
     } else if (key === "bright") {
       const xt = [0, 3, 6, 9, 12, 15, 18, 21, 24];
       const yt = [0, 63, 127, 190, 254];
       for (const x of xt) {
         const px = this.xp("bright", x);
-        lines.push(html`<line x1="${px}" y1="${Y0}" x2="${px}" y2="${Y1}" stroke="rgba(255,255,255,0.08)" stroke-width="1"></line>`);
-        lines.push(html`<text x="${px}" y="${Y1 + 16}" fill="var(--sol-text-3)" font-size="10.5px" text-anchor="middle">${String(x).padStart(2, "0")}:00</text>`);
+        lines.push(svg`<line x1="${px}" y1="${Y0}" x2="${px}" y2="${Y1}" stroke="rgba(255,255,255,0.08)" stroke-width="1"></line>`);
+        lines.push(svg`<text x="${px}" y="${Y1 + 16}" fill="rgba(255,255,255,0.45)" font-size="10.5px" font-family="Roboto, sans-serif" text-anchor="middle">${String(x).padStart(2, "0")}:00</text>`);
       }
       for (const y of yt) {
         const py = this.yp("bright", y);
-        lines.push(html`<line x1="${X0}" y1="${py}" x2="${X1}" y2="${py}" stroke="rgba(255,255,255,0.08)" stroke-width="1"></line>`);
-        lines.push(html`<text x="${X0 - 8}" y="${py + 4}" fill="var(--sol-text-3)" font-size="10.5px" text-anchor="end">${y}</text>`);
+        lines.push(svg`<line x1="${X0}" y1="${py}" x2="${X1}" y2="${py}" stroke="rgba(255,255,255,0.08)" stroke-width="1"></line>`);
+        lines.push(svg`<text x="${X0 - 8}" y="${py + 4}" fill="rgba(255,255,255,0.45)" font-size="10.5px" font-family="Roboto, sans-serif" text-anchor="end">${y}</text>`);
       }
-      lines.push(html`<text x="${(X0 + X1) / 2}" y="325" fill="var(--sol-text-4)" font-size="11px" text-anchor="middle">time of day</text>`);
+      lines.push(svg`<text x="${(X0 + X1) / 2}" y="325" fill="rgba(255,255,255,0.3)" font-size="11px" font-family="Roboto, sans-serif" text-anchor="middle">time of day</text>`);
     } else if (key === "colour") {
       const xt = [0, 3, 6, 9, 12, 15, 18, 21, 24];
       // Derims ticks covering 2000K (100d) to 6000K (433d)
       const yt = [100, 200, 300, 400, 433.3];
       for (const x of xt) {
         const px = this.xp("colour", x);
-        lines.push(html`<line x1="${px}" y1="${Y0}" x2="${px}" y2="${Y1}" stroke="rgba(255,255,255,0.08)" stroke-width="1"></line>`);
-        lines.push(html`<text x="${px}" y="${Y1 + 16}" fill="var(--sol-text-3)" font-size="10.5px" text-anchor="middle">${String(x).padStart(2, "0")}:00</text>`);
+        lines.push(svg`<line x1="${px}" y1="${Y0}" x2="${px}" y2="${Y1}" stroke="rgba(255,255,255,0.08)" stroke-width="1"></line>`);
+        lines.push(svg`<text x="${px}" y="${Y1 + 16}" fill="rgba(255,255,255,0.45)" font-size="10.5px" font-family="Roboto, sans-serif" text-anchor="middle">${String(x).padStart(2, "0")}:00</text>`);
       }
       for (const y of yt) {
         const py = this.yp("colour", y);
         const k = derimToKelvin(y);
-        lines.push(html`<line x1="${X0}" y1="${py}" x2="${X1}" y2="${py}" stroke="rgba(255,255,255,0.08)" stroke-width="1"></line>`);
-        lines.push(html`<text x="${X0 - 8}" y="${py + 4}" fill="var(--sol-text-3)" font-size="10.5px" text-anchor="end">${Math.round(y)}d (${k}K)</text>`);
+        lines.push(svg`<line x1="${X0}" y1="${py}" x2="${X1}" y2="${py}" stroke="rgba(255,255,255,0.08)" stroke-width="1"></line>`);
+        lines.push(svg`<text x="${X0 - 8}" y="${py + 4}" fill="rgba(255,255,255,0.45)" font-size="10.5px" font-family="Roboto, sans-serif" text-anchor="end">${Math.round(y)}d (${k}K)</text>`);
       }
-      lines.push(html`<text x="${(X0 + X1) / 2}" y="325" fill="var(--sol-text-4)" font-size="11px" text-anchor="middle">time of day (derims / kelvin)</text>`);
+      lines.push(svg`<text x="${(X0 + X1) / 2}" y="325" fill="rgba(255,255,255,0.3)" font-size="11px" font-family="Roboto, sans-serif" text-anchor="middle">time of day (derims / kelvin)</text>`);
     }
     return lines;
   }
@@ -737,23 +741,23 @@ export class SolTabCurves extends LitElement {
     const vlines = [];
     if (world.sunrise_hour !== null) {
       const x = this.xp(key, world.sunrise_hour);
-      vlines.push(html`
+      vlines.push(svg`
         <line x1="${x}" y1="${Y0}" x2="${x}" y2="${Y1}" stroke="rgba(255,183,77,0.45)" stroke-dasharray="4 3"></line>
-        <text x="${x + 4}" y="${Y0 + 12}" fill="#c99a4e" font-size="10px">sunrise</text>
+        <text x="${x + 4}" y="${Y0 + 12}" fill="#c99a4e" font-size="10px" font-family="Roboto, sans-serif">sunrise</text>
       `);
     }
     if (world.sunset_hour !== null) {
       const x = this.xp(key, world.sunset_hour);
-      vlines.push(html`
+      vlines.push(svg`
         <line x1="${x}" y1="${Y0}" x2="${x}" y2="${Y1}" stroke="rgba(255,183,77,0.45)" stroke-dasharray="4 3"></line>
-        <text x="${x + 4}" y="${Y0 + 12}" fill="#ffb74d" font-size="10px">sunset</text>
+        <text x="${x + 4}" y="${Y0 + 12}" fill="#ffb74d" font-size="10px" font-family="Roboto, sans-serif">sunset</text>
       `);
     }
     if (world.dusk_hour !== null) {
       const x = this.xp(key, world.dusk_hour);
-      vlines.push(html`
+      vlines.push(svg`
         <line x1="${x}" y1="${Y0}" x2="${x}" y2="${Y1}" stroke="rgba(149,117,205,0.7)" stroke-dasharray="4 3"></line>
-        <text x="${x + 4}" y="${Y0 + 24}" fill="#b39ddb" font-size="10px">civil dusk</text>
+        <text x="${x + 4}" y="${Y0 + 24}" fill="#b39ddb" font-size="10px" font-family="Roboto, sans-serif">civil dusk</text>
       `);
     }
     return vlines;

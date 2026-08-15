@@ -238,7 +238,9 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
             fields["lux_curve"] = tuple(
                 SplinePoint(
                     float(p.get("lux", p.get("x", 0.0))),
-                    float(p.get("demand_pct", p.get("demand", p.get("y", 0.0)))),
+                    float(p.get("demand_pct", p.get("demand", p.get("y", 0.0)))) / 100.0
+                    if float(p.get("demand_pct", p.get("demand", p.get("y", 0.0)))) > 1.0
+                    else float(p.get("demand_pct", p.get("demand", p.get("y", 0.0)))),
                 )
                 for p in options[CONF_LUX_CURVE]
             )

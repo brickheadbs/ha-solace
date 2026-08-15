@@ -257,7 +257,11 @@ def _snapshot(hass: HomeAssistant, coordinator: SolaceCoordinator) -> dict[str, 
             {"hour": point.hour, "stops": point.stops} for point in house.ramp
         ],
         "lux_curve": [
-            {"lux": point.x, "demand_pct": point.y} for point in house.lux_curve
+            {
+                "lux": point.x,
+                "demand_pct": round(point.y * 100.0 if point.y <= 1.0 else point.y, 1),
+            }
+            for point in house.lux_curve
         ],
         "brightness_timeline": [
             {"hour": point.x, "level": point.y} for point in house.brightness_timeline
@@ -450,7 +454,15 @@ async def ws_set_lux_curve(hass: HomeAssistant, connection, msg: dict[str, Any])
         connection.send_error(msg["id"], "not_loaded", "Solace is not set up")
         return
     points = sorted(
-        [{"lux": float(p["lux"]), "demand_pct": float(p["demand_pct"])} for p in msg["lux_curve"]],
+        [
+            {
+                "lux": float(p["lux"]),
+                "demand_pct": float(p["demand_pct"]) / 100.0
+                if float(p["demand_pct"]) > 1.0
+                else float(p["demand_pct"]),
+            }
+            for p in msg["lux_curve"]
+        ],
         key=lambda p: p["lux"],
     )
     hass.config_entries.async_update_entry(entry, options={**entry.options, CONF_LUX_CURVE: points})
