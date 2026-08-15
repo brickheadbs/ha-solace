@@ -211,6 +211,7 @@ export class SolTabSettings extends LitElement {
               <div class="bed-head">
                 <ha-icon icon="mdi:weather-night" style="color: var(--sol-amber);"></ha-icon>
                 <div class="bed-title">1 · Sleep mode</div>
+                <sol-help text="Forces bedroom lights to dark even during a 04:30 summer sunrise or daytime nap. Triggered by phone DND or manual sleep switch."></sol-help>
                 <div class="spacer"></div>
                 <button
                   class="toggle-btn ${sleepActive ? "toggle-sleep-on" : "toggle-off"}"
@@ -222,12 +223,6 @@ export class SolTabSettings extends LitElement {
                 </button>
               </div>
               <div class="badge badge-amber">Forced off across all modes</div>
-              <div style="font-size: 11.5px; color: var(--sol-text-3); line-height: 1.55; margin-bottom: 8px;">
-                Forces bedroom lights to dark even during a 04:30 summer sunrise or daytime nap.
-              </div>
-              <div style="font-size: 11px; color: var(--sol-text-4); line-height: 1.5;">
-                Trigger · Pixel 8a DND priority_only or manual sleep switch
-              </div>
             </div>
 
             <!-- Mode 2: Virtual Sunrise -->
@@ -235,6 +230,7 @@ export class SolTabSettings extends LitElement {
               <div class="bed-head">
                 <ha-icon icon="mdi:weather-sunset-up" style="color: var(--sol-amber);"></ha-icon>
                 <div class="bed-title">2 · Virtual sunrise</div>
+                <sol-help text="Gradual morning fade up before alarm. Daylight-gated so it skips fade if natural morning light is already bright."></sol-help>
                 <div class="spacer"></div>
                 <button
                   class="toggle-btn ${riseActive ? "toggle-on" : "toggle-off"}"
@@ -246,7 +242,7 @@ export class SolTabSettings extends LitElement {
                 </button>
               </div>
               <div class="badge badge-blue">Daylight gated</div>
-              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 9px 12px; margin-bottom: 8px;">
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 9px 12px;">
                 <div>
                   <div style="font-size: 11px; color: var(--sol-text-3); margin-bottom: 4px;">Fade duration</div>
                   <input
@@ -274,9 +270,6 @@ export class SolTabSettings extends LitElement {
                   />
                 </div>
               </div>
-              <div style="font-size: 11px; color: var(--sol-text-4); line-height: 1.5;">
-                Skips fade if natural morning light is already bright.
-              </div>
             </div>
 
             <!-- Mode 3: Virtual Sunset -->
@@ -284,6 +277,7 @@ export class SolTabSettings extends LitElement {
               <div class="bed-head">
                 <ha-icon icon="mdi:weather-sunset-down" style="color: var(--sol-amber);"></ha-icon>
                 <div class="bed-title">3 · Virtual sunset</div>
+                <sol-help text="Fades down toward dark before bedtime. Daylight-gated so it only runs when dark."></sol-help>
                 <div class="spacer"></div>
                 <button
                   class="toggle-btn ${setActive ? "toggle-on" : "toggle-off"}"
@@ -295,7 +289,7 @@ export class SolTabSettings extends LitElement {
                 </button>
               </div>
               <div class="badge badge-blue">Daylight gated</div>
-              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 9px 12px; margin-bottom: 8px;">
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 9px 12px;">
                 <div>
                   <div style="font-size: 11px; color: var(--sol-text-3); margin-bottom: 4px;">Fade duration</div>
                   <input
@@ -323,9 +317,6 @@ export class SolTabSettings extends LitElement {
                   />
                 </div>
               </div>
-              <div style="font-size: 11px; color: var(--sol-text-4); line-height: 1.5;">
-                Fades down toward dark before sleep time.
-              </div>
             </div>
           </div>
         </div>
@@ -346,7 +337,7 @@ export class SolTabSettings extends LitElement {
               <div class="trans-row">
                 <div class="trans-lbl">Motion turn-on</div>
                 <div class="trans-dots"></div>
-                <div class="trans-path">∗ → L1</div>
+                <div class="trans-path">* → L1</div>
                 <input
                   type="number"
                   step="0.5"
@@ -396,7 +387,7 @@ export class SolTabSettings extends LitElement {
               <div class="trans-row">
                 <div class="trans-lbl">Empty to ambience</div>
                 <div class="trans-dots"></div>
-                <div class="trans-path">∗ → L3</div>
+                <div class="trans-path">* → L3</div>
                 <input
                   type="number"
                   step="0.5"
@@ -411,7 +402,7 @@ export class SolTabSettings extends LitElement {
               <div class="trans-row">
                 <div class="trans-lbl">Empty to dark</div>
                 <div class="trans-dots"></div>
-                <div class="trans-path">∗ → Off</div>
+                <div class="trans-path">* → Off</div>
                 <input
                   type="number"
                   step="0.5"

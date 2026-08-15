@@ -11,7 +11,7 @@ import { LitElement, css, html, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import type { Hass, LightRow, RoomRow, Snapshot, ZoneRow } from "./api";
 import { roomAction, setHouse, setLight, setRoom, setZones } from "./api";
-import { ago, clock, consequence, countdown, lightPct, lux, num, stopLabel } from "./fmt";
+import { ago, consequence, countdown, lightPct, num, stopLabel } from "./fmt";
 import { tokens } from "./tokens";
 import "./ui";
 
@@ -485,25 +485,8 @@ export class SolTabHome extends LitElement {
 
   private renderStrip() {
     const w = this.snap.world;
-    const mode = w.night_active ? "Night" : w.asleep ? "Asleep" : "Normal";
-    const toDusk = ((w.dusk_hour - w.clock_hour + 24) % 24) * 60;
-    return html`<div class="strip">
-      <div>
-        <ha-icon icon=${w.night_active ? "mdi:weather-night" : "mdi:weather-sunset"}></ha-icon>
-        <b>${mode}</b>
-      </div>
-      <div><span>Outdoor</span><b>${lux(w.lux)}</b></div>
-      <div><span>Colour</span><b>${num(w.kelvin)} K</b></div>
-      <div>
-        <span>Civil dusk</span>
-        <b>${clock(w.dusk_hour)}</b>
-        ${toDusk < 12 * 60 ? html`<span>(${Math.round(toDusk)} min)</span>` : nothing}
-      </div>
-      <div><span>Updated</span><b>${ago(w.updated_at)}</b></div>
-      <div>
-        <span>Every</span
-        ><b>${w.interval_s ? `${Math.round(w.interval_s)} s` : "—"}</b>
-      </div>
+    return html`<div class="strip" style="justify-content: flex-end; padding: 6px 14px; background: transparent; box-shadow: none; margin-bottom: -4px;">
+      <div style="border-left: none; padding: 0;"><span>Updated</span><b>${ago(w.updated_at)}</b></div>
     </div>`;
   }
 
@@ -706,18 +689,14 @@ export class SolTabHome extends LitElement {
       <div class="room-head">
         <ha-icon class="room-icon ${lit ? "lit" : ""}" icon=${this.roomIcon(room.name)}></ha-icon>
         <div class="title">
-          <div style="display:flex;align-items:center;gap:4px">
+          <div style="display:flex;align-items:center;gap:6px">
             <h3>${room.name}</h3>
             <ha-icon
+              style="margin-left: 6px;"
               class="motion-icon ${room.occupied ? "motion-active" : ""}"
               icon="mdi:motion-sensor"
               title="${room.occupied ? "Occupied" : "Clear"}"
             ></ha-icon>
-          </div>
-          <div class="sub">
-            ${room.lights.length} light${room.lights.length === 1 ? "" : "s"} ·
-            ${room.occupied ? "occupied" : "clear"} ·
-            ${room.ambience_open ? "dark" : "daylight"}
           </div>
         </div>
         <sol-segmented

@@ -189,9 +189,9 @@ export class TabRemotes extends LitElement {
             return html`<option
               value=${opt.value}
               ?selected=${value === opt.value}
-              ?disabled=${isAssigned}
+              style="${isAssigned ? "color: var(--sol-text-4);" : ""}"
             >
-              ${opt.label}${isAssigned ? " (Already assigned)" : ""}
+              ${opt.label}${isAssigned ? " • (in use)" : ""}
             </option>`;
           })}
         </select>

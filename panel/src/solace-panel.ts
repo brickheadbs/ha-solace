@@ -19,6 +19,7 @@ import { LitElement, css, html, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import type { Hass, Snapshot } from "./api";
 import { subscribe } from "./api";
+import { kelvinToDerim } from "./derim";
 import "./tab-curves";
 import "./tab-home";
 import "./tab-remotes";
@@ -260,6 +261,8 @@ export class SolacePanel extends LitElement {
       modeBadge = html`<span class="status-badge badge-night"><ha-icon icon="mdi:bed"></ha-icon> Bedtime Wind-Down</span>`;
     }
 
+    const demandPct = Math.round((w.demand ?? 0) * 100);
+    const derimVal = Math.round(kelvinToDerim(w.kelvin ?? 4000));
     const luxStr = Math.round(w.lux).toLocaleString() + " lx";
     const luxDesc = w.lux > 5000 ? "Full Sun" : w.lux > 500 ? "Daylight" : w.lux > 50 ? "Twilight" : "Dark";
 
@@ -267,16 +270,18 @@ export class SolacePanel extends LitElement {
       <div class="status-banner">
         <div class="status-group">
           <span class="status-item">
+            <span class="status-badge" style="background: rgba(33, 150, 243, 0.15); color: var(--sol-cyan);">Demand ${demandPct}%</span>
+          </span>
+          <span class="status-item">
             <ha-icon icon="mdi:white-balance-sunny"></ha-icon>
             <strong>${luxStr}</strong> (${luxDesc})
           </span>
           <span class="status-item">
-            <ha-icon icon="mdi:home-clock"></ha-icon>
-            ${modeBadge}
+            <ha-icon icon="mdi:palette-outline"></ha-icon>
+            ${w.kelvin} K (${derimVal} derim)
           </span>
           <span class="status-item">
-            <ha-icon icon="mdi:thermometer"></ha-icon>
-            ${w.kelvin} K
+            ${modeBadge}
           </span>
         </div>
         <div class="room-badges">
@@ -306,18 +311,11 @@ export class SolacePanel extends LitElement {
   }
 
   render() {
-    const healthy = this.snap?.world.healthy ?? false;
     return html`
       <header>
         <div class="bar">
           <ha-icon class="brand" icon="mdi:tune"></ha-icon>
           <h1>Lighting Engine</h1>
-          ${this.snap
-            ? html`<span class="pill">
-                <span class="dot ${healthy ? "" : "bad"}"></span>
-                ${healthy ? "Engine running" : "Engine stalled"}
-              </span>`
-            : nothing}
         </div>
         <nav role="tablist">
           ${TABS.map(

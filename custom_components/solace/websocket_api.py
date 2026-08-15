@@ -55,6 +55,7 @@ from .const import (
     Setting,
 )
 from .coordinator import SolaceConfigEntry, SolaceCoordinator
+from .engine import solve_master
 from .models import Family
 
 _LOGGER = logging.getLogger(__name__)
@@ -278,6 +279,7 @@ def _snapshot(hass: HomeAssistant, coordinator: SolaceCoordinator) -> dict[str, 
         "remotes": coordinator.remotes.get_configured_remotes(),
         "world": {
             "lux": coordinator._lux(),  # noqa: SLF001
+            "demand": round(solve_master(coordinator._lux(), clock_hour, house).demand, 4),  # noqa: SLF001
             "clock_hour": round(clock_hour, 4),
             "dusk_hour": round(dusk_hour, 4),
             "sunrise_hour": _hour(sun_attrs.get("next_rising")),

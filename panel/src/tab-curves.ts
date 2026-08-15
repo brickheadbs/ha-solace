@@ -512,13 +512,23 @@ export class SolTabCurves extends LitElement {
     `;
   }
 
+  private getCardHelp(key: CurveKey): string {
+    if (key === "lux") {
+      return "Indoor demand against measured outdoor light. Drag a node to shape the curve · click the line to add one · double-click or right-click to remove · type exact values in the node fields. Monotone cubic spline interpolation.";
+    }
+    if (key === "bright") {
+      return "Master brightness level through the day across the 24-hour cycle. Drag a node to adjust level across the day · click to add · double-click to remove.";
+    }
+    return "Colour temperature in Derims (100d candle to 433d daylight). Drag a node to shape circadian colour across the day.";
+  }
+
   private renderCard(key: CurveKey) {
     return html`
       <div class="card">
         <div class="head">
           <ha-icon icon="${key === "lux" ? "mdi:weather-sunny" : key === "bright" ? "mdi:clock-outline" : "mdi:palette-outline"}" style="color: var(--sol-blue);"></ha-icon>
           <div class="title">${this.getCardTitle(key)}</div>
-          <div class="sub">${this.getCardSubtitle(key)}</div>
+          <sol-help text="${this.getCardHelp(key)}"></sol-help>
           <div class="spacer"></div>
           <div class="legend">
             ${this.renderLegend(key)}
@@ -548,10 +558,6 @@ export class SolTabCurves extends LitElement {
         </div>
 
         ${key === "lux" ? this.renderCloudyBoost() : nothing}
-
-        <div class="hint">
-          Drag a node to shape the curve · click the line to add one · double-click or right-click to remove · type exact values in the node fields. Interpolation is monotone cubic spline, so the curve never overshoots.
-        </div>
       </div>
     `;
   }
@@ -671,9 +677,9 @@ export class SolTabCurves extends LitElement {
               cx="${cx}"
               cy="${cy}"
               r="${selected ? 8 : 6}"
-              fill="${selected ? "var(--sol-amber)" : "var(--sol-blue)"}"
-              stroke="#111213"
-              stroke-width="2"
+              fill="${selected ? "#ffb74d" : "#38bdf8"}"
+              stroke="#ffffff"
+              stroke-width="1.5"
               style="cursor: pointer;"
             ></circle>
           `;
@@ -870,12 +876,6 @@ export class SolTabCurves extends LitElement {
     if (key === "lux") return "Outdoor lux demand curve";
     if (key === "bright") return "24h target brightness schedule";
     return "24h target colour schedule (Derims)";
-  }
-
-  private getCardSubtitle(key: CurveKey): string {
-    if (key === "lux") return "indoor demand against measured outdoor light";
-    if (key === "bright") return "master level through the day";
-    return "colour temperature in Derims (100d candle to 433d daylight)";
   }
 
   private renderLegend(key: CurveKey) {

@@ -84,6 +84,7 @@ export interface RoomRow {
 
 export interface World {
   lux: number;
+  demand?: number | null;
   clock_hour: number;
   dusk_hour: number;
   sunrise_hour: number | null;
