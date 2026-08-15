@@ -63,6 +63,7 @@ def test_every_model_field_is_reachable_from_the_ui():
         "zones",
         "name",
         "lux_curve",
+        "lux_cloudy_curve",
         "brightness_timeline",
         "colour_timeline",
         "sunrise_curve",

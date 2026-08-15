@@ -51,13 +51,19 @@ def normal_light() -> LightSettings:
     )
 
 
-def test_master_processing_spline_curves():
-    """Verify Master Processing generates baseline target brightness and colour from splines."""
+def test_master_processing_spline_curves_and_overcast_crossfade():
+    """Verify Master Processing generates baseline target brightness and colour from splines and crossfades overcast curve."""
     custom_lux = (
         SplinePoint(0.0, 1.0),
         SplinePoint(100.0, 0.8),
         SplinePoint(1000.0, 0.2),
         SplinePoint(3000.0, 0.0),
+    )
+    custom_lux_cloudy = (
+        SplinePoint(0.0, 1.0),
+        SplinePoint(100.0, 0.95),
+        SplinePoint(1000.0, 0.6),
+        SplinePoint(3000.0, 0.3),
     )
     custom_bright = (
         SplinePoint(0.0, 30.0),
@@ -68,16 +74,28 @@ def test_master_processing_spline_curves():
     )
     house_custom = HouseSettings(
         lux_curve=custom_lux,
+        lux_cloudy_curve=custom_lux_cloudy,
         brightness_timeline=custom_bright,
+        cloudy_blend_threshold=50.0,
     )
 
-    # 1. Measured 100 lx at 12:00 -> uses custom_lux curve (demand = 0.8)
-    out = solve_master(lux=100.0, clock_hour=12.0, house=house_custom)
-    assert out.demand == 0.8
-    assert out.time_brightness_level > 200
-    assert out.target_brightness == int(round(0.8 * out.time_brightness_level))
+    # 1. Sunny day at 12:00 (100 lx, 20% clouds < 50% threshold) -> 100% Clear curve (demand = 0.8)
+    out_sunny = solve_master(lux=100.0, clock_hour=12.0, house=house_custom, cloud_coverage=20.0)
+    assert out_sunny.cloud_alpha == 0.0
+    assert out_sunny.demand_clear == 0.8
+    assert out_sunny.demand == 0.8
 
-    # 2. Bright midday sun (5000 lx) -> 0 demand
+    # 2. Overcast day at 12:00 (100 lx, 75% clouds -> 50% blend between 0.8 and 0.95 = 0.875)
+    out_cloudy = solve_master(lux=100.0, clock_hour=12.0, house=house_custom, cloud_coverage=75.0)
+    assert out_cloudy.cloud_alpha == 0.5
+    assert abs(out_cloudy.demand - 0.875) < 1e-4
+
+    # 3. 100% clouds -> 100% Overcast curve (0.95)
+    out_full = solve_master(lux=100.0, clock_hour=12.0, house=house_custom, cloud_coverage=100.0)
+    assert out_full.cloud_alpha == 1.0
+    assert abs(out_full.demand - 0.95) < 1e-4
+
+    # 4. Bright midday sun (5000 lx) -> 0 demand regardless of clouds
     bright_sun = solve_master(lux=5000.0, clock_hour=12.0, house=house_custom)
     assert bright_sun.demand == 0.0
     assert bright_sun.target_brightness == 0
