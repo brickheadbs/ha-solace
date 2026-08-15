@@ -21,8 +21,12 @@ from custom_components.solace.models import HouseSettings, RoomSettings
 BOOLEANS = {
     "ambience_ignores_occupancy",
     "sunrise_fade_enabled",
+    "sunset_fade_enabled",
+    "bedroom_sleep_forced_off",
     "bedtime_dwell_enabled",
     "sunrise_enabled",
+    "sunset_enabled",
+    "manual_mode",
 }
 """Rendered as switches. Two states is the whole point, not coarseness."""
 
@@ -52,9 +56,9 @@ def test_every_room_setting_exists_on_the_model(setting):
 def test_every_model_field_is_reachable_from_the_ui():
     """The other direction, and the one that actually rots: a field added to the engine
     with no row in the settings table is a hardcoded value wearing a default."""
-    # `ramp` and `zones` are lists, not scalars — each has its own purpose-built editor
-    # in the panel rather than a numeric row. `name` is the subentry title.
-    exempt = {"ramp", "zones", "name"}
+    # `ramp`, `zones`, and the 3 spline timelines are lists/curves, not scalars — each has its own
+    # purpose-built editor in the panel rather than a numeric row. `name` is the subentry title.
+    exempt = {"ramp", "zones", "name", "lux_curve", "brightness_timeline", "colour_timeline"}
     house_keys = {s.key for s in HOUSE_SETTINGS}
     room_keys = {s.key for s in ROOM_SETTINGS}
     missing_house = set(HouseSettings.__slots__) - house_keys - exempt
