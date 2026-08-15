@@ -30,8 +30,11 @@ __all__ = [
     "Solution",
     "RemoteSettings",
     "DEFAULT_LUX_CURVE",
+    "DEFAULT_LUX_CLOUDY_CURVE",
     "DEFAULT_BRIGHTNESS_TIMELINE",
     "DEFAULT_COLOUR_TIMELINE",
+    "DEFAULT_SUNRISE_CURVE",
+    "DEFAULT_SUNSET_CURVE",
 ]
 
 
@@ -71,6 +74,15 @@ DEFAULT_LUX_CURVE: tuple[SplinePoint, ...] = (
     SplinePoint(540.0, 0.0),
 )
 
+DEFAULT_LUX_CLOUDY_CURVE: tuple[SplinePoint, ...] = (
+    SplinePoint(0.0, 1.0),
+    SplinePoint(50.0, 0.95),
+    SplinePoint(500.0, 0.70),
+    SplinePoint(2500.0, 0.40),
+    SplinePoint(7000.0, 0.20),
+    SplinePoint(12000.0, 0.0),
+)
+
 DEFAULT_BRIGHTNESS_TIMELINE: tuple[SplinePoint, ...] = (
     SplinePoint(0.0, 254.0),
     SplinePoint(6.5, 254.0),
@@ -88,6 +100,21 @@ DEFAULT_COLOUR_TIMELINE: tuple[SplinePoint, ...] = (
     SplinePoint(24.0, 2200.0),
 )
 
+DEFAULT_SUNRISE_CURVE: tuple[SplinePoint, ...] = (
+    SplinePoint(0.0, 0.0),
+    SplinePoint(30.0, 15.0),
+    SplinePoint(70.0, 90.0),
+    SplinePoint(100.0, 180.0),
+)
+
+DEFAULT_SUNSET_CURVE: tuple[SplinePoint, ...] = (
+    SplinePoint(0.0, 180.0),
+    SplinePoint(30.0, 120.0),
+    SplinePoint(70.0, 40.0),
+    SplinePoint(100.0, 0.0),
+)
+
+
 
 @dataclass(frozen=True, slots=True)
 class MasterOutput:
@@ -99,6 +126,10 @@ class MasterOutput:
     spline_demand: float
     cloudy_boost_stops: float
     time_brightness_level: int
+    cloud_coverage: float | None = None
+    cloud_alpha: float = 0.0
+    demand_clear: float = 0.0
+    demand_cloudy: float = 0.0
     trace: tuple[tuple[str, object], ...] = field(default=())
 
 
@@ -124,6 +155,8 @@ class HouseSettings:
 
     # -- Master Processing: Splines & Curves --------------------------------------
     lux_curve: tuple[SplinePoint, ...] = DEFAULT_LUX_CURVE
+    lux_cloudy_curve: tuple[SplinePoint, ...] = DEFAULT_LUX_CLOUDY_CURVE
+    cloudy_blend_threshold: float = 70.0
     cloudy_boost_stops: float = 0.0
     brightness_timeline: tuple[SplinePoint, ...] = DEFAULT_BRIGHTNESS_TIMELINE
     colour_timeline: tuple[SplinePoint, ...] = DEFAULT_COLOUR_TIMELINE
@@ -162,21 +195,14 @@ class HouseSettings:
     rate_limit_step: int = 0
     dead_zone: int = 2
 
-    # -- The 8 Transitions Matrix -------------------------------------------------
-    transition_turn_on_l1_s: float = 2.0
-    transition_wake_l3_s: float = 10.0
-    transition_diminish_l2_s: float = 5.0
-    transition_clear_to_l3_s: float = 5.0
-    transition_clear_to_off_s: float = 4.0
-    transition_tracking_s: float = 15.0
-    transition_night_s: float = 5.0
-    transition_manual_drag_s: float = 0.5
-
-    # Aliases for transition names
-    transition_on_s: float = 2.0
-    transition_off_s: float = 4.0
-    transition_mode_s: float = 10.0
-    transition_setting_s: float = 0.5
+    # -- The 7 Transitions Matrix -------------------------------------------------
+    transition_up_occupancy_s: float = 2.0
+    transition_up_ambience_s: float = 10.0
+    transition_down_diminish_s: float = 5.0
+    transition_down_ambience_s: float = 5.0
+    transition_down_off_s: float = 4.0
+    transition_automatic_s: float = 15.0
+    transition_manual_s: float = 0.5
 
     # -- Colour Settings ----------------------------------------------------------
     day_kelvin: int = 4000
@@ -209,8 +235,10 @@ class HouseSettings:
     sunrise_fade_enabled: bool = True
     sunrise_fade_minutes: float = 30.0
     virtual_sunrise_target_level: int = 180
+    sunrise_curve: tuple[SplinePoint, ...] = DEFAULT_SUNRISE_CURVE
     sunset_fade_enabled: bool = True
     sunset_fade_minutes: float = 20.0
+    sunset_curve: tuple[SplinePoint, ...] = DEFAULT_SUNSET_CURVE
     bedtime_dwell_enabled: bool = True
     bedtime_dwell_hour: float = 22.5
     bedtime_dwell_level: int = 15
@@ -301,6 +329,7 @@ class EngineInput:
     current_level: int = 0
     last_written_level: int | None = None
     last_source: str | None = None
+    cloud_coverage: float | None = None
 
 
 @dataclass(frozen=True, slots=True)

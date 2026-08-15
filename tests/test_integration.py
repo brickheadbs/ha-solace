@@ -496,7 +496,7 @@ async def test_dragging_a_setting_uses_the_tuning_transition(
     turn_ons = [c for c in calls if c["service"] == "turn_on"]
     assert turn_ons, "the settings change produced no write at all"
     house = entry.runtime_data.coordinator.house
-    assert turn_ons[-1]["service_data"]["transition"] == house.transition_setting_s
+    assert turn_ons[-1]["service_data"]["transition"] == house.transition_manual_s
 
     # And the tuning flag is one tick only — the next ordinary tick must not snap.
     assert entry.runtime_data.coordinator._tuning is False

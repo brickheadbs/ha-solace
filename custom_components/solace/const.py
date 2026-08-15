@@ -42,10 +42,15 @@ CONF_PER_LIGHT = "per_light"
 CONF_RAMP = "ramp"
 CONF_ZONES = "zones"
 CONF_LUX_CURVE = "lux_curve"
+CONF_LUX_CLOUDY_CURVE = "lux_cloudy_curve"
 CONF_BRIGHTNESS_TIMELINE = "brightness_timeline"
 CONF_COLOUR_TIMELINE = "colour_timeline"
+CONF_SUNRISE_CURVE = "sunrise_curve"
+CONF_SUNSET_CURVE = "sunset_curve"
+CONF_WEATHER_ENTITY = "weather_entity"
 
 DEFAULT_LUX_SENSOR = "sensor.entry_exterior_illuminance"
+DEFAULT_WEATHER_ENTITY = "weather.forecast_home"
 
 DEFAULT_MIN_INTERVAL_S = 30
 DEFAULT_MAX_INTERVAL_S = 600
@@ -75,6 +80,7 @@ class Setting:
 HOUSE_SETTINGS: tuple[Setting, ...] = (
     # Master Processing: Curves & Modifiers
     Setting("cloudy_boost_stops", "Cloudy boost", 0, 4, 0.05, 0, "stops", "mdi:weather-cloudy"),
+    Setting("cloudy_blend_threshold", "Cloudy blend threshold", 0, 100, 1, 75, "%", "mdi:weather-partly-cloudy"),
     Setting("mood_trim_stops", "Master mood trim", -4, 4, 0.05, 0, "stops", "mdi:tune"),
     # Ambient gate
     Setting("ambience_start_lux", "Gate start lux", 0, 2000, 1, 50, "lx", "mdi:weather-sunset-down"),
@@ -104,20 +110,17 @@ HOUSE_SETTINGS: tuple[Setting, ...] = (
     Setting("min_cutoff", "Minimum cutoff", 0, 254, 1, 1, None, "mdi:arrow-collapse-down"),
     Setting("rate_limit_step", "Rate limit", 0, 254, 1, 0, None, "mdi:speedometer-slow"),
     Setting("dead_zone", "Dead zone", 0, 50, 1, 2, None, "mdi:circle-off-outline"),
-    # Transitions Matrix (8 Dedicates Speeds)
-    Setting("transition_turn_on_l1_s", "Transition * -> L1", 0, 60, 0.1, 2, "s", "mdi:transition"),
-    Setting("transition_wake_l3_s", "Transition Off -> L3", 0, 60, 0.1, 10, "s", "mdi:transition"),
-    Setting("transition_diminish_l2_s", "Transition L1 -> L2", 0, 60, 0.1, 5, "s", "mdi:transition"),
-    Setting("transition_clear_to_l3_s", "Transition * -> L3", 0, 60, 0.1, 5, "s", "mdi:transition"),
-    Setting("transition_clear_to_off_s", "Transition * -> Off", 0, 60, 0.1, 4, "s", "mdi:transition"),
-    Setting("transition_tracking_s", "Transition 5m tracking", 0, 120, 0.5, 15, "s", "mdi:transition"),
-    Setting("transition_night_s", "Transition * -> Ls", 0, 60, 0.1, 5, "s", "mdi:transition"),
-    Setting("transition_manual_drag_s", "Transition slider drag", 0, 5, 0.05, 0.5, "s", "mdi:gesture-swipe"),
-    # Legacy Transition Aliases
-    Setting("transition_on_s", "Transition on", 0, 60, 0.1, 2, "s", "mdi:transition"),
-    Setting("transition_off_s", "Transition off", 0, 60, 0.1, 4, "s", "mdi:transition"),
-    Setting("transition_mode_s", "Transition mode change", 0, 300, 0.1, 10, "s", "mdi:transition"),
-    Setting("transition_setting_s", "Transition while tuning", 0, 5, 0.1, 0.5, "s", "mdi:gesture-swipe"),
+    # Transitions Matrix (7 Dedicated Speeds)
+    # UP
+    Setting("transition_up_occupancy_s", "Occupancy", 0, 60, 0.1, 2, "s", "mdi:motion-sensor"),
+    Setting("transition_up_ambience_s", "Ambience", 0, 60, 0.1, 10, "s", "mdi:weather-sunset-down"),
+    # DOWN
+    Setting("transition_down_diminish_s", "Diminish", 0, 60, 0.1, 5, "s", "mdi:timer-outline"),
+    Setting("transition_down_ambience_s", "Ambience", 0, 60, 0.1, 5, "s", "mdi:lightbulb-night-outline"),
+    Setting("transition_down_off_s", "Off", 0, 60, 0.1, 4, "s", "mdi:power"),
+    # CONTINUOUS & SPECIAL
+    Setting("transition_automatic_s", "Automatic", 0, 120, 0.5, 15, "s", "mdi:auto-fix"),
+    Setting("transition_manual_s", "Manual", 0, 5, 0.05, 0.5, "s", "mdi:gesture-swipe"),
     # Colour
     Setting("day_kelvin", "Day colour", 2000, 9000, 10, 4000, "K", "mdi:white-balance-sunny"),
     Setting("night_kelvin", "Night colour", 2000, 9000, 10, 2200, "K", "mdi:weather-night"),

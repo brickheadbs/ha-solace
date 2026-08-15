@@ -84,6 +84,7 @@ export interface RoomRow {
 
 export interface World {
   lux: number;
+  cloud_coverage?: number | null;
   demand?: number | null;
   clock_hour: number;
   dusk_hour: number;
@@ -92,9 +93,13 @@ export interface World {
   elevation: number | null;
   kelvin: number;
   asleep: boolean;
+  phone_dnd?: boolean;
+  watch_bedtime?: boolean;
+  manual_sleep?: boolean;
   night_active: boolean;
   away: boolean;
   sunrise_progress: number | null;
+  sunset_progress?: number | null;
   bedtime_dwell_active: boolean;
   latitude: number;
   longitude: number;
@@ -150,13 +155,21 @@ export interface ColourPoint {
   kelvin: number;
 }
 
+export interface ProgressPoint {
+  progress: number;
+  level: number;
+}
+
 export interface Snapshot {
   entry_id: string;
   house: Record<string, number>;
   ramp: RampPoint[];
   lux_curve?: LuxPoint[];
+  lux_cloudy_curve?: LuxPoint[];
   brightness_timeline?: BrightnessPoint[];
   colour_timeline?: ColourPoint[];
+  sunrise_curve?: ProgressPoint[];
+  sunset_curve?: ProgressPoint[];
   house_schema: Schema[];
   room_schema: Schema[];
   links: Record<string, string | null>;
@@ -188,6 +201,9 @@ export const setRamp = (hass: Hass, ramp: RampPoint[]) =>
 
 export const setLuxCurve = (hass: Hass, lux_curve: LuxPoint[]) =>
   hass.connection.sendMessagePromise({ type: "solace/set_lux_curve", lux_curve });
+
+export const setLuxCloudyCurve = (hass: Hass, lux_cloudy_curve: LuxPoint[]) =>
+  hass.connection.sendMessagePromise({ type: "solace/set_lux_cloudy_curve", lux_cloudy_curve });
 
 export const setBrightnessTimeline = (
   hass: Hass,
@@ -261,3 +277,20 @@ export const roomAction = (
 
 export const setRemotes = (hass: Hass, remotes: RemoteRow[]) =>
   hass.connection.sendMessagePromise({ type: "solace/set_remotes", remotes });
+
+export const toggleSleep = (hass: Hass) =>
+  hass.connection.sendMessagePromise({ type: "solace/toggle_sleep" });
+
+export const setSunriseCurve = (hass: Hass, sunrise_curve: ProgressPoint[]) =>
+  hass.connection.sendMessagePromise({
+    type: "solace/set_sunrise_curve",
+    sunrise_curve,
+  });
+
+export const setSunsetCurve = (hass: Hass, sunset_curve: ProgressPoint[]) =>
+  hass.connection.sendMessagePromise({
+    type: "solace/set_sunset_curve",
+    sunset_curve,
+  });
+
+

@@ -84,6 +84,10 @@ class MonotoneCubicSpline:
 
         self._m = m
 
+    def __call__(self, x_val: float) -> float:
+        """Alias for evaluate."""
+        return self.evaluate(x_val)
+
     def evaluate(self, x_val: float) -> float:
         """Evaluate the spline at query point x_val."""
         if self._n == 0:

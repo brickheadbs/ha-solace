@@ -264,7 +264,19 @@ export class SolacePanel extends LitElement {
     const demandPct = Math.round((w.demand ?? 0) * 100);
     const derimVal = Math.round(kelvinToDerim(w.kelvin ?? 4000));
     const luxStr = Math.round(w.lux).toLocaleString() + " lx";
-    const luxDesc = w.lux > 5000 ? "Full Sun" : w.lux > 500 ? "Daylight" : w.lux > 50 ? "Twilight" : "Dark";
+    const isCloudy = (w.cloud_coverage ?? 0) >= 70;
+    const luxDesc =
+      w.lux > 20000
+        ? "Full Sun"
+        : w.lux > 2500
+        ? isCloudy
+          ? "Overcast Daylight"
+          : "Direct Daylight"
+        : w.lux > 500
+        ? "Moderate Daylight"
+        : w.lux > 50
+        ? "Twilight"
+        : "Dark";
 
     return html`
       <div class="status-banner">
@@ -276,6 +288,12 @@ export class SolacePanel extends LitElement {
             <ha-icon icon="mdi:white-balance-sunny"></ha-icon>
             <strong>${luxStr}</strong> (${luxDesc})
           </span>
+          ${w.cloud_coverage !== null && w.cloud_coverage !== undefined
+            ? html`<span class="status-item">
+                <ha-icon icon="mdi:weather-cloudy"></ha-icon>
+                ${Math.round(w.cloud_coverage)}% Clouds
+              </span>`
+            : nothing}
           <span class="status-item">
             <ha-icon icon="mdi:palette-outline"></ha-icon>
             ${w.kelvin} K (${derimVal} derim)

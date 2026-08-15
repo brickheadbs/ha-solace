@@ -30,6 +30,7 @@ from custom_components.solace.models import (
     Mode,
     RampPoint,
     RoomSettings,
+    SplinePoint,
 )
 
 
@@ -950,4 +951,66 @@ def test_bedtime_dwell_and_night_mode_exempt_from_cutoff(house, light):
     )
     assert got_low.level == 3
     assert ("below_cutoff", 25) not in got_low.trace
+
+
+def test_virtual_sunrise_custom_spline_curve(light):
+    """Virtual sunrise evaluates custom spline points smoothly and caps to demand."""
+    custom_curve = (
+        SplinePoint(0.0, 0.0),
+        SplinePoint(50.0, 50.0),
+        SplinePoint(100.0, 200.0),
+    )
+    house_curve = HouseSettings(sunrise_curve=custom_curve)
+    bedroom = RoomSettings(name="Bedroom", night_off=True, sunrise_enabled=True)
+
+    # In dark winter (lux=0, demand=100% -> L1=254)
+    # At progress=0.5 -> 50 level
+    got_mid = solve(
+        house_curve, bedroom, light,
+        _input(lux=0.0, sunrise_progress=0.5, occupied=True),
+    )
+    assert got_mid.mode is Mode.SUNRISE
+    assert got_mid.level == 50
+
+    # At progress=1.0 -> 200 level
+    got_end = solve(
+        house_curve, bedroom, light,
+        _input(lux=0.0, sunrise_progress=1.0, occupied=True),
+    )
+    assert got_end.level == 200
+
+
+def test_virtual_sunset_custom_spline_curve_and_demand_clamping(light):
+    """Virtual sunset evaluates custom spline curve and respects master demand."""
+    custom_curve = (
+        SplinePoint(0.0, 180.0),
+        SplinePoint(50.0, 60.0),
+        SplinePoint(100.0, 0.0),
+    )
+    house_curve = HouseSettings(sunset_curve=custom_curve)
+    bedroom = RoomSettings(name="Bedroom", night_off=True, sunset_enabled=True)
+
+    # In dark night (lux=0, demand=100% -> L1=254)
+    # At progress=0.0 -> 180
+    got_start = solve(
+        house_curve, bedroom, light,
+        _input(lux=0.0, sunset_progress=0.0, occupied=True),
+    )
+    assert got_start.mode is Mode.SUNSET
+    assert got_start.level == 180
+
+    # At progress=0.5 -> 60
+    got_mid = solve(
+        house_curve, bedroom, light,
+        _input(lux=0.0, sunset_progress=0.5, occupied=True),
+    )
+    assert got_mid.level == 60
+
+    # At progress=1.0 -> 0
+    got_end = solve(
+        house_curve, bedroom, light,
+        _input(lux=0.0, sunset_progress=1.0, occupied=True),
+    )
+    assert got_end.level == 0
+
 

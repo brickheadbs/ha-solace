@@ -38,6 +38,7 @@ from .const import (
     CONF_DND_ENTITY,
     CONF_LIGHTS,
     CONF_LUX_CURVE,
+    CONF_LUX_CLOUDY_CURVE,
     CONF_LUX_SENSOR,
     CONF_NEAR_PRESENCE,
     CONF_PER_LIGHT,
@@ -45,6 +46,9 @@ from .const import (
     CONF_RAMP,
     CONF_REMOTES,
     CONF_SLEEP_TOGGLE,
+    CONF_SUNRISE_CURVE,
+    CONF_SUNSET_CURVE,
+    CONF_WEATHER_ENTITY,
     CONF_ZONES,
     DOMAIN,
     HOUSE_DEFAULTS,
@@ -73,8 +77,12 @@ def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_set_house)
     websocket_api.async_register_command(hass, ws_set_ramp)
     websocket_api.async_register_command(hass, ws_set_lux_curve)
+    websocket_api.async_register_command(hass, ws_set_lux_cloudy_curve)
     websocket_api.async_register_command(hass, ws_set_brightness_timeline)
     websocket_api.async_register_command(hass, ws_set_colour_timeline)
+    websocket_api.async_register_command(hass, ws_set_sunrise_curve)
+    websocket_api.async_register_command(hass, ws_set_sunset_curve)
+    websocket_api.async_register_command(hass, ws_toggle_sleep)
     websocket_api.async_register_command(hass, ws_set_room)
     websocket_api.async_register_command(hass, ws_set_light)
     websocket_api.async_register_command(hass, ws_room_action)
@@ -264,22 +272,51 @@ def _snapshot(hass: HomeAssistant, coordinator: SolaceCoordinator) -> dict[str, 
             }
             for point in house.lux_curve
         ],
+        "lux_cloudy_curve": [
+            {
+                "lux": point.x,
+                "demand_pct": round(point.y * 100.0 if point.y <= 1.0 else point.y, 1),
+            }
+            for point in house.lux_cloudy_curve
+        ],
         "brightness_timeline": [
             {"hour": point.x, "level": point.y} for point in house.brightness_timeline
         ],
         "colour_timeline": [
             {"hour": point.x, "kelvin": point.y} for point in house.colour_timeline
         ],
+        "sunrise_curve": [
+            {"progress": point.x, "level": point.y} for point in house.sunrise_curve
+        ],
+        "sunset_curve": [
+            {"progress": point.x, "level": point.y} for point in house.sunset_curve
+        ],
         "house_schema": [_schema_row(s) for s in HOUSE_SETTINGS],
         "room_schema": [_schema_row(s) for s in ROOM_SETTINGS],
         "links": {
             key: entry.options.get(key) or entry.data.get(key)
-            for key in (CONF_LUX_SENSOR, CONF_DND_ENTITY, CONF_SLEEP_TOGGLE, CONF_ALARM_ENTITY, CONF_AWAY_ENTITY)
+            for key in (
+                CONF_LUX_SENSOR,
+                CONF_WEATHER_ENTITY,
+                CONF_DND_ENTITY,
+                CONF_SLEEP_TOGGLE,
+                CONF_ALARM_ENTITY,
+                CONF_AWAY_ENTITY,
+            )
         },
         "remotes": coordinator.remotes.get_configured_remotes(),
         "world": {
             "lux": coordinator._lux(),  # noqa: SLF001
-            "demand": round(solve_master(coordinator._lux(), clock_hour, house).demand, 4),  # noqa: SLF001
+            "cloud_coverage": coordinator._cloud_coverage(),  # noqa: SLF001
+            "demand": round(
+                solve_master(
+                    coordinator._lux(),
+                    clock_hour,
+                    house,
+                    cloud_coverage=coordinator._cloud_coverage(),
+                ).demand,
+                4,
+            ),  # noqa: SLF001
             "clock_hour": round(clock_hour, 4),
             "dusk_hour": round(dusk_hour, 4),
             "sunrise_hour": _hour(sun_attrs.get("next_rising")),
@@ -287,9 +324,13 @@ def _snapshot(hass: HomeAssistant, coordinator: SolaceCoordinator) -> dict[str, 
             "elevation": sun_attrs.get("elevation"),
             "kelvin": house_colour.kelvin,
             "asleep": coordinator._asleep(),  # noqa: SLF001
+            "phone_dnd": coordinator._phone_dnd(),  # noqa: SLF001
+            "watch_bedtime": coordinator._watch_bedtime(),  # noqa: SLF001
+            "manual_sleep": coordinator._manual_sleep(),  # noqa: SLF001
             "night_active": coordinator._night_active(),  # noqa: SLF001
             "away": coordinator._away(),  # noqa: SLF001
             "sunrise_progress": coordinator._sunrise_progress(house),  # noqa: SLF001
+            "sunset_progress": coordinator._sunset_progress(clock_hour, house),  # noqa: SLF001
             "bedtime_dwell_active": coordinator._bedtime_dwell_active(clock_hour, house),  # noqa: SLF001
             "latitude": hass.config.latitude,
             # Longitude and the timezone NAME are both needed by the year chart, not just
@@ -474,6 +515,38 @@ async def ws_set_lux_curve(hass: HomeAssistant, connection, msg: dict[str, Any])
 
 @websocket_api.websocket_command(
     {
+        vol.Required("type"): "solace/set_lux_cloudy_curve",
+        vol.Required("lux_cloudy_curve"): [
+            {vol.Required("lux"): vol.Coerce(float), vol.Required("demand_pct"): vol.Coerce(float)}
+        ],
+    }
+)
+@websocket_api.async_response
+async def ws_set_lux_cloudy_curve(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    """Outdoor overcast / cloudy lux demand spline curve — user-defined control points."""
+    entry = _entry(hass)
+    if entry is None:
+        connection.send_error(msg["id"], "not_loaded", "Solace is not set up")
+        return
+    points = sorted(
+        [
+            {
+                "lux": float(p["lux"]),
+                "demand_pct": float(p["demand_pct"]) / 100.0
+                if float(p["demand_pct"]) > 1.0
+                else float(p["demand_pct"]),
+            }
+            for p in msg["lux_cloudy_curve"]
+        ],
+        key=lambda p: p["lux"],
+    )
+    hass.config_entries.async_update_entry(entry, options={**entry.options, CONF_LUX_CLOUDY_CURVE: points})
+    await entry.runtime_data.coordinator.async_request_refresh()
+    connection.send_result(msg["id"])
+
+
+@websocket_api.websocket_command(
+    {
         vol.Required("type"): "solace/set_brightness_timeline",
         vol.Required("brightness_timeline"): [
             {vol.Required("hour"): vol.Coerce(float), vol.Required("level"): vol.Coerce(float)}
@@ -518,6 +591,80 @@ async def ws_set_colour_timeline(hass: HomeAssistant, connection, msg: dict[str,
     hass.config_entries.async_update_entry(entry, options={**entry.options, CONF_COLOUR_TIMELINE: points})
     await entry.runtime_data.coordinator.async_request_refresh()
     connection.send_result(msg["id"])
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "solace/set_sunrise_curve",
+        vol.Required("sunrise_curve"): [
+            {vol.Required("progress"): vol.Coerce(float), vol.Required("level"): vol.Coerce(float)}
+        ],
+    }
+)
+@websocket_api.async_response
+async def ws_set_sunrise_curve(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    """Virtual Sunrise spline curve — user-defined control points."""
+    entry = _entry(hass)
+    if entry is None:
+        connection.send_error(msg["id"], "not_loaded", "Solace is not set up")
+        return
+    points = sorted(
+        [{"progress": max(0.0, min(100.0, float(p["progress"]))), "level": max(0.0, min(254.0, float(p["level"])))} for p in msg["sunrise_curve"]],
+        key=lambda p: p["progress"],
+    )
+    hass.config_entries.async_update_entry(entry, options={**entry.options, CONF_SUNRISE_CURVE: points})
+    await entry.runtime_data.coordinator.async_request_refresh()
+    connection.send_result(msg["id"])
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "solace/set_sunset_curve",
+        vol.Required("sunset_curve"): [
+            {vol.Required("progress"): vol.Coerce(float), vol.Required("level"): vol.Coerce(float)}
+        ],
+    }
+)
+@websocket_api.async_response
+async def ws_set_sunset_curve(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    """Virtual Sunset spline curve — user-defined control points."""
+    entry = _entry(hass)
+    if entry is None:
+        connection.send_error(msg["id"], "not_loaded", "Solace is not set up")
+        return
+    points = sorted(
+        [{"progress": max(0.0, min(100.0, float(p["progress"]))), "level": max(0.0, min(254.0, float(p["level"])))} for p in msg["sunset_curve"]],
+        key=lambda p: p["progress"],
+    )
+    hass.config_entries.async_update_entry(entry, options={**entry.options, CONF_SUNSET_CURVE: points})
+    await entry.runtime_data.coordinator.async_request_refresh()
+    connection.send_result(msg["id"])
+
+
+@websocket_api.websocket_command({vol.Required("type"): "solace/toggle_sleep"})
+@websocket_api.async_response
+async def ws_toggle_sleep(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    """Toggle manual sleep toggle helper."""
+    entry = _entry(hass)
+    if entry is None:
+        connection.send_error(msg["id"], "not_loaded", "Solace is not set up")
+        return
+    coordinator = entry.runtime_data.coordinator
+    sleep_entity = (
+        entry.options.get(CONF_SLEEP_TOGGLE)
+        or entry.data.get(CONF_SLEEP_TOGGLE)
+        or "input_boolean.solace_sleep"
+    )
+    domain = sleep_entity.split(".")[0]
+    await hass.services.async_call(
+        domain,
+        "toggle",
+        {"entity_id": sleep_entity},
+        context=coordinator.writer.new_context(),
+    )
+    await coordinator.async_request_refresh()
+    connection.send_result(msg["id"], {"success": True, "asleep": coordinator._asleep()})
+
 
 
 @websocket_api.websocket_command(

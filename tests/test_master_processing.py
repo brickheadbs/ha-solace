@@ -72,14 +72,17 @@ def test_master_processing_spline_curves_and_cloudy_boost():
         cloudy_boost_stops=0.5,
     )
 
-    # 1. Daytime high focus at 12:00 with dark overcast (100 lx)
-    out = solve_master(lux=100.0, clock_hour=12.0, house=house_custom)
-    assert out.spline_demand == 0.8
-    assert out.cloudy_boost_stops == 0.5
-    # Demand boosted: 0.8 * 2^0.5 = 0.8 * 1.414 = 1.0 (clamped)
-    assert out.demand == 1.0
-    assert out.time_brightness_level > 200
-    assert out.target_brightness > 200
+    # 1. Sunny day at 12:00 (100 lx, 0% clouds) -> uses custom_lux curve
+    out_sunny = solve_master(lux=100.0, clock_hour=12.0, house=house_custom, cloud_coverage=0.0)
+    assert out_sunny.spline_demand == 0.8
+    assert out_sunny.cloudy_boost_stops == 0.0
+
+    # 2. Overcast day at 12:00 with dark overcast (100 lx, 100% clouds) -> applies cloudy curve + boost
+    out_cloudy = solve_master(lux=100.0, clock_hour=12.0, house=house_custom, cloud_coverage=100.0)
+    assert out_cloudy.cloudy_boost_stops == 0.5
+    assert out_cloudy.demand == 1.0
+    assert out_cloudy.time_brightness_level > 200
+    assert out_cloudy.target_brightness > 200
 
     # 2. Bright midday sun (5000 lx) -> 0 demand regardless of boost
     bright_sun = solve_master(lux=5000.0, clock_hour=12.0, house=house_custom)

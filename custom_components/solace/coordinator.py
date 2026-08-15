@@ -42,6 +42,7 @@ from .const import (
     CONF_DND_SLEEP_STATES,
     CONF_LIGHTS,
     CONF_LUX_CURVE,
+    CONF_LUX_CLOUDY_CURVE,
     CONF_LUX_SENSOR,
     CONF_NEAR_PRESENCE,
     CONF_PER_LIGHT,
@@ -49,10 +50,14 @@ from .const import (
     CONF_RAMP,
     CONF_REMOTES,
     CONF_SLEEP_TOGGLE,
+    CONF_SUNRISE_CURVE,
+    CONF_SUNSET_CURVE,
+    CONF_WEATHER_ENTITY,
     CONF_ZONES,
     DEFAULT_DND_SLEEP_STATES,
     DEFAULT_MAX_INTERVAL_S,
     DEFAULT_MIN_INTERVAL_S,
+    DEFAULT_WEATHER_ENTITY,
     DOMAIN,
     HOUSE_DEFAULTS,
     ROOM_DEFAULTS,
@@ -115,6 +120,37 @@ class RoomState:
         return (now - self.manual_since) < hold_minutes * 60.0
 
 
+def _parse_spline_points(
+    raw_list: Any,
+    x_keys: tuple[str, ...] = ("x", "lux", "hour", "progress"),
+    y_keys: tuple[str, ...] = ("y", "demand_pct", "demand", "level", "kelvin"),
+    y_scale: float = 1.0,
+) -> tuple[SplinePoint, ...]:
+    if not raw_list:
+        return ()
+    out: list[SplinePoint] = []
+    for p in raw_list:
+        if isinstance(p, SplinePoint):
+            out.append(p)
+        elif isinstance(p, dict):
+            x = 0.0
+            for k in x_keys:
+                if k in p:
+                    x = float(p[k])
+                    break
+            y = 0.0
+            for k in y_keys:
+                if k in p:
+                    y = float(p[k])
+                    break
+            if y_scale != 1.0 and y > 1.0:
+                y = y * y_scale
+            out.append(SplinePoint(x=x, y=y))
+        elif isinstance(p, (list, tuple)) and len(p) >= 2:
+            out.append(SplinePoint(x=float(p[0]), y=float(p[1])))
+    return tuple(out)
+
+
 @dataclass
 class SolaceData:
     """Whatever the platforms need. Lives on ``entry.runtime_data``."""
@@ -172,16 +208,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         self._night_latched = False
         self._unsubscribes: list[Any] = []
         self.last_tick: Any = None
-        """When the loop last completed. `DataUpdateCoordinator` does not expose this —
-        `last_update_success` is a bool, not a timestamp — and the panel's "updated 18 s
-        ago" needs the time, so it is tracked here rather than guessed at."""
         self._tuning = False
-        """Set by the entry update listener just before a settings-driven refresh, so the
-        writes from *that* tick use `transition_setting_s` instead of the mode glide.
-
-        Without it `transition_setting_s` was dead code: the only caller was the manual
-        slider, and dragging a house setting produced a 10-second fade per step — the
-        exact "unusable" case the brief names when it asks for a fourth transition."""
 
     # ------------------------------------------------------------------ settings
 
@@ -197,10 +224,19 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
             {"hour": 20.0, "stops": -0.5},
             {"hour": 22.5, "stops": -1.5},
         ]
+        CURVE_KEYS = {
+            "ramp",
+            "lux_curve",
+            "lux_cloudy_curve",
+            "brightness_timeline",
+            "colour_timeline",
+            "sunrise_curve",
+            "sunset_curve",
+        }
         fields = {
             key: value
             for key, value in options.items()
-            if key in HouseSettings.__slots__ and key != "ramp"
+            if key in HouseSettings.__slots__ and key not in CURVE_KEYS
         }
         fields["night_level"] = int(fields.get("night_level", 3))
         fields["night_release_lux"] = float(fields.get("night_release_lux", 10.0))
@@ -231,35 +267,28 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         fields["night_kelvin"] = int(fields.get("night_kelvin", 2200))
         fields["colour_trim_kelvin"] = int(fields.get("colour_trim_kelvin", 0))
         fields["colour_step_mired"] = int(fields.get("colour_step_mired", 5))
+        fields["transition_up_occupancy_s"] = float(fields.get("transition_up_occupancy_s", fields.get("transition_turn_on_l1_s", 2.0)))
+        fields["transition_up_ambience_s"] = float(fields.get("transition_up_ambience_s", fields.get("transition_wake_l3_s", 10.0)))
+        fields["transition_down_diminish_s"] = float(fields.get("transition_down_diminish_s", fields.get("transition_diminish_l2_s", 5.0)))
+        fields["transition_down_ambience_s"] = float(fields.get("transition_down_ambience_s", fields.get("transition_clear_to_l3_s", 5.0)))
+        fields["transition_down_off_s"] = float(fields.get("transition_down_off_s", fields.get("transition_clear_to_off_s", 4.0)))
+        fields["transition_automatic_s"] = float(fields.get("transition_automatic_s", fields.get("transition_tracking_s", 15.0)))
+        fields["transition_manual_s"] = float(fields.get("transition_manual_s", fields.get("transition_manual_drag_s", 0.5)))
         fields["ramp"] = tuple(
             RampPoint(hour=float(p["hour"]), stops=float(p["stops"])) for p in ramp
         )
         if CONF_LUX_CURVE in options and options[CONF_LUX_CURVE]:
-            fields["lux_curve"] = tuple(
-                SplinePoint(
-                    float(p.get("lux", p.get("x", 0.0))),
-                    float(p.get("demand_pct", p.get("demand", p.get("y", 0.0)))) / 100.0
-                    if float(p.get("demand_pct", p.get("demand", p.get("y", 0.0)))) > 1.0
-                    else float(p.get("demand_pct", p.get("demand", p.get("y", 0.0)))),
-                )
-                for p in options[CONF_LUX_CURVE]
-            )
+            fields["lux_curve"] = _parse_spline_points(options[CONF_LUX_CURVE], y_scale=0.01)
+        if CONF_LUX_CLOUDY_CURVE in options and options[CONF_LUX_CLOUDY_CURVE]:
+            fields["lux_cloudy_curve"] = _parse_spline_points(options[CONF_LUX_CLOUDY_CURVE], y_scale=0.01)
         if CONF_BRIGHTNESS_TIMELINE in options and options[CONF_BRIGHTNESS_TIMELINE]:
-            fields["brightness_timeline"] = tuple(
-                SplinePoint(
-                    float(p.get("hour", p.get("x", 0.0))),
-                    float(p.get("level", p.get("y", 254.0))),
-                )
-                for p in options[CONF_BRIGHTNESS_TIMELINE]
-            )
+            fields["brightness_timeline"] = _parse_spline_points(options[CONF_BRIGHTNESS_TIMELINE])
         if CONF_COLOUR_TIMELINE in options and options[CONF_COLOUR_TIMELINE]:
-            fields["colour_timeline"] = tuple(
-                SplinePoint(
-                    float(p.get("hour", p.get("x", 0.0))),
-                    float(p.get("kelvin", p.get("y", 2200.0))),
-                )
-                for p in options[CONF_COLOUR_TIMELINE]
-            )
+            fields["colour_timeline"] = _parse_spline_points(options[CONF_COLOUR_TIMELINE])
+        if CONF_SUNRISE_CURVE in options and options[CONF_SUNRISE_CURVE]:
+            fields["sunrise_curve"] = _parse_spline_points(options[CONF_SUNRISE_CURVE])
+        if CONF_SUNSET_CURVE in options and options[CONF_SUNSET_CURVE]:
+            fields["sunset_curve"] = _parse_spline_points(options[CONF_SUNSET_CURVE])
         return HouseSettings(**fields)
 
     def room_settings(self, subentry: ConfigSubentry) -> RoomSettings:
@@ -378,6 +407,8 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
 
         # Clock 1 — recalculate the instant the world moves, not on the next poll.
         triggers = [self._lux_entity()]
+        if weather := self._weather_entity():
+            triggers.append(weather)
         if dnd := self.config_entry.options.get(CONF_DND_ENTITY):
             triggers.append(dnd)
         for subentry in self._subentries():
@@ -461,6 +492,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
 
         away = self._away()
         sunrise_progress = self._sunrise_progress(house)
+        sunset_progress = self._sunset_progress(clock_hour, house)
         bedtime_dwell_active = self._bedtime_dwell_active(clock_hour, house)
 
         for subentry in self._subentries():
@@ -503,7 +535,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                 try:
                     await self._async_apply_light(
                         entity_id, subentry, house, settings, room, lux, dnd, clock_hour,
-                        occupied, near_clear, manual, asleep, away, sunrise_progress, bedtime_dwell_active, zone,
+                        occupied, near_clear, manual, asleep, away, sunrise_progress, sunset_progress, bedtime_dwell_active, zone,
                     )
                 except Exception:  # noqa: BLE001
                     _LOGGER.exception("Solace: failed to apply %s", entity_id)
@@ -512,6 +544,8 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                 room.last_mode = Mode.AWAY
             elif sunrise_progress is not None:
                 room.last_mode = Mode.SUNRISE
+            elif sunset_progress is not None and not asleep:
+                room.last_mode = Mode.SUNSET
             elif self._night_active():
                 room.last_mode = Mode.NIGHT
             else:
@@ -543,6 +577,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         asleep: bool,
         away: bool,
         sunrise_progress: float | None,
+        sunset_progress: float | None,
         bedtime_dwell_active: bool,
         zone: ZoneSettings | None = None,
     ) -> None:
@@ -569,6 +604,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                 asleep=asleep,
                 away=away,
                 sunrise_progress=sunrise_progress,
+                sunset_progress=sunset_progress,
                 bedtime_dwell_active=bedtime_dwell_active,
                 ambience_open=room.ambience_open,
                 ambience_resolved=room.ambience_open,
@@ -577,6 +613,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                 current_level=current,
                 last_written_level=room.last_written.get(entity_id),
                 last_source=room.last_source.get(entity_id),
+                cloud_coverage=self._cloud_coverage(),
             ),
             zone=zone,
         )
@@ -589,7 +626,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
 
         if solution.level <= 0:
             if current > 0:
-                await self.writer.async_turn_off(entity_id, house.transition_clear_to_off_s)
+                await self.writer.async_turn_off(entity_id, house.transition_down_off_s)
                 room.last_written[entity_id] = 0
             return
 
@@ -598,23 +635,23 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
 
         if was_off:
             if solution.source == "ambience":
-                transition = house.transition_wake_l3_s
+                transition = house.transition_up_ambience_s
             else:
-                transition = house.transition_turn_on_l1_s
+                transition = house.transition_up_occupancy_s
         elif self._tuning:
             # A slider is being dragged in the dashboard.
-            transition = house.transition_manual_drag_s
-        elif solution.mode is Mode.NIGHT and room.last_mode is not Mode.NIGHT:
-            transition = house.transition_night_s
+            transition = house.transition_manual_s
         elif solution.source == "diminish" and last_src == "demand":
-            transition = house.transition_diminish_l2_s
+            transition = house.transition_down_diminish_s
         elif solution.source == "ambience" and last_src in ("demand", "diminish"):
-            transition = house.transition_clear_to_l3_s
-        elif solution.mode is not room.last_mode:
-            transition = house.transition_mode_s
+            transition = house.transition_down_ambience_s
+        elif solution.source == "demand" and last_src in ("diminish", "ambience"):
+            transition = house.transition_up_occupancy_s
+        elif solution.mode is Mode.NIGHT and room.last_mode is not Mode.NIGHT:
+            transition = house.transition_down_ambience_s
         else:
-            # 5m tracking / steady-state lux morphing
-            transition = house.transition_tracking_s
+            # Automatic: steady-state lux / cloud / curve tracking
+            transition = house.transition_automatic_s
 
         # An OFF bulb rejects a colour command — it wakes at its old colour. So colour
         # has to ride in the same turn-on, and only then.
@@ -764,6 +801,22 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
             return max(0.0, min(1.0, elapsed / total if total > 0 else 1.0))
         return None
 
+    def _sunset_progress(self, clock_hour: float, house: HouseSettings) -> float | None:
+        """0.0 to 1.0 progress through bedtime virtual sunset fade."""
+        if not house.sunset_fade_enabled or self._asleep() or self._night_active():
+            return None
+        start = house.bedtime_dwell_hour
+        dur_h = house.sunset_fade_minutes / 60.0
+        if dur_h <= 0:
+            return None
+        anchor = house.evening_axis_hour
+        axis = (clock_hour - anchor) % 24.0
+        start_axis = (start - anchor) % 24.0
+        if start_axis <= axis < start_axis + dur_h:
+            elapsed = axis - start_axis
+            return max(0.0, min(1.0, elapsed / dur_h))
+        return None
+
     def _bedtime_dwell_active(self, clock_hour: float, house: HouseSettings) -> bool:
         """Is bedtime wind-down active in bedroom?"""
         if not house.bedtime_dwell_enabled:
@@ -800,7 +853,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         if alarm is None:
             return False
         now = dt_util.utcnow()
-        lead = timedelta(minutes=house.alarm_lead_minutes)
+        lead = timedelta(minutes=house.sunrise_fade_minutes if house.sunrise_fade_enabled else house.alarm_lead_minutes)
 
         if alarm < now - timedelta(minutes=house.alarm_stale_minutes):
             return False
@@ -811,7 +864,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
 
         Enter on sleep. Leave on the world's terms:
           * outdoor lux above ``night_release_lux`` (dawn), or
-          * ``alarm_lead_minutes`` before the next alarm.
+          * start of virtual sunrise / alarm lead-in.
 
         When night mode ends, auto-clear any manual sleep toggle helper so daytime
         lighting is never stuck latched in night mode across full sunlight.
@@ -822,10 +875,16 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
             self._night_latched = True
             return
 
+        unlatch = (
+            (self._sunrise_progress(house) is not None)
+            or self._alarm_released(house)
+            or (lux >= house.night_release_lux)
+        )
+
         if asleep:
-            # If asleep only via manual sleep toggle, allow dawn lux / alarm to unlatch
-            if self._alarm_released(house) or lux >= house.night_release_lux:
-                _LOGGER.info("Solace: leaving night mode (dawn/alarm override on sleep toggle)")
+            # If asleep only via manual sleep toggle, allow dawn lux / alarm / sunrise to unlatch
+            if unlatch:
+                _LOGGER.info("Solace: leaving night mode (dawn/sunrise/alarm override on sleep toggle)")
                 self._night_latched = False
                 self._clear_sleep_toggle()
                 return
@@ -837,12 +896,8 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         if not self._night_latched:
             return
 
-        if self._alarm_released(house):
-            _LOGGER.debug("Solace: leaving night mode (alarm lead)")
-            self._night_latched = False
-            self._clear_sleep_toggle()
-        elif lux >= house.night_release_lux:
-            _LOGGER.debug("Solace: leaving night mode (lux %s)", lux)
+        if unlatch:
+            _LOGGER.debug("Solace: leaving night mode (sunrise / alarm / dawn lux %s)", lux)
             self._night_latched = False
             self._clear_sleep_toggle()
 
@@ -959,8 +1014,29 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         self._last_good_lux = value
         return value
 
-    def _dnd(self) -> bool:
-        """Asleep? Checks configured DND entity and Pixel Watch bedtime sensors."""
+    def _weather_entity(self) -> str:
+        return self.config_entry.options.get(CONF_WEATHER_ENTITY) or self.config_entry.data.get(
+            CONF_WEATHER_ENTITY, DEFAULT_WEATHER_ENTITY
+        )
+
+    def _cloud_coverage(self) -> float | None:
+        """Current cloud coverage percentage (0.0 to 100.0) from the weather entity."""
+        entity_id = self._weather_entity()
+        if not entity_id:
+            return None
+        state = self.hass.states.get(entity_id)
+        if state is None or state.attributes is None:
+            return None
+        cov = state.attributes.get("cloud_coverage")
+        if cov is None:
+            return None
+        try:
+            return float(cov)
+        except (TypeError, ValueError):
+            return None
+
+    def _phone_dnd(self) -> bool:
+        """Is phone DND active?"""
         candidates = []
         dnd_opt = (
             self.config_entry.options.get(CONF_DND_ENTITY)
@@ -970,13 +1046,12 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
             candidates.extend(dnd_opt)
         elif isinstance(dnd_opt, str) and dnd_opt:
             candidates.append(dnd_opt)
-
-        for watch_sensor in (
-            "binary_sensor.google_pixel_watch_2_bedtime_mode",
-            "sensor.google_pixel_watch_2_do_not_disturb_sensor",
-        ):
-            if watch_sensor not in candidates and self.hass.states.get(watch_sensor) is not None:
-                candidates.append(watch_sensor)
+        else:
+            for default_phone in (
+                "sensor.pixel_8a_do_not_disturb_sensor",
+            ):
+                if self.hass.states.get(default_phone) is not None:
+                    candidates.append(default_phone)
 
         if not candidates:
             return False
@@ -991,6 +1066,31 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                 if state.state in sleep_states:
                     return True
         return False
+
+    def _watch_bedtime(self) -> bool:
+        """Is watch bedtime / DND mode active?"""
+        for watch_sensor in (
+            "binary_sensor.google_pixel_watch_2_bedtime_mode",
+            "sensor.google_pixel_watch_2_do_not_disturb_sensor",
+        ):
+            state = self.hass.states.get(watch_sensor)
+            if state is not None and state.state not in ("unknown", "unavailable"):
+                if state.state in ("on", "priority_only", "alarms_only"):
+                    return True
+        return False
+
+    def _manual_sleep(self) -> bool:
+        """Is manual sleep toggle active?"""
+        entity_id = (
+            self.config_entry.options.get(CONF_SLEEP_TOGGLE)
+            or self.config_entry.data.get(CONF_SLEEP_TOGGLE)
+            or "input_boolean.solace_sleep"
+        )
+        return self._is_on(entity_id, default=False)
+
+    def _dnd(self) -> bool:
+        """Asleep? Checks configured DND entity and Pixel Watch bedtime sensors."""
+        return self._phone_dnd() or self._watch_bedtime()
 
     def _any_on(self, entity_ids, *, default: bool) -> bool:
         """True if ANY of these entities is on. Accepts a bare string or a list."""

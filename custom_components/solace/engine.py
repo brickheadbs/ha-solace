@@ -11,6 +11,7 @@ Implements the 2026-08-15 Master Processing vs Post Processing architecture:
 from __future__ import annotations
 
 import math
+from typing import Sequence
 
 from .models import (
     DEFAULT_LUX_CURVE,
@@ -86,17 +87,35 @@ def debounce_ambience(
 # --------------------------------------------------------------------------------
 
 
-def demand(lux: float, house: HouseSettings) -> float:
+def demand(
+    lux: float,
+    curve_or_house: Sequence[SplinePoint] | HouseSettings,
+) -> float:
     """Evaluate lux demand with log falloff or spline curve."""
-    if house.lux_curve and house.lux_curve != DEFAULT_LUX_CURVE:
-        return MonotoneCubicSpline(house.lux_curve).evaluate(max(0.0, lux))
-    lo = max(house.lux_full, 1e-9)
-    hi = lo + max(house.lux_window, 1e-9)
-    if lux <= lo:
-        return 1.0
-    if lux >= hi:
-        return 0.0
-    return _clamp01(1.0 - math.log(lux / lo) / math.log(hi / lo))
+    if isinstance(curve_or_house, HouseSettings):
+        curve = curve_or_house.lux_curve
+        if not curve or curve == DEFAULT_LUX_CURVE:
+            lo = max(curve_or_house.lux_full, 1e-9)
+            hi = lo + max(curve_or_house.lux_window, 1e-9)
+            if lux <= lo:
+                return 1.0
+            if lux >= hi:
+                return 0.0
+            return _clamp01(1.0 - math.log(lux / lo) / math.log(hi / lo))
+    else:
+        curve = curve_or_house
+
+    if curve:
+        if curve == DEFAULT_LUX_CURVE:
+            lo = 1.0
+            hi = 540.0
+            if lux <= lo:
+                return 1.0
+            if lux >= hi:
+                return 0.0
+            return _clamp01(1.0 - math.log(lux / lo) / math.log(hi / lo))
+        return _clamp01(MonotoneCubicSpline(curve).evaluate(max(0.0, lux)))
+    return 0.0
 
 
 def ramp_bias(hour: float, house: HouseSettings) -> float:
@@ -207,17 +226,36 @@ def solve_master(
     lux: float,
     clock_hour: float,
     house: HouseSettings,
+    cloud_coverage: float | None = None,
 ) -> MasterOutput:
     """Run Master Processing to generate baseline Target Brightness and Target Kelvin."""
     trace: list[tuple[str, object]] = []
 
-    # 1. Lux Demand
-    spline_demand = demand(lux, house)
+    # 1. Lux Demand: evaluate Clear Sun curve and Overcast / Cloudy curve
+    demand_clear = demand(lux, house.lux_curve)
+    demand_cloudy = demand(lux, house.lux_cloudy_curve)
     trace.append(("lux", lux))
+    trace.append(("demand_clear", round(demand_clear, 4)))
+    trace.append(("demand_cloudy", round(demand_cloudy, 4)))
+
+    # Cloud blend factor alpha (0.0 = 100% Clear, 1.0 = 100% Overcast)
+    alpha = 0.0
+    if cloud_coverage is not None:
+        thresh = max(0.0, min(99.0, house.cloudy_blend_threshold))
+        if cloud_coverage > thresh:
+            alpha = min(1.0, max(0.0, (cloud_coverage - thresh) / (100.0 - thresh)))
+    trace.append(("cloud_coverage", cloud_coverage))
+    trace.append(("cloud_alpha", round(alpha, 4)))
+
+    spline_demand = (1.0 - alpha) * demand_clear + alpha * demand_cloudy
     trace.append(("spline_demand", round(spline_demand, 4)))
 
     # Cloudy day boost
-    cloudy_stops = house.cloudy_boost_stops if (0 < lux < 2500 and spline_demand > 0 and house.cloudy_boost_stops > 0) else 0.0
+    cloudy_stops = (
+        house.cloudy_boost_stops * alpha
+        if (spline_demand > 0 and house.cloudy_boost_stops > 0)
+        else 0.0
+    )
     demand_val = _clamp01(spline_demand * (2.0**cloudy_stops))
     trace.append(("cloudy_stops", round(cloudy_stops, 2)))
     trace.append(("demand", round(demand_val, 4)))
@@ -244,6 +282,10 @@ def solve_master(
         spline_demand=spline_demand,
         cloudy_boost_stops=cloudy_stops,
         time_brightness_level=time_brightness_level,
+        cloud_coverage=cloud_coverage,
+        cloud_alpha=alpha,
+        demand_clear=demand_clear,
+        demand_cloudy=demand_cloudy,
         trace=tuple(trace),
     )
 
@@ -322,7 +364,12 @@ def solve(
     trace: list[tuple[str, object]] = []
 
     # 1. Master Processing
-    master = solve_master(data.lux, data.clock_hour, house)
+    master = solve_master(
+        data.lux,
+        data.clock_hour,
+        house,
+        cloud_coverage=data.cloud_coverage,
+    )
     trace.extend(master.trace)
 
     # 2. Ambience Gate
@@ -384,10 +431,11 @@ def solve(
     # C. VIRTUAL SUNRISE
     elif mode is Mode.SUNRISE:
         if room.sunrise_enabled or room.night_off:
-            progress = max(0.0, min(1.0, data.sunrise_progress or 0.0))
-            eased = progress**1.5
-            target_level = min(house.virtual_sunrise_target_level, state_table.l1)
-            level = apply_clamp(int(round(eased * target_level)), light)
+            progress_pct = max(0.0, min(100.0, (data.sunrise_progress or 0.0) * 100.0))
+            sunrise_spline = MonotoneCubicSpline(house.sunrise_curve)
+            curve_raw = sunrise_spline(progress_pct)
+            target_level = min(int(round(curve_raw)), state_table.l1)
+            level = apply_clamp(max(0, target_level), light)
             source = "sunrise"
             trace.append(("virtual_sunrise", level))
         else:
@@ -397,9 +445,11 @@ def solve(
 
     # D. VIRTUAL SUNSET
     elif mode is Mode.SUNSET:
-        progress = max(0.0, min(1.0, data.sunset_progress or 0.0))
-        eased = 1.0 - (progress**1.2)
-        level = apply_clamp(int(round(eased * state_table.l1)), light)
+        progress_pct = max(0.0, min(100.0, (data.sunset_progress or 0.0) * 100.0))
+        sunset_spline = MonotoneCubicSpline(house.sunset_curve)
+        curve_raw = sunset_spline(progress_pct)
+        target_level = min(int(round(curve_raw)), state_table.l1)
+        level = apply_clamp(max(0, target_level), light)
         source = "sunset"
         trace.append(("virtual_sunset", level))
 
