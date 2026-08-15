@@ -27,8 +27,8 @@ const HELP = {
   diminish:
     "Kitchen behaviour. When the near sensor reads clear the lights reduce by this much and stay there — they never switch off from diminish alone. 0 means no effect.",
   perLight:
-    "Per-light offsets, in stops, added on top of the house, room and zone biases. Min is a cutoff: demand below it turns the light off entirely. Max is a clamp: the light never exceeds it.",
-  min: "A cutoff, not a floor. If the computed level falls below this, the light goes off rather than sitting at a useless glow.",
+    "Per-light offsets, in stops, added on top of the house, room and zone biases. Cut is a cutoff: demand below it turns the light off entirely. Max is a clamp: the light never exceeds it.",
+  cut: "A cutoff, not a floor. If the computed level falls below this, the light goes off rather than sitting at a useless glow.",
   max: "A hard clamp applied last, after everything else. The light never exceeds it — this is what makes a glare cap a rule rather than a suggestion.",
   manual:
     "Manual hands this room to you and stops Solace writing to it. A touch on a physical switch does the same for a while; this switch holds until you turn it off.",
@@ -856,7 +856,7 @@ export class SolTabLighting extends LitElement {
             <div class="lhead">
               <span class="eyebrow">Light</span>
               <span class="eyebrow">Adjustment <sol-help .text=${HELP.perLight}></sol-help></span>
-              <span class="eyebrow">Min <sol-help flip .text=${HELP.min}></sol-help></span>
+              <span class="eyebrow">Cut <sol-help flip .text=${HELP.cut}></sol-help></span>
               <span class="eyebrow">Max <sol-help flip .text=${HELP.max}></sol-help></span>
             </div>
             ${this.renderGrouped(room)}
