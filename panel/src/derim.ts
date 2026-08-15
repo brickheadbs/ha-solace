@@ -36,9 +36,9 @@ export const derimToKelvin = (derim: number): number => {
   return Math.round(1_000_000 / mired);
 };
 
-export const formatDerim = (derim: number): string => `${Math.round(derim)} d`;
+export const formatDerim = (derim: number): string => `${Math.round(derim)} Ɯ`;
 
 export const formatDerimWithKelvin = (derim: number): string => {
   const k = derimToKelvin(derim);
-  return `${Math.round(derim)} d · ${k}K`;
+  return `${Math.round(derim)} Ɯ · ${k}K`;
 };

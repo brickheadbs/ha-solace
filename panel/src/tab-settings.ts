@@ -720,13 +720,13 @@ export class SolTabSettings extends LitElement {
                 </div>
                 <div class="curve-metric" style="margin-left: auto;">
                   <span>Demand Ceiling:</span>
-                  <strong style="color: var(--sol-cyan);">${currentDemandLevel} / 254</strong>
+                  <strong style="color: var(--sol-cyan);">${currentDemandLevel} lvl / 254</strong>
                 </div>
                 ${this.hoverSunrise
                   ? html`
                       <div class="curve-metric">
                         <span>Progress: <strong>${this.hoverSunrise.x}%</strong></span>
-                        <span>Level: <strong>${this.hoverSunrise.y}</strong></span>
+                        <span>Level: <strong>${this.hoverSunrise.y} lvl</strong></span>
                       </div>
                     `
                   : nothing}
@@ -798,37 +798,35 @@ export class SolTabSettings extends LitElement {
                   <!-- Live Progress Indicator -->
                   ${riseProgress !== null
                     ? svg`
-                        <circle
-                          cx="${this.toSvgX(riseProgress * 100)}"
-                          cy="${this.toSvgY(new MonotoneSpline(sunriseNodes).evaluate(riseProgress * 100))}"
-                          r="7"
-                          fill="#ffb74d"
-                          stroke="#fff"
+                        <line
+                          x1="${this.toSvgX(riseProgress * 100)}"
+                          y1="${Y0}"
+                          x2="${this.toSvgX(riseProgress * 100)}"
+                          y2="${Y1}"
+                          stroke="#ffffff"
                           stroke-width="2"
-                        >
-                          <animate attributeName="r" values="6;9;6" dur="2s" repeatCount="indefinite" />
-                        </circle>
+                        />
                       `
                     : nothing}
 
-                  <!-- Draggable Nodes -->
-                  ${sunriseNodes.map((n, idx) => {
+                  <!-- Interactive Draggable Control Nodes -->
+                  ${sunriseNodes.map((n, i) => {
                     const cx = this.toSvgX(n.x);
                     const cy = this.toSvgY(n.y);
-                    const isSel = this.selSunriseIdx === idx;
+                    const isSelected = this.selSunriseIdx === i;
                     return svg`
                       <circle
                         cx="${cx}"
                         cy="${cy}"
-                        r="${isSel ? 7.5 : 5.5}"
-                        fill="${isSel ? "#fff" : "#ffb74d"}"
-                        stroke="${isSel ? "#ffb74d" : "rgba(0,0,0,0.6)"}"
+                        r="${isSelected ? 7 : 5.5}"
+                        fill="${isSelected ? "#ffffff" : "#ffb74d"}"
+                        stroke="#1a1c1e"
                         stroke-width="2"
                         style="cursor: grab;"
                         @mousedown="${(e: MouseEvent) => {
                           e.stopPropagation();
-                          this.selSunriseIdx = idx;
-                          this._drag = { type: "sunrise", idx };
+                          this._drag = { type: "sunrise", idx: i };
+                          this.selSunriseIdx = i;
                         }}"
                       />
                     `;
@@ -836,18 +834,18 @@ export class SolTabSettings extends LitElement {
                 </svg>
               </div>
 
-              <!-- Selected Node Controls -->
+              <!-- Node Editor Toolbar -->
               ${this.selSunriseIdx !== null && sunriseNodes[this.selSunriseIdx]
                 ? html`
                     <div class="node-editor">
-                      <span style="font-size: 11.5px; color: var(--sol-text-3);">Node:</span>
-                      <span style="font-size: 11.5px; color: var(--sol-text-2);">Progress %</span>
+                      <span style="font-size: 11.5px; color: var(--sol-text-3);">Node ${this.selSunriseIdx + 1}</span>
+                      <span style="font-size: 11.5px; color: var(--sol-text-2); margin-left: 10px;">Progress (%)</span>
                       <input
                         type="number"
                         min="0"
                         max="100"
+                        disabled="${this.selSunriseIdx === 0 || this.selSunriseIdx === sunriseNodes.length - 1}"
                         .value="${String(sunriseNodes[this.selSunriseIdx].x)}"
-                        ?disabled="${this.selSunriseIdx === 0 || this.selSunriseIdx === sunriseNodes.length - 1}"
                         @change="${(e: Event) => {
                           const v = Math.max(0, Math.min(100, parseFloat((e.target as HTMLInputElement).value)));
                           const nodes = [...sunriseNodes];
@@ -857,7 +855,7 @@ export class SolTabSettings extends LitElement {
                           this.debounceSaveSunrise();
                         }}"
                       />
-                      <span style="font-size: 11.5px; color: var(--sol-text-2); margin-left: 6px;">Level (0-254)</span>
+                      <span style="font-size: 11.5px; color: var(--sol-text-2); margin-left: 6px;">Level (0-254 lvl)</span>
                       <input
                         type="number"
                         min="0"
@@ -955,14 +953,13 @@ export class SolTabSettings extends LitElement {
                 </div>
                 <div class="curve-metric" style="margin-left: auto;">
                   <span>Demand Ceiling:</span>
-                  <strong style="color: var(--sol-cyan);">${currentDemandLevel} / 254</strong>
-                </div>
+                  <strong style="color: var(--sol-cyan);">${currentDemandLevel} lvl / 254</strong>
                 </div>
                 ${this.hoverSunset
                   ? html`
                       <div class="curve-metric">
                         <span>Progress: <strong>${this.hoverSunset.x}%</strong></span>
-                        <span>Level: <strong>${this.hoverSunset.y}</strong></span>
+                        <span>Level: <strong>${this.hoverSunset.y} lvl</strong></span>
                       </div>
                     `
                   : nothing}

@@ -979,9 +979,9 @@ export class SolTabCurves extends LitElement {
         const py = this.yp("colour", y);
         const k = derimToKelvin(y);
         lines.push(svg`<line x1="${X0}" y1="${py}" x2="${X1}" y2="${py}" stroke="rgba(255,255,255,0.08)" stroke-width="1"></line>`);
-        lines.push(svg`<text x="${X0 - 8}" y="${py + 4}" fill="rgba(255,255,255,0.45)" font-size="10.5px" font-family="Roboto, sans-serif" text-anchor="end">${Math.round(y)}d (${k}K)</text>`);
+        lines.push(svg`<text x="${X0 - 8}" y="${py + 4}" fill="rgba(255,255,255,0.45)" font-size="10.5px" font-family="Roboto, sans-serif" text-anchor="end">${Math.round(y)} Ɯ (${k}K)</text>`);
       }
-      lines.push(svg`<text x="${(X0 + X1) / 2}" y="325" fill="rgba(255,255,255,0.3)" font-size="11px" font-family="Roboto, sans-serif" text-anchor="middle">time of day (derims / kelvin)</text>`);
+      lines.push(svg`<text x="${(X0 + X1) / 2}" y="325" fill="rgba(255,255,255,0.3)" font-size="11px" font-family="Roboto, sans-serif" text-anchor="middle">time of day (Ɯ / kelvin)</text>`);
     }
     return lines;
   }
@@ -1021,7 +1021,7 @@ export class SolTabCurves extends LitElement {
     if (!node) return nothing;
 
     const xLabel = key === "lux" ? "Lux" : "Time";
-    const yLabel = key === "lux" ? "Demand %" : key === "bright" ? "Level" : "Derim";
+    const yLabel = key === "lux" ? "Demand %" : key === "bright" ? "Level (lvl)" : "Derim (Ɯ)";
 
     return html`
       <div class="node-editor">
@@ -1120,7 +1120,7 @@ export class SolTabCurves extends LitElement {
   private getCardTitle(key: CurveKey): string {
     if (key === "lux") return "Outdoor lux demand curves (Clear Sun vs Overcast)";
     if (key === "bright") return "24h target brightness schedule";
-    return "24h target colour schedule (Derims)";
+    return "24h target colour schedule (Ɯ)";
   }
 
   private renderLegend(key: CurveKey) {
@@ -1155,7 +1155,7 @@ export class SolTabCurves extends LitElement {
       const hr = Math.floor(vx);
       const min = Math.floor((vx % 1) * 60);
       const timeStr = `${String(hr).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
-      return `Time ${timeStr}   Level ${Math.round(vy)} (${Math.round((vy / 254) * 100)}%)`;
+      return `Time ${timeStr}   Level ${Math.round(vy)} lvl (${Math.round((vy / 254) * 100)}%)`;
     }
     const hr = Math.floor(vx);
     const min = Math.floor((vx % 1) * 60);

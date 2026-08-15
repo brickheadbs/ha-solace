@@ -289,12 +289,12 @@ export class SolacePanel extends LitElement {
           <span class="status-item">
             <span class="status-badge" style="background: rgba(33, 150, 243, 0.2); color: var(--sol-cyan); font-weight: 600; padding: 4px 10px; font-size: 12px;">
               <ha-icon icon="mdi:brightness-6" style="--mdc-icon-size: 15px; margin-right: 2px;"></ha-icon>
-              Master Target <strong>${masterTarget}</strong> <span style="font-weight: 400; opacity: 0.75; font-size: 11px;">/ 254</span>
+              Master Target <strong>${masterTarget} lvl</strong> <span style="font-weight: 400; opacity: 0.75; font-size: 11px;">/ 254</span>
             </span>
           </span>
           <span class="status-item">
             <ha-icon icon="mdi:timeline-clock-outline"></ha-icon>
-            Schedule <strong>${scheduleLevel}</strong>
+            Schedule <strong>${scheduleLevel} lvl</strong>
           </span>
           <span class="status-item">
             <ha-icon icon="mdi:white-balance-sunny"></ha-icon>
@@ -308,7 +308,7 @@ export class SolacePanel extends LitElement {
             : nothing}
           <span class="status-item">
             <ha-icon icon="mdi:palette-outline"></ha-icon>
-            <strong>${w.kelvin} K</strong> (${derimVal} derim)
+            <strong>${w.kelvin} K</strong> (${derimVal} Ɯ)
           </span>
           <span class="status-item">
             ${modeBadge}
@@ -318,7 +318,7 @@ export class SolacePanel extends LitElement {
           ${this.snap.rooms.map((r) => {
             const lit = (r.level ?? 0) > 0;
             return html`<span class="room-chip ${lit ? "lit" : ""}">
-              ${r.name}: ${r.manual.active ? "Manual" : lit ? `L${r.level}` : "Off"}
+              ${r.name}: ${r.manual.active ? "Manual" : lit ? `${r.level} lvl` : "Off"}
             </span>`;
           })}
         </div>

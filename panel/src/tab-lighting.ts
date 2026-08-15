@@ -563,7 +563,7 @@ export class SolTabLighting extends LitElement {
           ${light.group_size > 1 ? html`<span>group of ${light.group_size} · </span>` : nothing}
           ${clampedNote ? html`<span class="hw">${clampedNote} · </span>` : nothing}
           <span class="tab-num"
-            >${light.level !== null ? `${lightPct(light.level, gamma)}% (${light.level} Ɯ)` : "—"}</span
+            >${light.level !== null ? `${lightPct(light.level, gamma)}% (${light.level} lvl)` : "—"}</span
           >
         </div>
       </div>
@@ -733,8 +733,7 @@ export class SolTabLighting extends LitElement {
                   roomAction(this.hass, room.subentry_id, "level", Math.round(e.detail.value))}
               ></sol-slider>
               <div class="readout tab-num">
-                ${Math.max(...room.lights.map((l) => l.current_level), 0)} ·
-                ${lightPct(Math.max(...room.lights.map((l) => l.current_level), 0), gamma)} %
+                ${lightPct(Math.max(...room.lights.map((l) => l.current_level), 0), gamma)}% (${Math.max(...room.lights.map((l) => l.current_level), 0)} lvl)
               </div>
             </div>
             <div class="note">A physical switch left on holds this room indefinitely.</div>
@@ -749,7 +748,7 @@ export class SolTabLighting extends LitElement {
             <div>
               <span class="eyebrow">Output</span>
               <span class="v tab-num"
-                >${room.level === null ? "—" : `${lightPct(room.level, gamma)} %`}</span
+                >${room.level === null ? "—" : `${lightPct(room.level, gamma)}% (${room.level} lvl)`}</span
               >
             </div>
             <div>
@@ -775,28 +774,32 @@ export class SolTabLighting extends LitElement {
       <!-- Tape-measure Ambience Slider -->
       <div class="bias-row">
         <span class="lab">Ambience <sol-help .text=${HELP.ambience}></sol-help></span>
-        <div class="tape-measure">
+        <div style="flex: 1; display: flex; align-items: center; gap: 8px;">
           <sol-slider
             tone="cyan"
             noReset
             .value=${ambVal}
             .min=${0}
-            .max=${254}
+            .max=${40}
             .step=${1}
             @value-changed=${(e: CustomEvent) =>
               this.pushRoom(room.subentry_id, "ambience_level", e.detail.value, e.detail.final)}
           ></sol-slider>
-          <div class="tape-ticks">
-            <span>0%</span>
-            <span>10%</span>
-            <span>25%</span>
-            <span>50%</span>
-            <span>75%</span>
-            <span>100%</span>
+          <div style="display: flex; gap: 3px;">
+            ${[0, 2, 6, 12].map(
+              (lvl) => html`
+                <button
+                  style="border: none; cursor: pointer; border-radius: 6px; padding: 2px 6px; font-size: 11px; background: ${ambVal === lvl ? "var(--sol-cyan-tint)" : "var(--sol-control)"}; color: ${ambVal === lvl ? "var(--sol-cyan)" : "var(--sol-text-3)"};"
+                  @click=${() => this.pushRoom(room.subentry_id, "ambience_level", lvl, true)}
+                >
+                  ${lvl === 0 ? "Off" : `${lvl} lvl`}
+                </button>
+              `
+            )}
           </div>
         </div>
         <span class="readout tab-num">
-          ${ambVal === 0 ? "Follows house" : `${lightPct(ambVal, gamma)}% (${ambVal} Ɯ)`}
+          ${ambVal === 0 ? "Follows house" : `${lightPct(ambVal, gamma)}% (${ambVal} lvl)`}
         </span>
       </div>
 

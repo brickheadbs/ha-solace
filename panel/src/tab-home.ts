@@ -513,8 +513,8 @@ export class SolTabHome extends LitElement {
 
         <div class="c-body">
           <div>
-            <div class="big-val mono-gold">${masterTarget}<span class="unit" style="font-size: 16px; margin-left: 2px;">/ 254</span></div>
-            <div class="high-low" style="margin-top: 6px;">Schedule ${scheduleLevel} · Demand ${demandPct}%</div>
+            <div class="big-val mono-gold">${masterTarget}<span class="unit" style="font-size: 15px; margin-left: 3px;">lvl / 254</span></div>
+            <div class="high-low" style="margin-top: 6px;">Schedule ${scheduleLevel} lvl · Demand ${demandPct}%</div>
           </div>
           <div class="stat-grid">
             <div class="stat-item">
