@@ -86,6 +86,8 @@ export interface World {
   lux: number;
   cloud_coverage?: number | null;
   demand?: number | null;
+  master_target_brightness?: number;
+  master_schedule_brightness?: number;
   clock_hour: number;
   dusk_hour: number;
   sunrise_hour: number | null;

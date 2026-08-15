@@ -18,7 +18,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .models import HouseSettings, LightSettings
+from .models import DEFAULT_COLOUR_TIMELINE, HouseSettings, LightSettings
+from .spline import MonotoneCubicSpline
 
 __all__ = [
     "kelvin_to_mired",
@@ -39,45 +40,25 @@ def mired_to_kelvin(mired: float) -> int:
     return int(round(1_000_000.0 / max(mired, 1.0)))
 
 
-def target_kelvin(clock_hour: float, dusk_hour: float, house: HouseSettings) -> int:
+def target_kelvin(
+    clock_hour: float,
+    dusk_hour: float | HouseSettings = 21.5,
+    house: HouseSettings | None = None,
+) -> int:
     """House-wide colour target for this moment, before the per-bulb clamp.
 
-    The glide starts at civil dusk and runs for ``colour_glide_minutes``, interpolating
-    **linearly in mireds** (not Kelvin — equal mired steps are roughly equal perceptual
-    steps, which is also the unit the wire protocol uses). It then holds the night
-    value until the morning release.
-
-    All arithmetic is on ``(clock - dusk) % 24`` so the curve is continuous across
-    midnight, where a decimal-clock comparison would break.
+    Evaluates the 24h interactive Spline curve (house.colour_timeline).
     """
-    elapsed = (clock_hour - dusk_hour) % 24.0
-    release_at = (house.morning_release_hour - dusk_hour) % 24.0
-    glide_hours = max(house.colour_glide_minutes, 0.0) / 60.0
+    if isinstance(dusk_hour, HouseSettings):
+        house = dusk_hour
+        dusk_hour = 21.5
+    if house is None:
+        house = HouseSettings()
 
-    day_mired = kelvin_to_mired(house.day_kelvin)
-    night_mired = kelvin_to_mired(house.night_kelvin)
-
-    morning_hours = max(house.morning_glide_minutes, 0.0) / 60.0
-
-    if elapsed >= release_at:
-        # ⚠️ **NEVER JUMP.** The morning release used to snap straight from the night
-        # colour to the day colour — a hard step, at the exact moment someone is most
-        # likely to be woken by it. It now glides, in mireds like the evening side, over
-        # ``morning_glide_minutes``. Set that to 0 to get the old snap back; it is a
-        # setting precisely so "never jump" stays the user's call and not the code's.
-        into_morning = elapsed - release_at
-        if morning_hours <= 0 or into_morning >= morning_hours:
-            kelvin = house.day_kelvin
-        else:
-            t = into_morning / morning_hours
-            kelvin = mired_to_kelvin(night_mired + t * (day_mired - night_mired))
-    elif glide_hours <= 0 or elapsed >= glide_hours:
-        kelvin = house.night_kelvin
-    else:
-        t = elapsed / glide_hours
-        kelvin = mired_to_kelvin(day_mired + t * (night_mired - day_mired))
-
-    return kelvin + house.colour_trim_kelvin
+    timeline = house.colour_timeline or DEFAULT_COLOUR_TIMELINE
+    colour_spline = MonotoneCubicSpline(timeline)
+    time_kelvin = colour_spline.evaluate_periodic_24h(clock_hour)
+    return int(round(max(2000.0, min(9000.0, time_kelvin + house.colour_trim_kelvin))))
 
 
 def clamp_kelvin(kelvin: int, light: LightSettings) -> tuple[int, bool]:
@@ -105,11 +86,21 @@ class ColourTarget:
 
 def resolve_colour(
     clock_hour: float,
-    dusk_hour: float,
-    house: HouseSettings,
-    light: LightSettings,
+    dusk_hour: float | HouseSettings = 21.5,
+    house: HouseSettings | LightSettings | None = None,
+    light: LightSettings | None = None,
 ) -> ColourTarget:
     """House curve → this bulb's achievable target, with the clamp made visible."""
+    if isinstance(dusk_hour, HouseSettings):
+        if isinstance(house, LightSettings):
+            light = house
+        house = dusk_hour
+        dusk_hour = 21.5
+    if light is None:
+        light = LightSettings(min_kelvin=1000, max_kelvin=20000)
+    if house is None:
+        house = HouseSettings()
+
     requested = target_kelvin(clock_hour, dusk_hour, house)
     kelvin, was_clamped = clamp_kelvin(requested, light)
     return ColourTarget(

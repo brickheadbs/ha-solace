@@ -472,8 +472,11 @@ export class SolTabHome extends LitElement {
 
   private renderLightCard() {
     const w = this.snap.world;
+    const masterTarget =
+      w.master_target_brightness ??
+      (w.demand !== null && w.demand !== undefined ? Math.round(w.demand * 254) : 254);
+    const scheduleLevel = w.master_schedule_brightness ?? 254;
     const demandPct = Math.round((w.demand ?? 0) * 100);
-    const mainLevel = Math.round((w.demand ?? 0) * 254);
     const luxVal = Math.round(w.lux ?? 0);
     const elevVal = w.elevation !== null && w.elevation !== undefined ? w.elevation.toFixed(1) : "—";
     const gateOpen = this.hass.states["binary_sensor.entry_ambient_gate"]?.state === "on";
@@ -510,8 +513,8 @@ export class SolTabHome extends LitElement {
 
         <div class="c-body">
           <div>
-            <div class="big-val mono-gold">${demandPct}<span class="unit">%</span></div>
-            <div class="high-low" style="margin-top: 6px;">level ${mainLevel} of 254</div>
+            <div class="big-val mono-gold">${masterTarget}<span class="unit" style="font-size: 16px; margin-left: 2px;">/ 254</span></div>
+            <div class="high-low" style="margin-top: 6px;">Schedule ${scheduleLevel} · Demand ${demandPct}%</div>
           </div>
           <div class="stat-grid">
             <div class="stat-item">

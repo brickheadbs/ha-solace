@@ -263,7 +263,10 @@ export class SolacePanel extends LitElement {
       modeBadge = html`<span class="status-badge badge-night"><ha-icon icon="mdi:bed"></ha-icon> Bedtime Wind-Down</span>`;
     }
 
-    const demandPct = Math.round((w.demand ?? 0) * 100);
+    const masterTarget =
+      w.master_target_brightness ??
+      (w.demand !== null && w.demand !== undefined ? Math.round(w.demand * 254) : 254);
+    const scheduleLevel = w.master_schedule_brightness ?? 254;
     const derimVal = Math.round(kelvinToDerim(w.kelvin ?? 4000));
     const luxStr = Math.round(w.lux).toLocaleString() + " lx";
     const isCloudy = (w.cloud_coverage ?? 0) >= 70;
@@ -284,7 +287,14 @@ export class SolacePanel extends LitElement {
       <div class="status-banner">
         <div class="status-group">
           <span class="status-item">
-            <span class="status-badge" style="background: rgba(33, 150, 243, 0.15); color: var(--sol-cyan);">Demand ${demandPct}%</span>
+            <span class="status-badge" style="background: rgba(33, 150, 243, 0.2); color: var(--sol-cyan); font-weight: 600; padding: 4px 10px; font-size: 12px;">
+              <ha-icon icon="mdi:brightness-6" style="--mdc-icon-size: 15px; margin-right: 2px;"></ha-icon>
+              Master Target <strong>${masterTarget}</strong> <span style="font-weight: 400; opacity: 0.75; font-size: 11px;">/ 254</span>
+            </span>
+          </span>
+          <span class="status-item">
+            <ha-icon icon="mdi:timeline-clock-outline"></ha-icon>
+            Schedule <strong>${scheduleLevel}</strong>
           </span>
           <span class="status-item">
             <ha-icon icon="mdi:white-balance-sunny"></ha-icon>
@@ -298,7 +308,7 @@ export class SolacePanel extends LitElement {
             : nothing}
           <span class="status-item">
             <ha-icon icon="mdi:palette-outline"></ha-icon>
-            ${w.kelvin} K (${derimVal} derim)
+            <strong>${w.kelvin} K</strong> (${derimVal} derim)
           </span>
           <span class="status-item">
             ${modeBadge}

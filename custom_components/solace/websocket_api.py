@@ -142,7 +142,15 @@ def _snapshot(hass: HomeAssistant, coordinator: SolaceCoordinator) -> dict[str, 
     sun = hass.states.get("sun.sun")
     sun_attrs = sun.attributes if sun else {}
 
+    from .engine import solve_master
     from .models import LightSettings
+
+    master_out = solve_master(
+        coordinator._lux(),
+        clock_hour,
+        house,
+        cloud_coverage=coordinator._cloud_coverage(),
+    )
 
     house_colour = resolve_colour(
         clock_hour, dusk_hour, house, LightSettings(min_kelvin=1000, max_kelvin=20000)
@@ -308,21 +316,15 @@ def _snapshot(hass: HomeAssistant, coordinator: SolaceCoordinator) -> dict[str, 
         "world": {
             "lux": coordinator._lux(),  # noqa: SLF001
             "cloud_coverage": coordinator._cloud_coverage(),  # noqa: SLF001
-            "demand": round(
-                solve_master(
-                    coordinator._lux(),
-                    clock_hour,
-                    house,
-                    cloud_coverage=coordinator._cloud_coverage(),
-                ).demand,
-                4,
-            ),  # noqa: SLF001
+            "demand": round(master_out.demand, 4),
+            "master_target_brightness": master_out.target_brightness,
+            "master_schedule_brightness": master_out.time_brightness_level,
             "clock_hour": round(clock_hour, 4),
             "dusk_hour": round(dusk_hour, 4),
             "sunrise_hour": _hour(sun_attrs.get("next_rising")),
             "sunset_hour": _hour(sun_attrs.get("next_setting")),
             "elevation": sun_attrs.get("elevation"),
-            "kelvin": house_colour.kelvin,
+            "kelvin": master_out.target_kelvin,
             "asleep": coordinator._asleep(),  # noqa: SLF001
             "phone_dnd": coordinator._phone_dnd(),  # noqa: SLF001
             "watch_bedtime": coordinator._watch_bedtime(),  # noqa: SLF001
