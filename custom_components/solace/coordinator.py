@@ -109,6 +109,8 @@ class RoomState:
     ambience_open: bool = False
     ambience_pending_since: float | None = None
     last_mode: Mode = Mode.NORMAL
+    occupied: bool = False
+    occupied_since: float | None = None
 
     def is_manual(self, hold_minutes: float, now: float) -> bool:
         if self.manual_switch:
@@ -490,19 +492,28 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
 
         self._update_night_latch(asleep, lux, house)
 
+        # Update room presence states first so dwell-based special modes have fresh data.
+        for subentry in self._subentries():
+            room = self.rooms.setdefault(
+                subentry.subentry_id,
+                RoomState(subentry_id=subentry.subentry_id, name=subentry.title),
+            )
+            is_occupied = self._any_on(subentry.data.get(CONF_PRESENCE), default=True)
+            if is_occupied and not room.occupied:
+                room.occupied_since = now.timestamp()
+            elif not is_occupied:
+                room.occupied_since = None
+            room.occupied = is_occupied
+
         away = self._away()
         sunrise_progress = self._sunrise_progress(house)
         sunset_progress = self._sunset_progress(clock_hour, house)
         bedtime_dwell_active = self._bedtime_dwell_active(clock_hour, house)
 
         for subentry in self._subentries():
-            room = self.rooms.setdefault(
-                subentry.subentry_id,
-                RoomState(subentry_id=subentry.subentry_id, name=subentry.title),
-            )
+            room = self.rooms[subentry.subentry_id]
             settings = self.room_settings(subentry)
-            # Area presence — ANY sensor in the area.
-            occupied = self._any_on(subentry.data.get(CONF_PRESENCE), default=True)
+            occupied = room.occupied
             # Zone presence — "is THIS end of the room occupied", which is what drives diminish.
             zone_presence = {z.get("zone_id"): z.get("presence") for z in (subentry.data.get(CONF_ZONES) or ())}
             area_near_clear = not self._any_on(
@@ -802,20 +813,45 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         return None
 
     def _sunset_progress(self, clock_hour: float, house: HouseSettings) -> float | None:
-        """0.0 to 1.0 progress through bedtime virtual sunset fade."""
-        if not house.sunset_fade_enabled or self._asleep() or self._night_active():
+        """0.0 to 1.0 progress through bedtime virtual sunset fade.
+
+        Trigger conditions:
+        1. Inside the evening bedtime window: starts at bedtime_dwell_hour (e.g. 22:00) until hardcoded 04:00.
+        2. Not away on holiday.
+        3. Bedroom occupancy > sunset_dwell_minutes (e.g. 5 min continuous occupancy).
+        4. Not already asleep or night latched.
+        """
+        if not house.sunset_fade_enabled or self._away() or self._asleep() or self._night_active():
             return None
-        start = house.bedtime_dwell_hour
-        dur_h = house.sunset_fade_minutes / 60.0
-        if dur_h <= 0:
+
+        # Time window: start hour (e.g. 22.0) to hardcoded 04:00
+        start_h = house.bedtime_dwell_hour
+        end_h = 4.0
+        in_window = (clock_hour >= start_h or clock_hour < end_h) if start_h > end_h else (start_h <= clock_hour < end_h)
+        if not in_window:
             return None
-        anchor = house.evening_axis_hour
-        axis = (clock_hour - anchor) % 24.0
-        start_axis = (start - anchor) % 24.0
-        if start_axis <= axis < start_axis + dur_h:
-            elapsed = axis - start_axis
-            return max(0.0, min(1.0, elapsed / dur_h))
-        return None
+
+        now_ts = dt_util.utcnow().timestamp()
+        bedroom_room: RoomState | None = None
+        for subentry in self._subentries():
+            if subentry.title.lower() == "bedroom" or subentry.data.get("night_off") or subentry.data.get("sunset_enabled"):
+                bedroom_room = self.rooms.get(subentry.subentry_id)
+                break
+
+        if not bedroom_room or not bedroom_room.occupied or bedroom_room.occupied_since is None:
+            return None
+
+        dwell_min = (now_ts - bedroom_room.occupied_since) / 60.0
+        req_dwell_min = house.sunset_dwell_minutes
+        if dwell_min < req_dwell_min:
+            return None
+
+        fade_dur_min = house.sunset_fade_minutes
+        if fade_dur_min <= 0:
+            return 1.0
+
+        elapsed_fade_min = dwell_min - req_dwell_min
+        return max(0.0, min(1.0, elapsed_fade_min / fade_dur_min))
 
     def _bedtime_dwell_active(self, clock_hour: float, house: HouseSettings) -> bool:
         """Is bedtime wind-down active in bedroom?"""
@@ -924,22 +960,23 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         entity_id = event.data["entity_id"]
         old = event.data.get("old_state")
         new = event.data.get("new_state")
-        if new is None:
+        if new is None or old is None:
             return
 
-        # ⚠️ A z2m reconnect drives a bulb unknown/unavailable -> on. That is not a
+        # ⚠️ A z2m reconnect or restart drives a bulb unknown/unavailable -> on/off. That is not a
         # human, and counting it would drop the room into manual for the whole hold
-        # window every time the mesh hiccups. This house has a documented history of
-        # edge-driven automations being stranded by exactly this transition.
+        # window every time the mesh hiccups or HA starts.
         transient = {"unknown", "unavailable"}
-        if new.state in transient:
+        if new.state in transient or old.state in transient:
             return
-        if old is not None and old.state in transient:
+
+        # If both states are "off", it was not a human turning lights on/off
+        if old.state == "off" and new.state == "off":
             return
 
         house = self.house
         touched = False
-        if old is None or old.state != new.state:
+        if old.state != new.state:
             touched = True
         else:
             old_brightness = old.attributes.get("brightness") or 0

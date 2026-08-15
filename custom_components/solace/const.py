@@ -178,6 +178,7 @@ HOUSE_SETTINGS: tuple[Setting, ...] = (
     Setting("virtual_sunrise_target_level", "Virtual sunrise target level", 0, 254, 1, 180, None, "mdi:weather-sunset-up"),
     Setting("sunset_fade_enabled", "Virtual sunset fade", 0, 1, 1, 1, None, "mdi:weather-sunset-down"),
     Setting("sunset_fade_minutes", "Virtual sunset duration", 5, 120, 1, 20, "min", "mdi:timer-sand"),
+    Setting("sunset_dwell_minutes", "Bedroom presence dwell", 0, 60, 1, 5, "min", "mdi:account-clock"),
     Setting("bedtime_dwell_enabled", "Bedtime wind-down", 0, 1, 1, 1, None, "mdi:bed-outline"),
     Setting("bedtime_dwell_hour", "Bedtime wind-down hour", 0, 23.75, 0.25, 22.5, "h", "mdi:bed-clock"),
     Setting("bedtime_dwell_level", "Bedtime wind-down level", 0, 254, 1, 15, None, "mdi:bed"),

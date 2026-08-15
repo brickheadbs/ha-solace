@@ -903,12 +903,45 @@ export class SolTabSettings extends LitElement {
               <!-- Controls & Readouts -->
               <div class="curve-ctrl-bar">
                 <div class="curve-metric">
+                  <span>Window start:</span>
+                  <div class="input-with-unit">
+                    <input
+                      type="number"
+                      step="0.25"
+                      class="num-input"
+                      style="width: 62px;"
+                      .value="${String(house.bedtime_dwell_hour ?? 22.0)}"
+                      @change="${(e: Event) => {
+                        const v = parseFloat((e.target as HTMLInputElement).value);
+                        setHouse(this.hass, { bedtime_dwell_hour: v });
+                      }}"
+                    />
+                    <span class="unit-label">h</span>
+                  </div>
+                </div>
+                <div class="curve-metric">
+                  <span>Bedroom dwell:</span>
+                  <div class="input-with-unit">
+                    <input
+                      type="number"
+                      class="num-input"
+                      style="width: 54px;"
+                      .value="${String(house.sunset_dwell_minutes ?? 5)}"
+                      @change="${(e: Event) => {
+                        const v = parseFloat((e.target as HTMLInputElement).value);
+                        setHouse(this.hass, { sunset_dwell_minutes: v });
+                      }}"
+                    />
+                    <span class="unit-label">min</span>
+                  </div>
+                </div>
+                <div class="curve-metric">
                   <span>Fade duration:</span>
                   <div class="input-with-unit">
                     <input
                       type="number"
                       class="num-input"
-                      style="width: 58px;"
+                      style="width: 54px;"
                       .value="${String(house.sunset_fade_minutes ?? 20)}"
                       @change="${(e: Event) => {
                         const v = parseFloat((e.target as HTMLInputElement).value);
@@ -918,26 +951,10 @@ export class SolTabSettings extends LitElement {
                     <span class="unit-label">min</span>
                   </div>
                 </div>
-                <div class="curve-metric">
-                  <span>Bedtime trigger:</span>
-                  <div class="input-with-unit">
-                    <input
-                      type="number"
-                      step="0.25"
-                      class="num-input"
-                      style="width: 66px;"
-                      .value="${String(house.bedtime_dwell_hour ?? 22.5)}"
-                      @change="${(e: Event) => {
-                        const v = parseFloat((e.target as HTMLInputElement).value);
-                        setHouse(this.hass, { bedtime_dwell_hour: v });
-                      }}"
-                    />
-                    <span class="unit-label">h</span>
-                  </div>
-                </div>
                 <div class="curve-metric" style="margin-left: auto;">
                   <span>Demand Ceiling:</span>
                   <strong style="color: var(--sol-cyan);">${currentDemandLevel} / 254</strong>
+                </div>
                 </div>
                 ${this.hoverSunset
                   ? html`

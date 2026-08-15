@@ -238,6 +238,7 @@ class HouseSettings:
     sunrise_curve: tuple[SplinePoint, ...] = DEFAULT_SUNRISE_CURVE
     sunset_fade_enabled: bool = True
     sunset_fade_minutes: float = 20.0
+    sunset_dwell_minutes: float = 5.0
     sunset_curve: tuple[SplinePoint, ...] = DEFAULT_SUNSET_CURVE
     bedtime_dwell_enabled: bool = True
     bedtime_dwell_hour: float = 22.5
