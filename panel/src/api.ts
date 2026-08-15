@@ -134,10 +134,28 @@ export interface FamilyFade {
   reason: string;
 }
 
+export interface LuxPoint {
+  lux: number;
+  demand_pct: number;
+}
+
+export interface BrightnessPoint {
+  hour: number;
+  level: number;
+}
+
+export interface ColourPoint {
+  hour: number;
+  kelvin: number;
+}
+
 export interface Snapshot {
   entry_id: string;
   house: Record<string, number>;
   ramp: RampPoint[];
+  lux_curve?: LuxPoint[];
+  brightness_timeline?: BrightnessPoint[];
+  colour_timeline?: ColourPoint[];
   house_schema: Schema[];
   room_schema: Schema[];
   links: Record<string, string | null>;
@@ -166,6 +184,27 @@ export const setHouse = (hass: Hass, values: Record<string, number>) =>
 
 export const setRamp = (hass: Hass, ramp: RampPoint[]) =>
   hass.connection.sendMessagePromise({ type: "solace/set_ramp", ramp });
+
+export const setLuxCurve = (hass: Hass, lux_curve: LuxPoint[]) =>
+  hass.connection.sendMessagePromise({ type: "solace/set_lux_curve", lux_curve });
+
+export const setBrightnessTimeline = (
+  hass: Hass,
+  brightness_timeline: BrightnessPoint[]
+) =>
+  hass.connection.sendMessagePromise({
+    type: "solace/set_brightness_timeline",
+    brightness_timeline,
+  });
+
+export const setColourTimeline = (
+  hass: Hass,
+  colour_timeline: ColourPoint[]
+) =>
+  hass.connection.sendMessagePromise({
+    type: "solace/set_colour_timeline",
+    colour_timeline,
+  });
 
 export const setRoom = (
   hass: Hass,
