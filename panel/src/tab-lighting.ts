@@ -563,9 +563,7 @@ export class SolTabLighting extends LitElement {
           ${light.group_size > 1 ? html`<span>group of ${light.group_size} · </span>` : nothing}
           ${clampedNote ? html`<span class="hw">${clampedNote} · </span>` : nothing}
           <span class="tab-num"
-            >level ${light.level ?? "—"}${light.level !== null
-              ? ` (${lightPct(light.level, gamma)} %)`
-              : ""}</span
+            >${light.level !== null ? `${lightPct(light.level, gamma)}% (${light.level} Ɯ)` : "—"}</span
           >
         </div>
       </div>
@@ -798,7 +796,7 @@ export class SolTabLighting extends LitElement {
           </div>
         </div>
         <span class="readout tab-num">
-          ${ambVal === 0 ? "Follows house" : `L${ambVal} (${lightPct(ambVal, gamma)} %)`}
+          ${ambVal === 0 ? "Follows house" : `${lightPct(ambVal, gamma)}% (${ambVal} Ɯ)`}
         </span>
       </div>
 

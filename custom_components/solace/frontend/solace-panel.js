@@ -1651,7 +1651,7 @@ var Ft=Object.defineProperty;var Ut=Object.getOwnPropertyDescriptor;var m=(o,s,e
           ${t.group_size>1?p`<span>group of ${t.group_size} · </span>`:x}
           ${r?p`<span class="hw">${r} · </span>`:x}
           <span class="tab-num"
-            >level ${t.level??"\u2014"}${t.level!==null?` (${xe(t.level,i)} %)`:""}</span
+            >${t.level!==null?`${xe(t.level,i)}% (${t.level} \u019C)`:"\u2014"}</span
           >
         </div>
       </div>
@@ -1820,7 +1820,7 @@ var Ft=Object.defineProperty;var Ut=Object.getOwnPropertyDescriptor;var m=(o,s,e
           </div>
         </div>
         <span class="readout tab-num">
-          ${b===0?"Follows house":`L${b} (${xe(b,t)} %)`}
+          ${b===0?"Follows house":`${xe(b,t)}% (${b} \u019C)`}
         </span>
       </div>
 
