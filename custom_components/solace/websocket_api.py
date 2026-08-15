@@ -33,8 +33,11 @@ from .colour import resolve_colour
 from .const import (
     CONF_ALARM_ENTITY,
     CONF_AWAY_ENTITY,
+    CONF_BRIGHTNESS_TIMELINE,
+    CONF_COLOUR_TIMELINE,
     CONF_DND_ENTITY,
     CONF_LIGHTS,
+    CONF_LUX_CURVE,
     CONF_LUX_SENSOR,
     CONF_NEAR_PRESENCE,
     CONF_PER_LIGHT,
@@ -68,6 +71,9 @@ def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_subscribe)
     websocket_api.async_register_command(hass, ws_set_house)
     websocket_api.async_register_command(hass, ws_set_ramp)
+    websocket_api.async_register_command(hass, ws_set_lux_curve)
+    websocket_api.async_register_command(hass, ws_set_brightness_timeline)
+    websocket_api.async_register_command(hass, ws_set_colour_timeline)
     websocket_api.async_register_command(hass, ws_set_room)
     websocket_api.async_register_command(hass, ws_set_light)
     websocket_api.async_register_command(hass, ws_room_action)
@@ -250,6 +256,15 @@ def _snapshot(hass: HomeAssistant, coordinator: SolaceCoordinator) -> dict[str, 
         "ramp": [
             {"hour": point.hour, "stops": point.stops} for point in house.ramp
         ],
+        "lux_curve": [
+            {"lux": point.x, "demand_pct": point.y} for point in house.lux_curve
+        ],
+        "brightness_timeline": [
+            {"hour": point.x, "level": point.y} for point in house.brightness_timeline
+        ],
+        "colour_timeline": [
+            {"hour": point.x, "kelvin": point.y} for point in house.colour_timeline
+        ],
         "house_schema": [_schema_row(s) for s in HOUSE_SETTINGS],
         "room_schema": [_schema_row(s) for s in ROOM_SETTINGS],
         "links": {
@@ -416,6 +431,78 @@ async def ws_set_ramp(hass: HomeAssistant, connection, msg: dict[str, Any]) -> N
         key=lambda p: (p["hour"] - 18.0) % 24.0,
     )
     hass.config_entries.async_update_entry(entry, options={**entry.options, CONF_RAMP: ramp})
+    connection.send_result(msg["id"])
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "solace/set_lux_curve",
+        vol.Required("lux_curve"): [
+            {vol.Required("lux"): vol.Coerce(float), vol.Required("demand_pct"): vol.Coerce(float)}
+        ],
+    }
+)
+@websocket_api.async_response
+async def ws_set_lux_curve(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    """Outdoor lux demand spline curve — user-defined control points."""
+    entry = _entry(hass)
+    if entry is None:
+        connection.send_error(msg["id"], "not_loaded", "Solace is not set up")
+        return
+    points = sorted(
+        [{"lux": float(p["lux"]), "demand_pct": float(p["demand_pct"])} for p in msg["lux_curve"]],
+        key=lambda p: p["lux"],
+    )
+    hass.config_entries.async_update_entry(entry, options={**entry.options, CONF_LUX_CURVE: points})
+    await entry.runtime_data.coordinator.async_request_refresh()
+    connection.send_result(msg["id"])
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "solace/set_brightness_timeline",
+        vol.Required("brightness_timeline"): [
+            {vol.Required("hour"): vol.Coerce(float), vol.Required("level"): vol.Coerce(float)}
+        ],
+    }
+)
+@websocket_api.async_response
+async def ws_set_brightness_timeline(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    """24-hour target brightness schedule spline curve."""
+    entry = _entry(hass)
+    if entry is None:
+        connection.send_error(msg["id"], "not_loaded", "Solace is not set up")
+        return
+    points = sorted(
+        [{"hour": float(p["hour"]) % 24.0, "level": float(p["level"])} for p in msg["brightness_timeline"]],
+        key=lambda p: p["hour"],
+    )
+    hass.config_entries.async_update_entry(entry, options={**entry.options, CONF_BRIGHTNESS_TIMELINE: points})
+    await entry.runtime_data.coordinator.async_request_refresh()
+    connection.send_result(msg["id"])
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "solace/set_colour_timeline",
+        vol.Required("colour_timeline"): [
+            {vol.Required("hour"): vol.Coerce(float), vol.Required("kelvin"): vol.Coerce(float)}
+        ],
+    }
+)
+@websocket_api.async_response
+async def ws_set_colour_timeline(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    """24-hour target colour temperature schedule spline curve."""
+    entry = _entry(hass)
+    if entry is None:
+        connection.send_error(msg["id"], "not_loaded", "Solace is not set up")
+        return
+    points = sorted(
+        [{"hour": float(p["hour"]) % 24.0, "kelvin": float(p["kelvin"])} for p in msg["colour_timeline"]],
+        key=lambda p: p["hour"],
+    )
+    hass.config_entries.async_update_entry(entry, options={**entry.options, CONF_COLOUR_TIMELINE: points})
+    await entry.runtime_data.coordinator.async_request_refresh()
     connection.send_result(msg["id"])
 
 
