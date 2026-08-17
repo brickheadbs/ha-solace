@@ -194,6 +194,49 @@ async def test_a_small_echo_is_not_a_human_touch(hass: HomeAssistant, entry, wor
     assert room.manual_touched is False
 
 
+async def test_commanded_colour_glide_echo_is_not_a_human_touch(hass: HomeAssistant, entry, world) -> None:
+    """A large colour glide echo (>100K jump) matching Solace's commanded target
+    must not trip manual mode, even when received with a foreign/MQTT context."""
+    world(light_on=True)
+    assert await _setup(hass, entry)
+    coordinator = entry.runtime_data.coordinator
+    room = next(iter(coordinator.rooms.values()))
+    room.manual_touched = False
+
+    # Simulate Solace commanding a shift to 2200K (e.g. Virtual Sunset)
+    room.last_written_kelvin[LIGHT] = 2200
+
+    # Bulb echoes 2200K with a non-Solace context (e.g. MQTT inbound event)
+    hass.states.async_set(
+        LIGHT,
+        "on",
+        {
+            "brightness": 120,
+            "color_temp_kelvin": 2200,
+            "min_color_temp_kelvin": 2000,
+            "max_color_temp_kelvin": 6535,
+        },
+        context=Context(),
+    )
+    await hass.async_block_till_done()
+    assert room.manual_touched is False
+
+    # If a human changes to an unexpected Kelvin (e.g. 3500K), manual DOES trip
+    hass.states.async_set(
+        LIGHT,
+        "on",
+        {
+            "brightness": 120,
+            "color_temp_kelvin": 3500,
+            "min_color_temp_kelvin": 2000,
+            "max_color_temp_kelvin": 6535,
+        },
+        context=Context(),
+    )
+    await hass.async_block_till_done()
+    assert room.manual_touched is True
+
+
 async def test_manual_stops_solace_writing(hass: HomeAssistant, entry, world) -> None:
     world(light_on=True)
     assert await _setup(hass, entry)
@@ -502,6 +545,62 @@ async def test_dragging_a_setting_uses_the_tuning_transition(
     assert entry.runtime_data.coordinator._tuning is False
 
 
+async def test_walking_into_an_ambient_room_uses_the_occupancy_transition(
+    hass: HomeAssistant, entry, world
+) -> None:
+    """⚠️ Regression, found 2026-08-16 from the live house.
+
+    `_async_apply_light` wrote `room.last_source[entity_id] = solution.source` and then
+    read it straight back into `last_src`. The two were therefore always equal, so every
+    "what changed" arm of the transition ladder — ambience→demand, demand→diminish,
+    diminish→ambience — was unreachable and all of them fell through to
+    `transition_automatic_s`.
+
+    On the live house that meant walking into a room already lit at its ambience floor
+    asked for a 300 s fade instead of a 2 s one. The lights *were* moving; they were
+    moving so slowly it read as the automation being dead. It only looked fixed when a
+    setting was dragged, because that path takes the separate `_tuning` branch.
+
+    Nothing covered this: every existing transition test starts from an OFF bulb, which
+    takes the `was_off` branch above the ladder and never consults `last_src` at all.
+    """
+    # Dark and EMPTY: the room settles on its ambience floor with source "ambience".
+    world(lux=10.0, occupied=False, light_on=True)
+    hass.config_entries.async_update_entry(
+        entry, options={**entry.options, "ambience_level": 20, "ambience_ignores_occupancy": True}
+    )
+    assert await _setup(hass, entry)
+
+    coordinator = entry.runtime_data.coordinator
+    room = next(iter(coordinator.rooms.values()))
+    assert room.last_source.get(LIGHT) == "ambience", (
+        f"precondition failed — room is not resting on ambience "
+        f"(source={room.last_source.get(LIGHT)!r})"
+    )
+
+    calls: list[dict] = []
+    hass.bus.async_listen(
+        "call_service",
+        lambda e: calls.append(e.data) if e.data.get("domain") == "light" else None,
+    )
+
+    # Now walk in. Presence flips, clock 1 fires, and the light must step up briskly.
+    world(lux=10.0, occupied=True, light_on=True)
+    await hass.async_block_till_done()
+
+    turn_ons = [c for c in calls if c["service"] == "turn_on"]
+    assert turn_ons, "entering the room produced no write at all"
+
+    house = coordinator.house
+    got = turn_ons[-1]["service_data"]["transition"]
+    assert got == house.transition_up_occupancy_s, (
+        f"ambience→demand used {got}s; expected the occupancy transition "
+        f"{house.transition_up_occupancy_s}s, not the tracking fade "
+        f"{house.transition_automatic_s}s"
+    )
+    assert room.last_source.get(LIGHT) == "demand"
+
+
 async def test_a_settings_change_rebinds_listeners_without_accumulating_them(
     hass: HomeAssistant, entry
 ) -> None:
@@ -522,23 +621,11 @@ async def test_a_settings_change_rebinds_listeners_without_accumulating_them(
     assert len(coordinator._unsubscribes) == before
 
 
-async def test_the_colour_clock_follows_the_step_size(hass: HomeAssistant, entry) -> None:
-    """The tick is paced for the finest family, so a finer step must mean a faster clock.
-    A value that only takes effect on restart is the bug class the brief names."""
+async def test_the_colour_clock_interval(hass: HomeAssistant, entry) -> None:
+    """The colour interval provides regular periodic hardware transition updates."""
     assert await _setup(hass, entry)
     coordinator = entry.runtime_data.coordinator
-
-    hass.config_entries.async_update_entry(
-        entry, options={**entry.options, "colour_step_mired_smooth": 10}
-    )
-    await hass.async_block_till_done()
-    coarse = coordinator._colour_interval()
-
-    hass.config_entries.async_update_entry(
-        entry, options={**entry.options, "colour_step_mired_smooth": 2}
-    )
-    await hass.async_block_till_done()
-    assert coordinator._colour_interval() < coarse
+    assert coordinator._colour_interval() == 600.0
 
 
 async def test_a_stale_alarm_does_not_unlatch_night_mode(hass: HomeAssistant, entry) -> None:

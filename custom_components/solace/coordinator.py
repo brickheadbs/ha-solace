@@ -104,6 +104,7 @@ class RoomState:
     """UTC timestamp of the last human touch. Persisted alongside the flag."""
     solutions: dict[str, Solution] = field(default_factory=dict)
     last_written: dict[str, int] = field(default_factory=dict)
+    last_written_kelvin: dict[str, int] = field(default_factory=dict)
     last_source: dict[str, str] = field(default_factory=dict)
     """entity_id -> what drove its level last tick. See Solution.source."""
     ambience_open: bool = False
@@ -448,12 +449,13 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         # Register remote controller event listeners
         self.remotes.async_register()
 
-        # Colour runs on its own clock — small stepped absolutes, never a long fade.
+        # Colour runs on its own clock — smooth hardware glides toward the projected 24h curve.
         self._unsubscribes.append(
             async_track_time_interval(
                 self.hass, self._async_colour_tick, timedelta(seconds=self._colour_interval())
             )
         )
+        self.hass.async_create_task(self._async_colour_tick(None))
 
     @callback
     def async_shutdown_listeners(self) -> None:
@@ -629,6 +631,12 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
             zone=zone,
         )
         room.solutions[entity_id] = solution
+        # ⚠️ Read the PREVIOUS source before overwriting it. Reading it back afterwards made
+        # `last_src` identical to `solution.source`, so every "what changed" branch in the
+        # transition ladder below was unreachable and all of them fell through to
+        # `transition_automatic_s`. Walking into a room asked for a 300 s fade instead of a
+        # 2 s one, which reads as the lights simply not responding.
+        last_src = room.last_source.get(entity_id)
         room.last_source[entity_id] = solution.source
 
         # Manual wins: compute and display, but never write.
@@ -642,7 +650,6 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
             return
 
         was_off = current == 0
-        last_src = room.last_source.get(entity_id)
 
         if was_off:
             if solution.source == "ambience":
@@ -680,37 +687,36 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
     # ------------------------------------------------------------------ colour clock
 
     async def _async_colour_tick(self, _now: Any) -> None:
-        """One small colour step per bulb, toward the house curve."""
+        """Advance colour smoothly toward the projected 24h curve target."""
         house = self.house
         now = dt_util.now()
         clock_hour = now.hour + now.minute / 60.0
         dusk = self._dusk_hour()
 
+        # Project ahead by heartbeat duration for a continuous smooth hardware glide
+        transition_s = float(house.colour_heartbeat_s)
+        interval_h = (transition_s / 60.0) / 60.0
+        target_hour = (clock_hour + interval_h) % 24.0
+
         for subentry in self._subentries():
             room = self.rooms.get(subentry.subentry_id)
             if room is None:
                 continue
-            # ⚠️ **Manual does NOT stop colour.** Owner's spec: "In manual ALL lighting
-            # automation stops (the color sync control keeps working)." Skipping the
-            # colour tick here froze a manual room at whatever Kelvin it happened to
-            # hold, so an evening spent on a manual level stayed at midday white while
-            # the rest of the house warmed. Brightness is still frozen — that is what
-            # manual means — and `_async_apply_light` is where that is enforced.
             for entity_id in subentry.data.get(CONF_LIGHTS, []):
                 state = self.hass.states.get(entity_id)
                 if state is None or state.state != STATE_ON:
                     continue  # an off bulb rejects colour; it gets it on wake instead
                 light = self.light_settings(entity_id, subentry)
-                target = resolve_colour(clock_hour, dusk, house, light)
+                target = resolve_colour(target_hour, dusk, house, light)
                 await self.writer.async_step_colour(
                     entity_id,
                     state.attributes.get("color_temp_kelvin"),
                     target.kelvin,
                     light,
                     profile=self.fade_profile_for(light.family),
-                    r_crit=house.colour_rate_floor,
-                    safety=house.colour_rate_safety,
+                    transition_s=transition_s,
                 )
+                room.last_written_kelvin[entity_id] = target.kelvin
 
     def fade_profile_for(self, family: Family) -> FadeProfile:
         """The colour-walking strategy for one family, from live settings.
@@ -730,24 +736,8 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         )
 
     def _colour_interval(self) -> float:
-        """Derive the colour tick from the glide, never hardcode it.
-
-        The full traverse divided into one step gives the number of steps; the glide
-        duration divided by that gives the hold between them. Change the glide or the
-        step size and the cadence follows.
-
-        The tick is paced for the **finest** family in the house, because a shared clock
-        can only ever be as fine as its fastest consumer. Coarser families are not
-        over-driven by it: their own ``step_mired`` is a dead zone, so they simply decline
-        the ticks where the curve has not yet moved far enough to be worth a write.
-        """
-        house = self.house
-        from .colour import kelvin_to_mired
-
-        span = abs(kelvin_to_mired(house.night_kelvin) - kelvin_to_mired(house.day_kelvin))
-        finest = max(1, min(house.colour_step_mired, house.colour_step_mired_smooth))
-        steps = max(1, span / finest)
-        return max(house.colour_glide_minutes * 60.0 / steps, house.colour_step_transition_s * 2)
+        """Periodic interval between colour curve adjustments from live setting."""
+        return float(self.house.colour_heartbeat_s)
 
     def _clear_sleep_toggle(self) -> None:
         """Clear the manual sleep toggle helper when night mode ends."""
@@ -974,32 +964,57 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         if old.state == "off" and new.state == "off":
             return
 
+        target_room: RoomState | None = None
+        for subentry in self._subentries():
+            if entity_id in subentry.data.get(CONF_LIGHTS, []):
+                target_room = self.rooms.get(subentry.subentry_id)
+                if target_room is not None:
+                    break
+
+        if target_room is None:
+            return
+
         house = self.house
         touched = False
+        new_brightness = new.attributes.get("brightness") or 0
+        old_brightness = old.attributes.get("brightness") or 0
+        new_kelvin = new.attributes.get("color_temp_kelvin") or 0
+        old_kelvin = old.attributes.get("color_temp_kelvin") or 0
+
+        expected_level = target_room.last_written.get(entity_id)
+        expected_kelvin = target_room.last_written_kelvin.get(entity_id)
+
         if old.state != new.state:
-            touched = True
+            if new.state == "off":
+                # Turned off: if Solace wanted it off, ignore; otherwise human turned off
+                if expected_level != 0:
+                    touched = True
+            elif new.state == "on":
+                # Turned on: if Solace wanted it off or level diverges from expected, it's a human touch
+                if expected_level is None or expected_level == 0:
+                    touched = True
+                elif abs(new_brightness - expected_level) > house.manual_brightness_threshold:
+                    touched = True
         else:
-            old_brightness = old.attributes.get("brightness") or 0
-            new_brightness = new.attributes.get("brightness") or 0
             if abs(new_brightness - old_brightness) > house.manual_brightness_threshold:
-                touched = True
-            old_kelvin = old.attributes.get("color_temp_kelvin") or 0
-            new_kelvin = new.attributes.get("color_temp_kelvin") or 0
+                if expected_level is not None and abs(new_brightness - expected_level) <= max(house.dead_zone, 5):
+                    pass  # Bulb reached commanded brightness target
+                else:
+                    touched = True
+
             if abs(new_kelvin - old_kelvin) > house.manual_kelvin_threshold:
-                touched = True
+                if expected_kelvin is not None and abs(new_kelvin - expected_kelvin) <= max(house.manual_kelvin_threshold // 2, 50):
+                    pass  # Bulb reached commanded colour target
+                else:
+                    touched = True
 
         if not touched:
             return
 
-        for subentry in self._subentries():
-            if entity_id in subentry.data.get(CONF_LIGHTS, []):
-                room = self.rooms.get(subentry.subentry_id)
-                if room is None:
-                    continue
-                room.manual_touched = True
-                room.manual_since = dt_util.utcnow().timestamp()
-                self.hass.async_create_task(self.async_persist())
-                self.async_update_listeners()
+        target_room.manual_touched = True
+        target_room.manual_since = dt_util.utcnow().timestamp()
+        self.hass.async_create_task(self.async_persist())
+        self.async_update_listeners()
 
     # ------------------------------------------------------------------ helpers
 
