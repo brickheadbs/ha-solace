@@ -6,66 +6,29 @@
  * direct access to the room bias controls.
  */
 
-import { LitElement, css, html, nothing } from "lit";
+import { LitElement, css, html, nothing, svg } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import type { Hass, RoomRow, Snapshot } from "./api";
 import { setRoom } from "./api";
 import { num, stopLabel } from "./fmt";
+import { fetchHistory, type Sample } from "./history";
+import { buildSpark, clockAt, type Spark, type SparkOptions } from "./sparkline";
 import { tokens } from "./tokens";
 import "./ui";
 
-function generateSparkline(
-  pointsCount: number,
-  minVal: number,
-  maxVal: number,
-  currentVal: number,
-  trendType: "lux" | "inside" | "outside" | "hotwater" | "fridge",
-  width = 300,
-  height = 60
-): { line: string; fill: string } {
-  const points: Array<[number, number]> = [];
-  const range = maxVal - minVal || 1;
-  const paddingY = 8;
-  const usableH = height - paddingY * 2;
+/** The band is this tall in real pixels, on every card, so nothing is stretched. */
+const BAND_H = 62;
 
-  // Generate synthetic but realistic 24h curve matching daily diurnal cycle
-  for (let i = 0; i < pointsCount; i++) {
-    const t = i / (pointsCount - 1); // 0 (24h ago) to 1 (now)
-    const x = t * width;
-    let normalized = 0.5;
+const LUX = "sensor.entry_exterior_illuminance";
+const INSIDE_TEMP = "sensor.kitchen_kitchen_thermostat_temperature";
+const OUTSIDE_TEMP = "sensor.entry_exterior_temperature";
+const HOT_WATER_TEMP = "sensor.hot_water_temperature_temperature";
+const FRIDGE_TEMP = "sensor.refrigerator_temperature_temperature";
 
-    if (trendType === "lux") {
-      // Day/night solar parabola
-      normalized = Math.max(0, Math.sin(t * Math.PI * 2 - 0.8));
-    } else if (trendType === "inside") {
-      // Gentle indoor fluctuation
-      normalized = 0.45 + 0.35 * Math.sin(t * Math.PI * 2 - 1.2) + 0.1 * Math.cos(t * 4 * Math.PI);
-    } else if (trendType === "outside") {
-      // Outdoor diurnal cycle
-      normalized = 0.3 + 0.55 * Math.sin(t * Math.PI * 2 - 1.5);
-    } else if (trendType === "hotwater") {
-      // Heating spikes
-      const cycle = (t * 2) % 1;
-      normalized = cycle < 0.2 ? 0.3 + cycle * 3 : 0.9 - (cycle - 0.2) * 0.7;
-    } else if (trendType === "fridge") {
-      // Compressor saw-tooth
-      normalized = 0.3 + 0.4 * ((Math.sin(t * 12 * Math.PI) + 1) / 2);
-    }
+const TRACKED = [LUX, INSIDE_TEMP, OUTSIDE_TEMP, HOT_WATER_TEMP, FRIDGE_TEMP];
 
-    // Blend towards currentVal at the end
-    if (i === pointsCount - 1) {
-      normalized = Math.max(0, Math.min(1, (currentVal - minVal) / range));
-    }
-
-    const y = height - paddingY - normalized * usableH;
-    points.push([Math.round(x * 10) / 10, Math.round(y * 10) / 10]);
-  }
-
-  const lineStr = points.map((p) => `${p[0]},${p[1]}`).join(" ");
-  const fillStr = `0,${height} ${lineStr} ${width},${height}`;
-
-  return { line: lineStr, fill: fillStr };
-}
+/** How often the 24h window is re-pulled. The cards themselves tick every second. */
+const HISTORY_REFRESH_MS = 120_000;
 
 @customElement("sol-tab-home")
 export class SolTabHome extends LitElement {
@@ -74,21 +37,47 @@ export class SolTabHome extends LitElement {
 
   @state() private biasOpen = false;
   @state() private draftBias: Record<string, number> = {};
+  @state() private history: Map<string, Sample[]> = new Map();
+  /** Window the sparklines share, so all six cards line up on the same 24 hours. */
+  @state() private windowEnd = Date.now();
   private timer?: number;
+  private historyTimer?: number;
   private _debounceTimers: Map<string, number> = new Map();
 
   connectedCallback() {
     super.connectedCallback();
     this.timer = window.setInterval(() => this.requestUpdate(), 1000);
+    this.historyTimer = window.setInterval(() => this.loadHistory(), HISTORY_REFRESH_MS);
+    this.loadHistory();
   }
 
   disconnectedCallback() {
     super.disconnectedCallback();
     if (this.timer) clearInterval(this.timer);
+    if (this.historyTimer) clearInterval(this.historyTimer);
     for (const t of this._debounceTimers.values()) {
       clearTimeout(t);
     }
     this._debounceTimers.clear();
+  }
+
+  updated() {
+    // `hass` usually lands after the first connection, so the initial pull is kicked
+    // from here rather than only from connectedCallback.
+    if (this.hass && !this.historyRequested) {
+      this.historyRequested = true;
+      this.loadHistory();
+    }
+  }
+
+  private historyRequested = false;
+
+  private async loadHistory() {
+    if (!this.hass) return;
+    const data = await fetchHistory(this.hass, TRACKED, 24);
+    if (!data.size) return;
+    this.history = data;
+    this.windowEnd = Date.now();
   }
 
   static styles = [
@@ -277,9 +266,14 @@ export class SolTabHome extends LitElement {
         gap: 18px;
         margin-top: 10px;
         font-size: 11.5px;
-        color: var(--sol-text-4);
+        color: var(--sol-text-3);
         white-space: nowrap;
         flex-wrap: wrap;
+        /* The caption sits over the sparkline's densest ink. A halo in the card colour
+           keeps it readable without a scrim rectangle, and follows the theme. */
+        text-shadow:
+          0 0 4px var(--sol-card),
+          0 0 8px var(--sol-card);
       }
       .high-low b {
         font-family: var(--sol-font-body);
@@ -288,29 +282,38 @@ export class SolTabHome extends LitElement {
         font-weight: 500;
       }
 
-      /* Background sparkline */
-      .bg-grad {
-        position: absolute;
-        inset: 0;
-        z-index: 0;
-        background: linear-gradient(
-          180deg,
-          rgba(26, 26, 27, 0.94) 0%,
-          rgba(26, 26, 27, 0.82) 42%,
-          rgba(26, 26, 27, 0.3) 72%,
-          rgba(26, 26, 27, 0) 100%
-        );
-        pointer-events: none;
-      }
-      .bg-svg {
+      /* Sparkline band.
+         Fixed pixel height, anchored to the card floor, stretched horizontally only —
+         see sparkline.ts. The old full-bleed SVG scaled a 60px viewBox to the whole
+         card and distorted every curve vertically. */
+      .band {
         position: absolute;
         left: 0;
-        right: 0;
         bottom: 0;
+        /* An absolutely positioned <svg> is a replaced element: left/right:0 alone
+           leaves it at its intrinsic viewBox width (300px) instead of stretching, which
+           parks the curve against the card's right edge. The width is not optional. */
         width: 100%;
-        height: 100%;
+        height: ${BAND_H}px;
         display: block;
         z-index: 0;
+        pointer-events: none;
+        /* Feather the left edge so the curve enters rather than starting mid-air. */
+        -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 9%, #000 100%);
+        mask-image: linear-gradient(90deg, transparent 0, #000 9%, #000 100%);
+      }
+      .band-dot {
+        /* Non-scaling so the horizontal stretch cannot turn it into an ellipse. */
+        vector-effect: non-scaling-stroke;
+      }
+      .band-empty {
+        position: absolute;
+        left: 18px;
+        bottom: 12px;
+        z-index: 0;
+        font-size: 10.5px;
+        letter-spacing: 0.4px;
+        color: var(--sol-faint);
         pointer-events: none;
       }
 
@@ -431,6 +434,73 @@ export class SolTabHome extends LitElement {
         width: 2px;
         background: #ef5350;
       }
+
+      /* Running now — the idle form.
+         An appliance that is off has one fact to report, so it gets one line instead of
+         a 150px card holding a 34px "Off / Standby". */
+      .idle-strip {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        flex-wrap: wrap;
+        background: var(--sol-card, #1a1a1b);
+        border-radius: var(--sol-r-card, 14px);
+        box-shadow: var(--sol-shadow);
+        padding: 10px 16px;
+        min-height: 0;
+      }
+      .idle-item {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        font-size: 12px;
+        color: var(--sol-text-4);
+        white-space: nowrap;
+      }
+      .idle-item ha-icon {
+        --mdc-icon-size: 16px;
+        color: var(--sol-faint);
+      }
+      .idle-item b {
+        font-family: var(--sol-font-body);
+        font-variant-numeric: tabular-nums;
+        font-weight: 500;
+        color: var(--sol-text-3);
+      }
+      .idle-sep {
+        width: 1px;
+        align-self: stretch;
+        background: var(--sol-hair);
+      }
+      /* When one appliance runs and the other doesn't, the chip must not stretch to the
+         running card's height — it sits at the top of its grid cell instead. */
+      .g2-run {
+        align-items: start;
+      }
+
+      .run-phase {
+        font-size: 34px;
+        font-weight: 200;
+        line-height: 0.9;
+        color: var(--sol-text);
+        text-transform: capitalize;
+      }
+      .run-badge {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        font-size: 11px;
+        font-weight: 500;
+        text-transform: uppercase;
+        color: var(--sol-green);
+      }
+      .run-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--sol-green);
+        display: inline-block;
+      }
     `,
   ];
 
@@ -474,6 +544,78 @@ export class SolTabHome extends LitElement {
     });
   }
 
+  /* ---------------------------------------------------------------- sparklines */
+
+  private spark(entityId: string, opts: SparkOptions = {}): Spark | null {
+    const samples = this.history.get(entityId);
+    if (!samples || samples.length < 2) return null;
+    return buildSpark(samples, {
+      height: BAND_H,
+      from: this.windowEnd - 24 * 3_600_000,
+      to: this.windowEnd,
+      ...opts,
+    });
+  }
+
+  /**
+   * The band itself. `id` only has to be unique inside this shadow root — it names the
+   * fill gradient, and two cards sharing one would silently take each other's colour.
+   */
+  private renderBand(id: string, spark: Spark | null, colour: string) {
+    if (!spark) {
+      return html`<div class="band-empty">no recorder history yet</div>`;
+    }
+    return html`
+      <svg
+        class="band"
+        viewBox="0 0 ${spark.width} ${spark.height}"
+        preserveAspectRatio="none"
+        aria-hidden="true"
+      >
+        ${svg`
+          <defs>
+            <linearGradient id=${`fill-${id}`} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color=${colour} stop-opacity="0.22"></stop>
+              <stop offset="55%" stop-color=${colour} stop-opacity="0.07"></stop>
+              <stop offset="100%" stop-color=${colour} stop-opacity="0"></stop>
+            </linearGradient>
+          </defs>
+          <path d=${spark.area} fill=${`url(#fill-${id})`} stroke="none"></path>
+          <path
+            d=${spark.line}
+            fill="none"
+            stroke=${colour}
+            stroke-width="1.6"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            opacity="0.75"
+            vector-effect="non-scaling-stroke"
+          ></path>
+          <circle
+            class="band-dot"
+            cx=${spark.dotX}
+            cy=${spark.dotY}
+            r="2.2"
+            fill=${colour}
+            stroke="var(--sol-card)"
+            stroke-width="1.5"
+          ></circle>
+        `}
+      </svg>
+    `;
+  }
+
+  /** High/low straight off the samples, so the caption cannot disagree with the curve. */
+  private renderHighLow(spark: Spark | null, unit: string, digits = 1) {
+    if (!spark) return nothing;
+    return html`
+      <div class="high-low">
+        <span>High <b>${spark.max.toFixed(digits)}${unit}</b> ${clockAt(spark.maxAt)}</span>
+        <span>Low <b>${spark.min.toFixed(digits)}${unit}</b> ${clockAt(spark.minAt)}</span>
+      </div>
+    `;
+  }
+
   /* ---------------------------------------------------------------- render */
 
   private renderLightCard() {
@@ -488,7 +630,9 @@ export class SolTabHome extends LitElement {
     const sleepActive =
       this.hass.states["input_boolean.solace_sleep"]?.state === "on" || w.night_active;
 
-    const spark = generateSparkline(30, 0, 100, targetPct, "lux");
+    // Outdoor lux spans four decades between a dark night and midday, so a linear axis
+    // renders the whole night as a flat line against one spike. Log keeps the shape.
+    const spark = this.spark(LUX, { scale: "log" });
 
     return html`
       <div class="card-wrap">
@@ -519,7 +663,11 @@ export class SolTabHome extends LitElement {
         <div class="c-body">
           <div>
             <div class="big-val mono-gold">${targetPct}<span class="unit" style="font-size: 15px; margin-left: 3px;">%</span></div>
-            <div class="high-low" style="margin-top: 6px;">${masterTarget} lvl</div>
+            <div class="high-low" style="margin-top: 6px;">
+              ${masterTarget} lvl${spark
+                ? html` · peak <b>${num(Math.round(spark.max))} lx</b> ${clockAt(spark.maxAt)}`
+                : nothing}
+            </div>
           </div>
           <div class="stat-grid">
             <div class="stat-item">
@@ -562,18 +710,7 @@ export class SolTabHome extends LitElement {
             `
           : nothing}
 
-        <div class="bg-grad"></div>
-        <svg viewBox="0 0 300 60" preserveAspectRatio="none" class="bg-svg">
-          <polyline points=${spark.fill} fill="rgba(255,183,77,.14)" stroke="none"></polyline>
-          <polyline
-            points=${spark.line}
-            fill="none"
-            stroke="#ffb74d"
-            stroke-width="1.5"
-            opacity="0.6"
-            vector-effect="non-scaling-stroke"
-          ></polyline>
-        </svg>
+        ${this.renderBand("lux", spark, "var(--sol-amber)")}
       </div>
     `;
   }
@@ -617,7 +754,7 @@ export class SolTabHome extends LitElement {
     const hvacMode = climateState?.state ?? "heat";
     const targetTemp = climateState?.attributes?.temperature ?? 20.5;
 
-    const spark = generateSparkline(30, 18, 23, currentTemp, "inside");
+    const spark = this.spark(INSIDE_TEMP, { minSpan: 1.5 });
 
     return html`
       <div class="card-wrap">
@@ -669,23 +806,8 @@ export class SolTabHome extends LitElement {
             : nothing}
         </div>
 
-        <div class="high-low">
-          <span>High <b>21.3°</b> 14:10</span>
-          <span>Low <b>18.9°</b> 05:40</span>
-        </div>
-
-        <div class="bg-grad"></div>
-        <svg viewBox="0 0 300 60" preserveAspectRatio="none" class="bg-svg">
-          <polyline points=${spark.fill} fill="rgba(239,83,80,.13)" stroke="none"></polyline>
-          <polyline
-            points=${spark.line}
-            fill="none"
-            stroke="#ef5350"
-            stroke-width="1.5"
-            opacity="0.6"
-            vector-effect="non-scaling-stroke"
-          ></polyline>
-        </svg>
+        ${this.renderHighLow(spark, "°")}
+        ${this.renderBand("inside", spark, "#ef5350")}
       </div>
     `;
   }
@@ -704,7 +826,7 @@ export class SolTabHome extends LitElement {
     const humidity = humidityState?.state ?? 47;
     const gateOpen = gateState?.state === "on";
 
-    const spark = generateSparkline(30, 8, 18, currentTemp, "outside");
+    const spark = this.spark(OUTSIDE_TEMP, { minSpan: 2 });
 
     return html`
       <div class="card-wrap">
@@ -733,23 +855,8 @@ export class SolTabHome extends LitElement {
           </div>
         </div>
 
-        <div class="high-low">
-          <span>High <b>15.6°</b> 13:20</span>
-          <span>Low <b>9.4°</b> 04:55</span>
-        </div>
-
-        <div class="bg-grad"></div>
-        <svg viewBox="0 0 300 60" preserveAspectRatio="none" class="bg-svg">
-          <polyline points=${spark.fill} fill="rgba(79,195,247,.13)" stroke="none"></polyline>
-          <polyline
-            points=${spark.line}
-            fill="none"
-            stroke="#4fc3f7"
-            stroke-width="1.5"
-            opacity="0.6"
-            vector-effect="non-scaling-stroke"
-          ></polyline>
-        </svg>
+        ${this.renderHighLow(spark, "°")}
+        ${this.renderBand("outside", spark, "var(--sol-cyan)")}
       </div>
     `;
   }
@@ -764,7 +871,7 @@ export class SolTabHome extends LitElement {
       this.hass.states["input_number.hw_target_winter"]?.state ??
       "56.0";
 
-    const spark = generateSparkline(30, 40, 60, currentTemp, "hotwater");
+    const spark = this.spark(HOT_WATER_TEMP, { minSpan: 4 });
 
     return html`
       <div class="card-wrap">
@@ -787,23 +894,8 @@ export class SolTabHome extends LitElement {
           </div>
         </div>
 
-        <div class="high-low">
-          <span>High <b>57.8°</b> 06:52</span>
-          <span>Low <b>42.1°</b> 05:50</span>
-        </div>
-
-        <div class="bg-grad"></div>
-        <svg viewBox="0 0 300 60" preserveAspectRatio="none" class="bg-svg">
-          <polyline points=${spark.fill} fill="rgba(255,183,77,.13)" stroke="none"></polyline>
-          <polyline
-            points=${spark.line}
-            fill="none"
-            stroke="#ffb74d"
-            stroke-width="1.5"
-            opacity="0.6"
-            vector-effect="non-scaling-stroke"
-          ></polyline>
-        </svg>
+        ${this.renderHighLow(spark, "°")}
+        ${this.renderBand("hotwater", spark, "var(--sol-amber)")}
       </div>
     `;
   }
@@ -812,7 +904,7 @@ export class SolTabHome extends LitElement {
     const fridgeTempState = this.hass.states["sensor.refrigerator_temperature_temperature"];
     const currentTemp = parseFloat(fridgeTempState?.state ?? "3.6");
 
-    const spark = generateSparkline(30, 2, 6, currentTemp, "fridge");
+    const spark = this.spark(FRIDGE_TEMP, { minSpan: 2 });
 
     return html`
       <div class="card-wrap">
@@ -827,23 +919,8 @@ export class SolTabHome extends LitElement {
           </div>
         </div>
 
-        <div class="high-low">
-          <span>High <b>4.9°</b> 18:05</span>
-          <span>Low <b>2.8°</b> 02:30</span>
-        </div>
-
-        <div class="bg-grad"></div>
-        <svg viewBox="0 0 300 60" preserveAspectRatio="none" class="bg-svg">
-          <polyline points=${spark.fill} fill="rgba(129,212,250,.12)" stroke="none"></polyline>
-          <polyline
-            points=${spark.line}
-            fill="none"
-            stroke="#81d4fa"
-            stroke-width="1.5"
-            opacity="0.6"
-            vector-effect="non-scaling-stroke"
-          ></polyline>
-        </svg>
+        ${this.renderHighLow(spark, "°")}
+        ${this.renderBand("fridge", spark, "#81d4fa")}
       </div>
     `;
   }
@@ -867,101 +944,177 @@ export class SolTabHome extends LitElement {
     const chargerPower = parseFloat(
       this.hass.states["sensor.bedroom_smart_plug_power_consumption"]?.state ?? "0"
     );
-    const chargeActiveThreshold = parseFloat(
-      this.hass.states["input_number.charge_active_threshold"]?.state ?? "1.1"
+    // `charge_active_threshold` is the *per-cycle* cut-off the charge script writes; it
+    // sits at 0 between cycles, so `power >= threshold` read as "charging" forever at
+    // 0.00 W. `charge_off_wattage` (1.1 W) is the standing default the script falls back
+    // to, and the comparison has to be strictly greater or 0 W still counts as charging.
+    const cycleCutoff = parseFloat(
+      this.hass.states["input_number.charge_active_threshold"]?.state ?? "0"
     );
-    const isCharging = chargerPower >= chargeActiveThreshold;
+    const defaultCutoff = parseFloat(
+      this.hass.states["input_number.charge_off_wattage"]?.state ?? "1.1"
+    );
+    const chargeCutoff = cycleCutoff > 0 ? cycleCutoff : defaultCutoff;
+    const isCharging = chargerPower > chargeCutoff;
+
+    const idle = !isWasherRunning && !isCharging;
 
     return html`
       <div class="sec-head">
         <ha-icon icon="mdi:lightning-bolt"></ha-icon>
         <div class="sec-title">Running now</div>
         <div class="sec-line"></div>
+        ${idle ? html`<div class="sec-sub">nothing running</div>` : nothing}
       </div>
 
-      <div class="g2">
-        <!-- Washer -->
-        <div class="card-wrap" style="padding-bottom: 26px;">
-          <div class="bar-track">
-            <div class="bar-fill" style="width: ${isWasherRunning ? Math.min(100, Math.max(5, washerProgress)) : 0}%;"></div>
-          </div>
-          <div class="c-head">
-            <ha-icon icon="mdi:washing-machine" style="color: var(--sol-cyan);"></ha-icon>
-            <span class="c-title">Washing Machine</span>
-            <span class="grow"></span>
-            <span class="c-status">${isWasherRunning ? washerProgram : "Idle"}</span>
-          </div>
-
-          <div class="c-body">
-            <div>
-              <div style="font-size: 34px; font-weight: 200; color: var(--sol-text); line-height: 0.9;">
-                ${isWasherRunning ? washerPhase : "Off / Standby"}
-              </div>
-              <div class="high-low" style="margin-top: 8px;">
-                ${isWasherRunning ? `${Math.round(washerProgress)}% through · remaining ${washerRemaining}` : "Ready"}
-              </div>
+      ${idle
+        ? html`
+            <div class="idle-strip">
+              <span class="idle-item">
+                <ha-icon icon="mdi:washing-machine"></ha-icon>
+                Washing machine
+                <b>idle</b>
+              </span>
+              <span class="idle-sep"></span>
+              <span class="idle-item">
+                <ha-icon icon="mdi:watch"></ha-icon>
+                Device charging
+                <b>${chargerPower.toFixed(2)} W</b>
+              </span>
             </div>
-            ${isWasherRunning
-              ? html`
-                  <div class="small-grid">
-                    <span class="sg-k">Remaining</span>
-                    <span class="sg-v" style="color: var(--sol-cyan);">${washerRemaining}</span>
-                    <span class="sg-k">Draw</span>
-                    <span class="sg-v">${Math.round(washerPower)} W</span>
-                  </div>
-                `
-              : nothing}
-          </div>
-        </div>
-
-        <!-- Charging -->
-        <div class="card-wrap" style="padding-bottom: 26px;">
-          <div class="bar-track">
-            <div
-              class="bar-fill"
-              style="width: ${isCharging ? Math.min(100, Math.max(10, (chargerPower / (chargeActiveThreshold * 2.5)) * 100)) : 0}%; background: var(--sol-green);"
-            ></div>
-            <div
-              class="bar-needle"
-              style="left: ${Math.min(95, (chargeActiveThreshold / (chargeActiveThreshold * 2.5)) * 100)}%;"
-            ></div>
-          </div>
-          <div class="c-head">
-            <ha-icon icon="mdi:watch" style="color: var(--sol-green);"></ha-icon>
-            <span class="c-title">Device Charging</span>
-            <span class="grow"></span>
-            <span
-              style="display: flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 500; color: ${isCharging ? "var(--sol-green)" : "var(--sol-text-4)"}; text-transform: uppercase;"
-            >
-              <span
-                style="width: 7px; height: 7px; border-radius: 50%; background: ${isCharging ? "var(--sol-green)" : "var(--sol-text-4)"}; display: inline-block;"
-              ></span>
-              ${isCharging ? "Charging" : "Idle"}
-            </span>
-          </div>
-
-          <div class="c-body">
-            <div>
-              <div class="big-val" style="color: ${isCharging ? "var(--sol-green)" : "var(--sol-text-3)"};">
-                ${chargerPower.toFixed(2)}<span class="unit">W</span>
-              </div>
-              <div class="high-low" style="margin-top: 8px;">
-                ${isCharging ? "Active charging cycle" : "Smart plug stand-by"}
-              </div>
-            </div>
-            <div class="small-grid">
-              <span class="sg-k">Cut-off</span>
-              <span class="sg-v" style="color: #ef5350;">${chargeActiveThreshold.toFixed(2)} W</span>
-              <span class="sg-k">State</span>
-              <span class="sg-v">${isCharging ? "Active" : "Off"}</span>
-            </div>
-          </div>
-        </div>
-      </div>
+          `
+        : this.renderRunningCards(
+            isWasherRunning,
+            washerProgram,
+            washerPhase,
+            washerProgress,
+            washerRemaining,
+            washerPower,
+            isCharging,
+            chargerPower,
+            chargeCutoff
+          )}
     `;
   }
 
+  /** Only reached when at least one appliance is actually doing something. */
+  private renderRunningCards(
+    isWasherRunning: boolean,
+    washerProgram: string,
+    washerPhase: string,
+    washerProgress: number,
+    washerRemaining: string,
+    washerPower: number,
+    isCharging: boolean,
+    chargerPower: number,
+    chargeCutoff: number
+  ) {
+    // Whichever appliance is off collapses to a chip, so the running one gets the room.
+    const washer = isWasherRunning
+      ? html`
+          <div class="card-wrap" style="padding-bottom: 26px;">
+            <div class="bar-track">
+              <div
+                class="bar-fill"
+                style="width: ${Math.min(100, Math.max(5, washerProgress))}%;"
+              ></div>
+            </div>
+            <div class="c-head">
+              <ha-icon icon="mdi:washing-machine" style="color: var(--sol-cyan);"></ha-icon>
+              <span class="c-title">Washing Machine</span>
+              <span class="grow"></span>
+              <span class="c-status">${washerProgram}</span>
+            </div>
+
+            <div class="c-body">
+              <div>
+                <div class="run-phase">${washerPhase}</div>
+                <div class="high-low" style="margin-top: 8px;">
+                  ${Math.round(washerProgress)}% through · remaining ${washerRemaining}
+                </div>
+              </div>
+              <div class="small-grid">
+                <span class="sg-k">Remaining</span>
+                <span class="sg-v" style="color: var(--sol-cyan);">${washerRemaining}</span>
+                <span class="sg-k">Draw</span>
+                <span class="sg-v">${Math.round(washerPower)} W</span>
+              </div>
+            </div>
+          </div>
+        `
+      : html`
+          <div class="idle-strip">
+            <span class="idle-item">
+              <ha-icon icon="mdi:washing-machine"></ha-icon>
+              Washing machine
+              <b>idle</b>
+            </span>
+          </div>
+        `;
+
+    // The bar reads 0 → 2.5× the cut-off, with the cut-off marked, so the needle shows
+    // how close the cycle is to finishing rather than being an arbitrary percentage.
+    const barFull = Math.max(chargeCutoff, 0.1) * 2.5;
+    const charging = isCharging
+      ? html`
+          <div class="card-wrap" style="padding-bottom: 26px;">
+            <div class="bar-track">
+              <div
+                class="bar-fill"
+                style="width: ${Math.min(100, Math.max(10, (chargerPower / barFull) * 100))}%; background: var(--sol-green);"
+              ></div>
+              <div
+                class="bar-needle"
+                style="left: ${Math.min(95, (chargeCutoff / barFull) * 100)}%;"
+              ></div>
+            </div>
+            <div class="c-head">
+              <ha-icon icon="mdi:watch" style="color: var(--sol-green);"></ha-icon>
+              <span class="c-title">Device Charging</span>
+              <span class="grow"></span>
+              <span class="run-badge">
+                <span class="run-dot"></span>
+                Charging
+              </span>
+            </div>
+
+            <div class="c-body">
+              <div>
+                <div class="big-val" style="color: var(--sol-green);">
+                  ${chargerPower.toFixed(2)}<span class="unit">W</span>
+                </div>
+                <div class="high-low" style="margin-top: 8px;">Active charging cycle</div>
+              </div>
+              <div class="small-grid">
+                <span class="sg-k">Cut-off</span>
+                <span class="sg-v" style="color: #ef5350;">${chargeCutoff.toFixed(2)} W</span>
+                <span class="sg-k">Profile</span>
+                <span class="sg-v">
+                  ${this.hass.states["input_text.charge_active_profile"]?.state || "—"}
+                </span>
+              </div>
+            </div>
+          </div>
+        `
+      : html`
+          <div class="idle-strip">
+            <span class="idle-item">
+              <ha-icon icon="mdi:watch"></ha-icon>
+              Device charging
+              <b>${chargerPower.toFixed(2)} W</b>
+            </span>
+          </div>
+        `;
+
+    return html`<div class="g2 g2-run">${washer}${charging}</div>`;
+  }
+
+
   render() {
+    // The parent gates on the snapshot before mounting this tab, but the coordinator can
+    // drop one on reload and every card below dereferences `snap.world`.
+    if (!this.snap || !this.hass) return nothing;
+
     return html`
       <div class="sec-head">
         <ha-icon icon="mdi:leaf"></ha-icon>
