@@ -1400,11 +1400,12 @@ var Ft=Object.defineProperty;var Ut=Object.getOwnPropertyDescriptor;var g=(o,s,e
       }
 
       .big-val {
-        font-family: var(--ha-font-family-code, "Roboto Mono", monospace);
-        font-weight: 200;
-        font-size: 46px;
+        font-family: var(--sol-font-body);
+        font-weight: 300;
+        font-size: 48px;
         line-height: 0.85;
-        letter-spacing: -0.05em;
+        letter-spacing: -0.03em;
+        font-variant-numeric: tabular-nums;
         color: var(--sol-text);
         min-width: 150px;
       }
@@ -1435,8 +1436,10 @@ var Ft=Object.defineProperty;var Ut=Object.getOwnPropertyDescriptor;var g=(o,s,e
         color: var(--sol-text-4);
       }
       .stat-val {
-        font-family: var(--ha-font-family-code, "Roboto Mono", monospace);
+        font-family: var(--sol-font-body);
+        font-weight: 500;
         font-size: 19px;
+        font-variant-numeric: tabular-nums;
         color: var(--sol-text-2);
       }
 
@@ -1453,7 +1456,8 @@ var Ft=Object.defineProperty;var Ut=Object.getOwnPropertyDescriptor;var g=(o,s,e
         color: var(--sol-faint);
       }
       .sg-v {
-        font-family: var(--ha-font-family-code, "Roboto Mono", monospace);
+        font-family: var(--sol-font-body);
+        font-variant-numeric: tabular-nums;
         color: var(--sol-text-3);
       }
 
@@ -1469,9 +1473,10 @@ var Ft=Object.defineProperty;var Ut=Object.getOwnPropertyDescriptor;var g=(o,s,e
         flex-wrap: wrap;
       }
       .high-low b {
-        font-family: var(--ha-font-family-code, "Roboto Mono", monospace);
+        font-family: var(--sol-font-body);
+        font-variant-numeric: tabular-nums;
         color: var(--sol-text-2);
-        font-weight: normal;
+        font-weight: 500;
       }
 
       /* Background sparkline */
@@ -1532,7 +1537,8 @@ var Ft=Object.defineProperty;var Ut=Object.getOwnPropertyDescriptor;var g=(o,s,e
       .rb-val {
         flex: 0 0 44px;
         text-align: right;
-        font-family: var(--ha-font-family-code, "Roboto Mono", monospace);
+        font-family: var(--sol-font-body);
+        font-variant-numeric: tabular-nums;
         font-size: 11px;
         color: var(--sol-text-3);
       }
