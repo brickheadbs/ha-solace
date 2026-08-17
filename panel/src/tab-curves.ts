@@ -15,7 +15,7 @@ import { tokens } from "./tokens";
 import "./ui";
 
 const X0 = 64;
-const X1 = 780;
+const X1 = 748;
 const Y0 = 14;
 const Y1 = 290;
 const VW = 800;
@@ -829,10 +829,10 @@ export class SolTabCurves extends LitElement {
               <circle
                 cx="${cx}"
                 cy="${cy}"
-                r="${selected ? 8 : 6}"
+                r="${selected ? 7.5 : 5.5}"
                 fill="${selected ? "#ffffff" : nodeColor}"
                 stroke="${selected ? nodeColor : "#ffffff"}"
-                stroke-width="1.8"
+                stroke-width="1"
                 style="cursor: pointer;"
               ></circle>
             `;
@@ -921,10 +921,10 @@ export class SolTabCurves extends LitElement {
             <circle
               cx="${cx}"
               cy="${cy}"
-              r="${selected ? 8 : 6}"
+              r="${selected ? 7.5 : 5.5}"
               fill="${selected ? "#ffb74d" : "#38bdf8"}"
               stroke="#ffffff"
-              stroke-width="1.5"
+              stroke-width="1"
               style="cursor: pointer;"
             ></circle>
           `;
@@ -940,12 +940,28 @@ export class SolTabCurves extends LitElement {
     const lines = [];
     if (key === "lux") {
       const xt = [0, 10, 100, 1000, 10000];
+      const xtSub = [1, 2, 5, 20, 50, 200, 500, 2000, 5000];
       const yt = [0, 25, 50, 75, 100];
+      const ytSub = [12.5, 37.5, 62.5, 87.5];
+
+      // Sub lines (X)
+      for (const x of xtSub) {
+        const px = this.xp("lux", x);
+        lines.push(svg`<line x1="${px}" y1="${Y0}" x2="${px}" y2="${Y1}" stroke="rgba(255,255,255,0.035)" stroke-width="1"></line>`);
+      }
+      // Sub lines (Y)
+      for (const y of ytSub) {
+        const py = this.yp("lux", y);
+        lines.push(svg`<line x1="${X0}" y1="${py}" x2="${X1}" y2="${py}" stroke="rgba(255,255,255,0.035)" stroke-width="1"></line>`);
+      }
+
+      // Major lines & Labels (X)
       for (const x of xt) {
         const px = this.xp("lux", x);
         lines.push(svg`<line x1="${px}" y1="${Y0}" x2="${px}" y2="${Y1}" stroke="rgba(255,255,255,0.08)" stroke-width="1"></line>`);
         lines.push(svg`<text x="${px}" y="${Y1 + 16}" fill="rgba(255,255,255,0.45)" font-size="10.5px" font-family="Roboto, sans-serif" text-anchor="middle">${x >= 1000 ? x / 1000 + "k" : x}</text>`);
       }
+      // Major lines & Labels (Y)
       for (const y of yt) {
         const py = this.yp("lux", y);
         lines.push(svg`<line x1="${X0}" y1="${py}" x2="${X1}" y2="${py}" stroke="rgba(255,255,255,0.08)" stroke-width="1"></line>`);
@@ -954,34 +970,69 @@ export class SolTabCurves extends LitElement {
       lines.push(svg`<text x="${(X0 + X1) / 2}" y="325" fill="rgba(255,255,255,0.3)" font-size="11px" font-family="Roboto, sans-serif" text-anchor="middle">outdoor illuminance (lx)</text>`);
     } else if (key === "bright") {
       const xt = [0, 3, 6, 9, 12, 15, 18, 21, 24];
-      const yt = [0, 63, 127, 190, 254];
+      const xtSub = [1, 2, 4, 5, 7, 8, 10, 11, 13, 14, 16, 17, 19, 20, 22, 23];
+      const yt = [0, 63.5, 127, 190.5, 254];
+      const ytSub = [31.75, 95.25, 158.75, 222.25];
+
+      // Sub lines (X)
+      for (const x of xtSub) {
+        const px = this.xp("bright", x);
+        lines.push(svg`<line x1="${px}" y1="${Y0}" x2="${px}" y2="${Y1}" stroke="rgba(255,255,255,0.035)" stroke-width="1"></line>`);
+      }
+      // Sub lines (Y)
+      for (const y of ytSub) {
+        const py = this.yp("bright", y);
+        lines.push(svg`<line x1="${X0}" y1="${py}" x2="${X1}" y2="${py}" stroke="rgba(255,255,255,0.035)" stroke-width="1"></line>`);
+      }
+
+      // Major lines & Labels (X)
       for (const x of xt) {
         const px = this.xp("bright", x);
         lines.push(svg`<line x1="${px}" y1="${Y0}" x2="${px}" y2="${Y1}" stroke="rgba(255,255,255,0.08)" stroke-width="1"></line>`);
         lines.push(svg`<text x="${px}" y="${Y1 + 16}" fill="rgba(255,255,255,0.45)" font-size="10.5px" font-family="Roboto, sans-serif" text-anchor="middle">${String(x).padStart(2, "0")}:00</text>`);
       }
+      // Major lines & Labels (Y)
       for (const y of yt) {
         const py = this.yp("bright", y);
+        const pct = Math.round((y / 254) * 100);
         lines.push(svg`<line x1="${X0}" y1="${py}" x2="${X1}" y2="${py}" stroke="rgba(255,255,255,0.08)" stroke-width="1"></line>`);
-        lines.push(svg`<text x="${X0 - 8}" y="${py + 4}" fill="rgba(255,255,255,0.45)" font-size="10.5px" font-family="Roboto, sans-serif" text-anchor="end">${y}</text>`);
+        lines.push(svg`<text x="${X0 - 8}" y="${py + 4}" fill="rgba(255,255,255,0.45)" font-size="10.5px" font-family="Roboto, sans-serif" text-anchor="end">${Math.round(y)}</text>`);
+        lines.push(svg`<text x="${X1 + 8}" y="${py + 4}" fill="rgba(255,255,255,0.45)" font-size="10.5px" font-family="Roboto, sans-serif" text-anchor="start">${pct}%</text>`);
       }
       lines.push(svg`<text x="${(X0 + X1) / 2}" y="325" fill="rgba(255,255,255,0.3)" font-size="11px" font-family="Roboto, sans-serif" text-anchor="middle">time of day</text>`);
     } else if (key === "colour") {
       const xt = [0, 3, 6, 9, 12, 15, 18, 21, 24];
-      // Derims ticks covering 2000K (100d) to 6000K (433d)
+      const xtSub = [1, 2, 4, 5, 7, 8, 10, 11, 13, 14, 16, 17, 19, 20, 22, 23];
+      // Derims ticks covering 2000K (100d) to 6000K (433.3d)
       const yt = [100, 200, 300, 400, 433.3];
+      const ytSub = [150, 250, 350];
+
+      // Sub lines (X)
+      for (const x of xtSub) {
+        const px = this.xp("colour", x);
+        lines.push(svg`<line x1="${px}" y1="${Y0}" x2="${px}" y2="${Y1}" stroke="rgba(255,255,255,0.035)" stroke-width="1"></line>`);
+      }
+      // Sub lines (Y)
+      for (const y of ytSub) {
+        const py = this.yp("colour", y);
+        lines.push(svg`<line x1="${X0}" y1="${py}" x2="${X1}" y2="${py}" stroke="rgba(255,255,255,0.035)" stroke-width="1"></line>`);
+      }
+
+      // Major lines & Labels (X)
       for (const x of xt) {
         const px = this.xp("colour", x);
         lines.push(svg`<line x1="${px}" y1="${Y0}" x2="${px}" y2="${Y1}" stroke="rgba(255,255,255,0.08)" stroke-width="1"></line>`);
         lines.push(svg`<text x="${px}" y="${Y1 + 16}" fill="rgba(255,255,255,0.45)" font-size="10.5px" font-family="Roboto, sans-serif" text-anchor="middle">${String(x).padStart(2, "0")}:00</text>`);
       }
+      // Major lines & Labels (Y)
       for (const y of yt) {
         const py = this.yp("colour", y);
         const k = derimToKelvin(y);
         lines.push(svg`<line x1="${X0}" y1="${py}" x2="${X1}" y2="${py}" stroke="rgba(255,255,255,0.08)" stroke-width="1"></line>`);
-        lines.push(svg`<text x="${X0 - 8}" y="${py + 4}" fill="rgba(255,255,255,0.45)" font-size="10.5px" font-family="Roboto, sans-serif" text-anchor="end">${Math.round(y)} Ɯ (${k}K)</text>`);
+        lines.push(svg`<text x="${X0 - 8}" y="${py + 4}" fill="rgba(255,255,255,0.45)" font-size="10.5px" font-family="Roboto, sans-serif" text-anchor="end">${Math.round(y)} Ɯ</text>`);
+        lines.push(svg`<text x="${X1 + 8}" y="${py + 4}" fill="rgba(255,255,255,0.45)" font-size="10.5px" font-family="Roboto, sans-serif" text-anchor="start">${k}K</text>`);
       }
-      lines.push(svg`<text x="${(X0 + X1) / 2}" y="325" fill="rgba(255,255,255,0.3)" font-size="11px" font-family="Roboto, sans-serif" text-anchor="middle">time of day (Ɯ / kelvin)</text>`);
+      lines.push(svg`<text x="${(X0 + X1) / 2}" y="325" fill="rgba(255,255,255,0.3)" font-size="11px" font-family="Roboto, sans-serif" text-anchor="middle">time of day</text>`);
     }
     return lines;
   }
