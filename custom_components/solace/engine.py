@@ -91,65 +91,19 @@ def demand(
     lux: float,
     curve_or_house: Sequence[SplinePoint] | HouseSettings,
 ) -> float:
-    """Evaluate lux demand with log falloff or spline curve."""
+    """Evaluate lux demand with spline curve."""
     if isinstance(curve_or_house, HouseSettings):
         curve = curve_or_house.lux_curve
-        if not curve or curve == DEFAULT_LUX_CURVE:
-            lo = max(curve_or_house.lux_full, 1e-9)
-            hi = lo + max(curve_or_house.lux_window, 1e-9)
-            if lux <= lo:
-                return 1.0
-            if lux >= hi:
-                return 0.0
-            return _clamp01(1.0 - math.log(lux / lo) / math.log(hi / lo))
     else:
         curve = curve_or_house
 
     if curve:
-        if curve == DEFAULT_LUX_CURVE:
-            lo = 1.0
-            hi = 540.0
-            if lux <= lo:
-                return 1.0
-            if lux >= hi:
-                return 0.0
-            return _clamp01(1.0 - math.log(lux / lo) / math.log(hi / lo))
         return _clamp01(MonotoneCubicSpline(curve).evaluate(max(0.0, lux)))
     return 0.0
 
 
 def ramp_bias(hour: float, house: HouseSettings) -> float:
-    """Bias in stops from the evening ramp."""
-    if not house.ramp:
-        return 0.0
-
-    anchor = house.evening_axis_hour
-    axis = (hour - anchor) % 24.0
-    release = (house.morning_release_hour - anchor) % 24.0
-    if axis >= release:
-        return 0.0
-
-    points = sorted(
-        (RampPoint(hour=(p.hour - anchor) % 24.0, stops=p.stops) for p in house.ramp),
-        key=lambda p: p.hour,
-    )
-    onset = max(house.ramp_onset_minutes, 0.0) / 60.0
-    if axis < points[0].hour - onset:
-        return 0.0
-    if axis < points[0].hour:
-        if onset <= 0:
-            return 0.0
-        return ((axis - (points[0].hour - onset)) / onset) * points[0].stops
-    if axis >= points[-1].hour:
-        return points[-1].stops
-
-    for lo, hi in zip(points, points[1:]):
-        if lo.hour <= axis <= hi.hour:
-            span = hi.hour - lo.hour
-            if span <= 0:
-                return hi.stops
-            t = (axis - lo.hour) / span
-            return lo.stops + t * (hi.stops - lo.stops)
+    """Legacy helper: 24h Brightness Timeline replaces the old evening ramp."""
     return 0.0
 
 
@@ -301,11 +255,9 @@ def compute_state_table(
 ) -> StateTable:
     """Compute the pre-calculated state table (L1, L2, L3, Ls) for one fixture."""
     zone_stops = zone.bias_stops if zone is not None else room.zone_bias_stops
-    ramp_stops = ramp_bias(clock_hour, house)
     total_stops = (
         house.mood_trim_stops
         + house.bias_stops
-        + ramp_stops
         + room.bias_stops
         + zone_stops
         + light.bias_stops
@@ -401,11 +353,9 @@ def solve(
     trace.append(("state_ls", state_table.ls))
 
     zone_stops = zone.bias_stops if zone is not None else room.zone_bias_stops
-    ramp_stops = ramp_bias(data.clock_hour, house)
     total_stops = (
         house.mood_trim_stops
         + house.bias_stops
-        + ramp_stops
         + room.bias_stops
         + zone_stops
         + light.bias_stops

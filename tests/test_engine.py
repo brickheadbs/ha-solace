@@ -164,71 +164,11 @@ def test_debounce_pending_clears_when_the_world_changes_back(house):
 # --------------------------------------------------------------------------------
 
 
-def test_ramp_interpolates_continuously_between_points(house):
-    assert ramp_bias(20.0, house) == pytest.approx(-0.5)
-    assert ramp_bias(21.25, house) == pytest.approx(-1.0)
-    assert ramp_bias(22.5, house) == pytest.approx(-1.5)
-
-
-def test_ramp_eases_in_rather_than_stepping(house):
-    """⚠️ NEVER JUMP. The ramp used to hold a flat 0 and then *step* onto its first
-    point. It now eases in over `ramp_onset_minutes` immediately before that point —
-    smooth, but still no bias at teatime, which is the reason it does not simply glide
-    from 18:00."""
-    onset_h = house.ramp_onset_minutes / 60
-    first = house.ramp[0]
-    assert ramp_bias(18.0, house) == 0.0
-    assert ramp_bias(first.hour - onset_h - 0.01, house) == 0.0
-    # Inside the onset it is partway, and monotonic toward the first point.
-    quarter = ramp_bias(first.hour - onset_h * 0.75, house)
-    half = ramp_bias(first.hour - onset_h * 0.5, house)
-    assert first.stops < quarter < 0
-    assert quarter > half > first.stops
-    assert ramp_bias(first.hour, house) == pytest.approx(first.stops)
-
-
-def test_the_ramp_onset_can_be_switched_back_to_a_step(house):
-    stepped = replace(house, ramp_onset_minutes=0.0)
-    assert ramp_bias(19.99, stepped) == 0.0
-    assert ramp_bias(20.0, stepped) == pytest.approx(-0.5)
-
-
-def test_ramp_survives_midnight(house):
-    """TRAP #1. A decimal clock comparison breaks after 00:00 (`23.5 < 6.5` is False).
-
-    The ramp must hold its last value through midnight rather than snapping to 0.
-    """
-    assert ramp_bias(23.5, house) == pytest.approx(-1.5)
-    assert ramp_bias(0.5, house) == pytest.approx(-1.5)
-    assert ramp_bias(3.0, house) == pytest.approx(-1.5)
-
-
-def test_ramp_has_an_explicit_morning_release(house):
-    """Without the release the ramp holds -1.5 stops all the next day."""
-    assert ramp_bias(6.4, house) == pytest.approx(-1.5)
-    assert ramp_bias(6.5, house) == 0.0
-    assert ramp_bias(12.0, house) == 0.0
-    assert ramp_bias(17.9, house) == 0.0
-
-
-def test_ramp_supports_more_than_two_points():
-    """"Build it as an ordered list from the start" — two points are config, not schema."""
-    house = HouseSettings(
-        ramp=(
-            RampPoint(19.0, -0.25),
-            RampPoint(21.0, -0.75),
-            RampPoint(23.0, -2.0),
-        )
-    )
-    assert ramp_bias(19.0, house) == pytest.approx(-0.25)
-    assert ramp_bias(20.0, house) == pytest.approx(-0.5)
-    assert ramp_bias(22.0, house) == pytest.approx(-1.375)
-    assert ramp_bias(23.0, house) == pytest.approx(-2.0)
-
-
-def test_ramp_points_out_of_order_are_sorted_not_trusted():
-    house = HouseSettings(ramp=(RampPoint(22.5, -1.5), RampPoint(20.0, -0.5)))
-    assert ramp_bias(21.25, house) == pytest.approx(-1.0)
+def test_ramp_bias_is_disabled_in_favour_of_24h_timeline(house):
+    """The 24h Brightness Schedule Spline replaces the old evening ramp table."""
+    assert ramp_bias(20.0, house) == 0.0
+    assert ramp_bias(22.5, house) == 0.0
+    assert ramp_bias(0.0, house) == 0.0
 
 
 # --------------------------------------------------------------------------------
@@ -785,28 +725,6 @@ def test_the_bedroom_transitions_from_dark_to_the_night_level_on_waking(light):
     assert awake.level == 68
 
 
-def test_a_ramp_point_before_the_old_18_00_anchor_is_not_discarded(light):
-    """⚠️ Midwinter. At 54°N sunset is 16:05 and civil dusk 16:50, so a 16:30 ramp point
-    is reasonable — and under the old hardcoded 18:00 axis it wrapped to 22.5, sorted
-    after the morning release, and was read as daytime: zero stops, no error, no log.
-    """
-    house = HouseSettings(
-        ramp=(RampPoint(hour=16.5, stops=-1.0), RampPoint(hour=22.0, stops=-2.0)),
-        ramp_onset_minutes=0.0,
-    )
-    assert ramp_bias(16.5, house) == -1.0
-    assert ramp_bias(22.0, house) == -2.0
-    # ...and still nothing at lunchtime.
-    assert ramp_bias(12.0, house) == 0.0
-
-
-def test_the_axis_anchor_is_a_setting_not_a_literal(light):
-    """Moving the anchor must move which points are reachable, or it is decoration."""
-    ramp = (RampPoint(hour=16.5, stops=-1.0),)
-    reachable = HouseSettings(ramp=ramp, evening_axis_hour=15.0, ramp_onset_minutes=0.0)
-    discarded = HouseSettings(ramp=ramp, evening_axis_hour=18.0, ramp_onset_minutes=0.0)
-    assert ramp_bias(16.5, reachable) == -1.0
-    assert ramp_bias(16.5, discarded) == 0.0
 
 
 # --------------------------------------------------------------------------------
@@ -946,12 +864,12 @@ def test_bedtime_dwell_and_night_mode_exempt_from_cutoff(house, light):
     assert got_high.level == 15
     assert ("below_cutoff", 25) not in got_high.trace
 
-    # Dim demand (level 3) -> kept at 3 -> not zeroed by cutoff 25
+    # Dim demand (level 5) -> kept at 5 -> not zeroed by cutoff 25
     got_low = solve(
         house_cutoff, bedroom, light,
         _input(lux=500.0, occupied=True, bedtime_dwell_active=True),
     )
-    assert got_low.level == 3
+    assert got_low.level == 5
     assert ("below_cutoff", 25) not in got_low.trace
 
 
