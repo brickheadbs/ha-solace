@@ -615,6 +615,13 @@ export class SolTabSettings extends LitElement {
     const riseProgress = world?.sunrise_progress ?? null;
     const setProgress = world?.sunset_progress ?? null;
 
+    // The gate is house-wide in practice (one lux sensor, one pair of thresholds), so any
+    // room's resolved state answers for all of them. Read it rather than recomputing from
+    // lux — the coordinator's value carries the hysteresis and debounce this cannot see.
+    const gateOpen = !!this.snap?.rooms?.some((r) => r.ambience_open);
+    const gateInverted =
+      (house.ambience_start_lux ?? 50) > (house.ambience_stop_lux ?? 80);
+
     return html`
       <div class="grid">
         <!-- 1. Bedroom Special Modes -->
@@ -1118,7 +1125,128 @@ export class SolTabSettings extends LitElement {
           </div>
         </div>
 
-        <!-- 2. Transitions Matrix -->
+        <!-- 2. Ambience Gate -->
+        <div class="card full-col">
+          <div class="head">
+            <ha-icon icon="mdi:theme-light-dark" style="color: var(--sol-blue);"></ha-icon>
+            <div class="title">Ambience gate</div>
+            <sol-help
+              text="The dark/bright threshold that arms the L3 ambience floor. Hysteretic: it opens when outdoor lux falls to the start value and does not close again until lux rises past the stop value, so dusk cannot chatter it. While the gate is open, per-light Cut Offs are DISARMED — that is what stops a low evening curve from cutting a fixture to nothing."
+            ></sol-help>
+            <div class="spacer"></div>
+            <div class="badge ${gateOpen ? "badge-amber" : "badge-dim"}">
+              ${gateOpen ? "Open · ambience armed" : "Closed · daylight"}
+            </div>
+          </div>
+
+          <div class="sleep-inputs-grid" style="border-top: none; padding-top: 0;">
+            <div>
+              <div style="display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--sol-text-2); margin-bottom: 4px;">
+                <ha-icon icon="mdi:weather-sunset-down" style="--mdc-icon-size: 14px; color: var(--sol-amber);"></ha-icon>
+                Start lux (gate opens)
+                <sol-help text="Outdoor lux at or below which the gate opens: ambience arms and Cut Offs disarm. Must be lower than the stop value."></sol-help>
+              </div>
+              <div class="input-with-unit">
+                <input
+                  type="number"
+                  class="num-input"
+                  style="flex: 1;"
+                  min="0"
+                  max="2000"
+                  .value="${String(house.ambience_start_lux ?? 50)}"
+                  @change="${(e: Event) => {
+                    const v = parseFloat((e.target as HTMLInputElement).value);
+                    if (!Number.isNaN(v)) setHouse(this.hass, { ambience_start_lux: v });
+                  }}"
+                />
+                <span class="unit-label">lx</span>
+              </div>
+            </div>
+
+            <div>
+              <div style="display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--sol-text-2); margin-bottom: 4px;">
+                <ha-icon icon="mdi:weather-sunset-up" style="--mdc-icon-size: 14px; color: var(--sol-amber);"></ha-icon>
+                Stop lux (gate closes)
+                <sol-help text="Outdoor lux at or above which the gate closes again at dawn. The span between start and stop is the hysteresis band that keeps dusk from flickering the gate."></sol-help>
+              </div>
+              <div class="input-with-unit">
+                <input
+                  type="number"
+                  class="num-input"
+                  style="flex: 1;"
+                  min="0"
+                  max="2000"
+                  .value="${String(house.ambience_stop_lux ?? 80)}"
+                  @change="${(e: Event) => {
+                    const v = parseFloat((e.target as HTMLInputElement).value);
+                    if (!Number.isNaN(v)) setHouse(this.hass, { ambience_stop_lux: v });
+                  }}"
+                />
+                <span class="unit-label">lx</span>
+              </div>
+            </div>
+
+            <div>
+              <div style="display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--sol-text-2); margin-bottom: 4px;">
+                <ha-icon icon="mdi:timer-sand" style="--mdc-icon-size: 14px; color: var(--sol-text-3);"></ha-icon>
+                Debounce falling
+                <sol-help text="How long lux must stay below the start value before the gate actually opens. 0 disables the delay."></sol-help>
+              </div>
+              <div class="input-with-unit">
+                <input
+                  type="number"
+                  step="0.5"
+                  class="num-input"
+                  style="flex: 1;"
+                  min="0"
+                  max="900"
+                  .value="${String(house.ambience_debounce_falling_s ?? 0)}"
+                  @change="${(e: Event) => {
+                    const v = parseFloat((e.target as HTMLInputElement).value);
+                    if (!Number.isNaN(v)) setHouse(this.hass, { ambience_debounce_falling_s: v });
+                  }}"
+                />
+                <span class="unit-label">s</span>
+              </div>
+            </div>
+
+            <div>
+              <div style="display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--sol-text-2); margin-bottom: 4px;">
+                <ha-icon icon="mdi:timer-sand" style="--mdc-icon-size: 14px; color: var(--sol-text-3);"></ha-icon>
+                Debounce rising
+                <sol-help text="How long lux must stay above the stop value before the gate closes. 0 disables the delay."></sol-help>
+              </div>
+              <div class="input-with-unit">
+                <input
+                  type="number"
+                  step="0.5"
+                  class="num-input"
+                  style="flex: 1;"
+                  min="0"
+                  max="900"
+                  .value="${String(house.ambience_debounce_rising_s ?? 0)}"
+                  @change="${(e: Event) => {
+                    const v = parseFloat((e.target as HTMLInputElement).value);
+                    if (!Number.isNaN(v)) setHouse(this.hass, { ambience_debounce_rising_s: v });
+                  }}"
+                />
+                <span class="unit-label">s</span>
+              </div>
+            </div>
+          </div>
+
+          <div style="margin-top: 12px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; font-size: 11.5px; color: var(--sol-text-3);">
+            <span>Outdoor lux now: <strong style="color: var(--sol-cyan);">${world?.lux ?? "—"} lx</strong></span>
+            <span>Band: <strong>${house.ambience_start_lux ?? 50} – ${house.ambience_stop_lux ?? 80} lx</strong></span>
+            ${gateInverted
+              ? html`<span style="color: #ffb74d;">
+                  ⚠ Start is above stop — the hysteresis band is inverted and the gate will chatter.
+                </span>`
+              : nothing}
+          </div>
+        </div>
+
+        <!-- 3. Transitions Matrix -->
         <div class="card full-col">
           <div class="head">
             <ha-icon icon="mdi:speedometer" style="color: var(--sol-blue);"></ha-icon>

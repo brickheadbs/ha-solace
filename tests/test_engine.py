@@ -1031,7 +1031,13 @@ def test_per_light_min_is_a_cutoff_not_a_floor_and_exempt_in_ambience_and_night(
     # 2. Night level (3) MUST remain 3 and NOT be forced to 60
     assert table.ls == house.night_level
 
-    # 3. In daytime, if demand level is below cutoff (e.g. 30 < 60), L1 drops to 0
+    # 3. In daytime, if demand level is below cutoff (e.g. 40 < 60), the light drops to 0.
+    #
+    # ⚠️ Asserted through `solve`, NOT through the state table. The Cut Off is armed by the
+    # ambience gate, and the state table cannot see the gate — it is handed a MasterOutput
+    # and nothing about darkness. Applying the cutoff there as well zeroed L1 whenever the
+    # evening curve dipped below a fixture's cut, which stranded six real fixtures at the
+    # ambience floor after dusk. `solve` step 7 is the single place the Cut Off lives.
     table_low_demand = compute_state_table(
         solve_master(200.0, 14.0, house),  # lower demand
         house,
@@ -1039,7 +1045,20 @@ def test_per_light_min_is_a_cutoff_not_a_floor_and_exempt_in_ambience_and_night(
         entry_light,
         clock_hour=14.0,
     )
-    assert table_low_demand.l1 == 0
+    assert 0 < table_low_demand.l1 < entry_light.clamp_min
+
+    # Same lux (so the same demand, so the same raw level) with only the GATE differing —
+    # `ambience_resolved` pins it directly, since `ambience_open` is merely the previous
+    # state fed to the hysteresis and at 200 lx would resolve closed either way.
+    common = dict(lux=200.0, clock_hour=14.0)
+
+    # Gate CLOSED (daylight) — the cutoff is armed and takes it to 0.
+    lit = solve(house, room, entry_light, _input(**common, ambience_resolved=False))
+    assert lit.level == 0
+
+    # Gate OPEN (dark) — the cutoff is disarmed, so the same level survives.
+    dark = solve(house, room, entry_light, _input(**common, ambience_resolved=True))
+    assert dark.level == table_low_demand.l1
 
 
 
