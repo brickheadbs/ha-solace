@@ -203,7 +203,7 @@ class HouseSettings:
 
     # -- Colour Settings ----------------------------------------------------------
     day_kelvin: int = 4000
-    colour_glide_minutes: float = 90.0
+    colour_heartbeat_s: float = 600.0
     colour_trim_kelvin: int = 0
     colour_step_mired: int = 5
     colour_step_mired_smooth: int = 2

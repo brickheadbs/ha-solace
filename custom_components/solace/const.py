@@ -123,7 +123,7 @@ HOUSE_SETTINGS: tuple[Setting, ...] = (
     # Colour
     Setting("day_kelvin", "Day colour", 2000, 9000, 10, 4000, "K", "mdi:white-balance-sunny"),
     Setting("night_kelvin", "Night colour", 2000, 9000, 10, 2200, "K", "mdi:weather-night"),
-    Setting("colour_glide_minutes", "Colour glide", 1, 240, 1, 90, "min", "mdi:transition"),
+    Setting("colour_heartbeat_s", "Colour transition heartbeat", 10, 3600, 1, 600, "s", "mdi:heart-pulse"),
     Setting("colour_trim_kelvin", "Colour trim", -1000, 1000, 10, 0, "K", "mdi:tune-vertical"),
     Setting("colour_step_mired", "Colour step (stepped bulbs)", 1, 50, 1, 5, "mired", "mdi:stairs"),
     Setting(

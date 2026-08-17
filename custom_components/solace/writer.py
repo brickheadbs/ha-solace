@@ -156,78 +156,40 @@ class LightWriter:
         target_kelvin: int,
         light: LightSettings,
         *,
-        profile: FadeProfile,
-        r_crit: float,
-        safety: float,
+        profile: FadeProfile | None = None,
+        transition_s: float | None = None,
+        r_crit: float | None = None,
+        safety: float | None = None,
     ) -> int | None:
-        """Move colour one **short, bounded step** toward the target.
-
-        This is the mechanism the hardware forces. A long ``color_temp`` transition
-        underflows a 6-bit fixed-point accumulator and the bulb stalls on a hardware
-        rail, permanently, with no error. A small absolute write with a *short* fade
-        sits far inside the safe window (R ≈ 1.25 mired/s against a 0.156 floor) and is
-        verified clean over 18+ consecutive steps.
-
-        How big that step is comes from ``profile`` — see ``fade.fade_profile``. Families
-        that must serialise walk coarsely and catch up; families that may glide colour
-        during a brightness fade walk finely.
-
-        Returns the Kelvin actually commanded, or ``None`` if nothing was sent.
-        """
+        """Start a smooth hardware colour transition toward the target."""
         if current_kelvin is None:
             return None
 
-        # 🔴 A colour step FREEZES an in-flight brightness fade on some families.
-        # Measured — Entry Ceiling stalled at 84 for 420 s while a same-family control
-        # tracked exactly. Serialise rather than risk a silently stuck fade. The skipped
-        # step is what `max_step_mired` later makes up.
-        if not profile.concurrent and self._is_busy(entity_id):
+        # A colour step FREEZES an in-flight brightness fade on IKEA if sent concurrently.
+        if profile is not None and not profile.concurrent and self._is_busy(entity_id):
             _LOGGER.debug("%s: deferring colour step, brightness fade in flight", entity_id)
             return None
 
-        current_mired = kelvin_to_mired(current_kelvin)
-        target_mired = kelvin_to_mired(target_kelvin)
-        delta = target_mired - current_mired
+        # Clamp target strictly to hardware limits (ha-hardware-truth)
+        kelvin = max(light.min_kelvin, min(light.max_kelvin, target_kelvin))
 
-        # Below one step is the family's colour dead zone: not worth a radio write, and
-        # settling within a step of the curve beats chattering at it.
-        if abs(delta) < profile.step_mired:
+        # Check tolerance (e.g. within 25 K of current is treated as settled)
+        if abs(kelvin - current_kelvin) < 25:
             return None
 
-        # Move in WHOLE steps, never the raw remaining delta.
-        #
-        # ⚠️ This is the difference between the setting meaning something and not. Moving
-        # the whole delta makes every write land exactly on the curve, which sounds
-        # better and is not: the drift between ticks then sets the step size, so a
-        # 2-mired setting produced ~4-mired jumps and the panel's own chart showed it.
-        # Quantising means the walk is as fine as the setting says, at the cost of
-        # trailing the curve by up to one step — which is the dead zone, by design.
-        #
-        # `max_step_mired` therefore engages only when several steps' worth has piled up,
-        # which is what it was for: recovering from steps skipped during a brightness
-        # fade, not padding every ordinary move.
-        steps = int(abs(delta) // profile.step_mired)
-        size = min(steps * profile.step_mired, profile.max_step_mired)
-        next_mired = current_mired + (size if delta > 0 else -size)
+        actual_transition = (
+            transition_s
+            if transition_s is not None
+            else (profile.step_transition_s if profile is not None else 600.0)
+        )
 
-        if not colour_transition_is_safe(size, profile.step_transition_s, r_crit, safety):
-            _LOGGER.warning(
-                "%s: refusing colour step of %s mired over %ss — below the underflow "
-                "floor; widen the colour step or shorten the step fade",
-                entity_id,
-                size,
-                profile.step_transition_s,
-            )
-            return None
-
-        kelvin = max(light.min_kelvin, min(light.max_kelvin, mired_to_kelvin(next_mired)))
         await self.hass.services.async_call(
             LIGHT_DOMAIN,
             SERVICE_TURN_ON,
             {
                 ATTR_ENTITY_ID: entity_id,
                 ATTR_COLOR_TEMP_KELVIN: kelvin,
-                ATTR_TRANSITION: profile.step_transition_s,
+                ATTR_TRANSITION: actual_transition,
             },
             blocking=False,
             context=self.new_context(),
