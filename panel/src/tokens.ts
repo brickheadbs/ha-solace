@@ -15,7 +15,13 @@ import { css } from "lit";
  * `--primary-color`), so a theme that recolours them keeps the meaning.
  */
 export const tokens = css`
+  @import url("https://use.typekit.net/yte7tax.css");
+
   :host {
+    --sol-font-body: "komet", "semplicitapro", var(--ha-font-family-body, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, sans-serif);
+    --sol-font-caps: "komet-sc", "komet", "semplicitapro", sans-serif;
+    --sol-font-mono: var(--ha-font-family-code, "Roboto Mono", monospace);
+
     --sol-page: var(--primary-background-color, #111213);
     --sol-card: var(--ha-card-background, var(--card-background-color, #1c1c1d));
     --sol-block: var(--secondary-background-color, #232325);
@@ -55,7 +61,7 @@ export const tokens = css`
 
     display: block;
     color: var(--sol-text);
-    font-family: var(--ha-font-family-body, Roboto, system-ui, sans-serif);
+    font-family: var(--sol-font-body);
   }
 
   /* Numeric readouts are tabular everywhere — a value that shifts width while a slider
@@ -88,6 +94,7 @@ export const tokens = css`
   }
 
   .eyebrow {
+    font-family: var(--sol-font-caps);
     font-size: 10.5px;
     letter-spacing: 0.5px;
     text-transform: uppercase;

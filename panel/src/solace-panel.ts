@@ -222,6 +222,13 @@ export class SolacePanel extends LitElement {
 
   connectedCallback() {
     super.connectedCallback();
+    if (!document.getElementById("solace-adobe-fonts")) {
+      const link = document.createElement("link");
+      link.id = "solace-adobe-fonts";
+      link.rel = "stylesheet";
+      link.href = "https://use.typekit.net/yte7tax.css";
+      document.head.appendChild(link);
+    }
     this.connect();
   }
 

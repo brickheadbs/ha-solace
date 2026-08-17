@@ -157,7 +157,9 @@ export class SolTabSettings extends LitElement {
         border: 1px solid rgba(255, 255, 255, 0.12);
         background: var(--sol-card);
         color: var(--sol-text-2);
-        font: 500 12px Roboto, sans-serif;
+        font-family: inherit;
+        font-size: 12px;
+        font-weight: 500;
         cursor: pointer;
         transition: all 0.15s ease;
         margin-left: auto;
@@ -196,7 +198,9 @@ export class SolTabSettings extends LitElement {
         display: inline-block;
         padding: 3px 8px;
         border-radius: 5px;
-        font: 500 11px Roboto, sans-serif;
+        font-family: inherit;
+        font-size: 11px;
+        font-weight: 500;
       }
       .badge-amber {
         background: rgba(255, 183, 77, 0.18);
@@ -211,7 +215,9 @@ export class SolTabSettings extends LitElement {
         cursor: pointer;
         border-radius: 12px;
         padding: 4px 11px;
-        font: 500 11.5px Roboto, sans-serif;
+        font-family: inherit;
+        font-size: 11.5px;
+        font-weight: 500;
         transition: background 0.15s;
       }
       .toggle-on {
@@ -228,7 +234,8 @@ export class SolTabSettings extends LitElement {
         border: 1px solid rgba(255, 255, 255, 0.1);
         border-radius: 6px;
         padding: 5px 8px;
-        font: 12.5px Roboto, sans-serif;
+        font-family: inherit;
+        font-size: 12.5px;
         color: var(--sol-text);
         text-align: right;
         outline: none;
@@ -262,7 +269,9 @@ export class SolTabSettings extends LitElement {
         color: var(--sol-text-3);
         border-radius: 6px;
         padding: 3px 8px;
-        font: 500 11px Roboto, sans-serif;
+        font-family: inherit;
+        font-size: 11px;
+        font-weight: 500;
         cursor: pointer;
         transition: all 0.15s ease;
       }
@@ -311,7 +320,9 @@ export class SolTabSettings extends LitElement {
         color: #ef5350;
         border-radius: 5px;
         padding: 3px 8px;
-        font: 500 11px Roboto, sans-serif;
+        font-family: inherit;
+        font-size: 11px;
+        font-weight: 500;
         cursor: pointer;
         margin-left: auto;
       }

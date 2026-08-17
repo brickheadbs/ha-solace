@@ -516,7 +516,7 @@ export class SolTabLighting extends LitElement {
           ${presets.map(
             (p) => html`
               <button
-                style="border: none; cursor: pointer; border-radius: 12px; padding: 4px 10px; font: 500 11.5px Roboto, sans-serif; background: ${value === p.v ? "#3b4a52" : "transparent"}; color: ${value === p.v ? "var(--sol-blue)" : "var(--sol-text-3)"};"
+                style="border: none; cursor: pointer; border-radius: 12px; padding: 4px 10px; font-family: inherit; font-size: 11.5px; font-weight: 500; background: ${value === p.v ? "#3b4a52" : "transparent"}; color: ${value === p.v ? "var(--sol-blue)" : "var(--sol-text-3)"};"
                 @click=${() => this.pushHouse("bias_stops", p.v, true)}
               >
                 ${p.label}

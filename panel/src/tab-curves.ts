@@ -144,7 +144,9 @@ export class SolTabCurves extends LitElement {
         border-radius: 10px;
         padding: 5px 10px;
         color: var(--sol-text-2);
-        font: 500 11.5px Roboto, sans-serif;
+        font-family: inherit;
+        font-size: 11.5px;
+        font-weight: 500;
         cursor: pointer;
         transition: background 0.15s;
       }
@@ -227,7 +229,9 @@ export class SolTabCurves extends LitElement {
         border: none;
         background: transparent;
         color: var(--sol-text-3);
-        font: 500 11.5px Roboto, sans-serif;
+        font-family: inherit;
+        font-size: 11.5px;
+        font-weight: 500;
         cursor: pointer;
         transition: all 0.15s ease;
       }
@@ -959,15 +963,15 @@ export class SolTabCurves extends LitElement {
       for (const x of xt) {
         const px = this.xp("lux", x);
         lines.push(svg`<line x1="${px}" y1="${Y0}" x2="${px}" y2="${Y1}" stroke="rgba(255,255,255,0.08)" stroke-width="1"></line>`);
-        lines.push(svg`<text x="${px}" y="${Y1 + 16}" fill="rgba(255,255,255,0.45)" font-size="10.5px" font-family="Roboto, sans-serif" text-anchor="middle">${x >= 1000 ? x / 1000 + "k" : x}</text>`);
+        lines.push(svg`<text x="${px}" y="${Y1 + 16}" fill="rgba(255,255,255,0.45)" font-size="10.5px" font-family="komet, semplicitapro, -apple-system, sans-serif" text-anchor="middle">${x >= 1000 ? x / 1000 + "k" : x}</text>`);
       }
       // Major lines & Labels (Y)
       for (const y of yt) {
         const py = this.yp("lux", y);
         lines.push(svg`<line x1="${X0}" y1="${py}" x2="${X1}" y2="${py}" stroke="rgba(255,255,255,0.08)" stroke-width="1"></line>`);
-        lines.push(svg`<text x="${X0 - 8}" y="${py + 4}" fill="rgba(255,255,255,0.45)" font-size="10.5px" font-family="Roboto, sans-serif" text-anchor="end">${y}%</text>`);
+        lines.push(svg`<text x="${X0 - 8}" y="${py + 4}" fill="rgba(255,255,255,0.45)" font-size="10.5px" font-family="komet, semplicitapro, -apple-system, sans-serif" text-anchor="end">${y}%</text>`);
       }
-      lines.push(svg`<text x="${(X0 + X1) / 2}" y="325" fill="rgba(255,255,255,0.3)" font-size="11px" font-family="Roboto, sans-serif" text-anchor="middle">outdoor illuminance (lx)</text>`);
+      lines.push(svg`<text x="${(X0 + X1) / 2}" y="325" fill="rgba(255,255,255,0.3)" font-size="11px" font-family="komet, semplicitapro, -apple-system, sans-serif" text-anchor="middle">outdoor illuminance (lx)</text>`);
     } else if (key === "bright") {
       const xt = [0, 3, 6, 9, 12, 15, 18, 21, 24];
       const xtSub = [1, 2, 4, 5, 7, 8, 10, 11, 13, 14, 16, 17, 19, 20, 22, 23];
@@ -989,17 +993,17 @@ export class SolTabCurves extends LitElement {
       for (const x of xt) {
         const px = this.xp("bright", x);
         lines.push(svg`<line x1="${px}" y1="${Y0}" x2="${px}" y2="${Y1}" stroke="rgba(255,255,255,0.08)" stroke-width="1"></line>`);
-        lines.push(svg`<text x="${px}" y="${Y1 + 16}" fill="rgba(255,255,255,0.45)" font-size="10.5px" font-family="Roboto, sans-serif" text-anchor="middle">${String(x).padStart(2, "0")}:00</text>`);
+        lines.push(svg`<text x="${px}" y="${Y1 + 16}" fill="rgba(255,255,255,0.45)" font-size="10.5px" font-family="komet, semplicitapro, -apple-system, sans-serif" text-anchor="middle">${String(x).padStart(2, "0")}:00</text>`);
       }
       // Major lines & Labels (Y)
       for (const y of yt) {
         const py = this.yp("bright", y);
         const pct = Math.round((y / 254) * 100);
         lines.push(svg`<line x1="${X0}" y1="${py}" x2="${X1}" y2="${py}" stroke="rgba(255,255,255,0.08)" stroke-width="1"></line>`);
-        lines.push(svg`<text x="${X0 - 8}" y="${py + 4}" fill="rgba(255,255,255,0.45)" font-size="10.5px" font-family="Roboto, sans-serif" text-anchor="end">${Math.round(y)}</text>`);
-        lines.push(svg`<text x="${X1 + 8}" y="${py + 4}" fill="rgba(255,255,255,0.45)" font-size="10.5px" font-family="Roboto, sans-serif" text-anchor="start">${pct}%</text>`);
+        lines.push(svg`<text x="${X0 - 8}" y="${py + 4}" fill="rgba(255,255,255,0.45)" font-size="10.5px" font-family="komet, semplicitapro, -apple-system, sans-serif" text-anchor="end">${Math.round(y)}</text>`);
+        lines.push(svg`<text x="${X1 + 8}" y="${py + 4}" fill="rgba(255,255,255,0.45)" font-size="10.5px" font-family="komet, semplicitapro, -apple-system, sans-serif" text-anchor="start">${pct}%</text>`);
       }
-      lines.push(svg`<text x="${(X0 + X1) / 2}" y="325" fill="rgba(255,255,255,0.3)" font-size="11px" font-family="Roboto, sans-serif" text-anchor="middle">time of day</text>`);
+      lines.push(svg`<text x="${(X0 + X1) / 2}" y="325" fill="rgba(255,255,255,0.3)" font-size="11px" font-family="komet, semplicitapro, -apple-system, sans-serif" text-anchor="middle">time of day</text>`);
     } else if (key === "colour") {
       const xt = [0, 3, 6, 9, 12, 15, 18, 21, 24];
       const xtSub = [1, 2, 4, 5, 7, 8, 10, 11, 13, 14, 16, 17, 19, 20, 22, 23];
@@ -1022,17 +1026,17 @@ export class SolTabCurves extends LitElement {
       for (const x of xt) {
         const px = this.xp("colour", x);
         lines.push(svg`<line x1="${px}" y1="${Y0}" x2="${px}" y2="${Y1}" stroke="rgba(255,255,255,0.08)" stroke-width="1"></line>`);
-        lines.push(svg`<text x="${px}" y="${Y1 + 16}" fill="rgba(255,255,255,0.45)" font-size="10.5px" font-family="Roboto, sans-serif" text-anchor="middle">${String(x).padStart(2, "0")}:00</text>`);
+        lines.push(svg`<text x="${px}" y="${Y1 + 16}" fill="rgba(255,255,255,0.45)" font-size="10.5px" font-family="komet, semplicitapro, -apple-system, sans-serif" text-anchor="middle">${String(x).padStart(2, "0")}:00</text>`);
       }
       // Major lines & Labels (Y)
       for (const y of yt) {
         const py = this.yp("colour", y);
         const k = derimToKelvin(y);
         lines.push(svg`<line x1="${X0}" y1="${py}" x2="${X1}" y2="${py}" stroke="rgba(255,255,255,0.08)" stroke-width="1"></line>`);
-        lines.push(svg`<text x="${X0 - 8}" y="${py + 4}" fill="rgba(255,255,255,0.45)" font-size="10.5px" font-family="Roboto, sans-serif" text-anchor="end">${Math.round(y)} Ɯ</text>`);
-        lines.push(svg`<text x="${X1 + 8}" y="${py + 4}" fill="rgba(255,255,255,0.45)" font-size="10.5px" font-family="Roboto, sans-serif" text-anchor="start">${k}K</text>`);
+        lines.push(svg`<text x="${X0 - 8}" y="${py + 4}" fill="rgba(255,255,255,0.45)" font-size="10.5px" font-family="komet, semplicitapro, -apple-system, sans-serif" text-anchor="end">${Math.round(y)} Ɯ</text>`);
+        lines.push(svg`<text x="${X1 + 8}" y="${py + 4}" fill="rgba(255,255,255,0.45)" font-size="10.5px" font-family="komet, semplicitapro, -apple-system, sans-serif" text-anchor="start">${k}K</text>`);
       }
-      lines.push(svg`<text x="${(X0 + X1) / 2}" y="325" fill="rgba(255,255,255,0.3)" font-size="11px" font-family="Roboto, sans-serif" text-anchor="middle">time of day</text>`);
+      lines.push(svg`<text x="${(X0 + X1) / 2}" y="325" fill="rgba(255,255,255,0.3)" font-size="11px" font-family="komet, semplicitapro, -apple-system, sans-serif" text-anchor="middle">time of day</text>`);
     }
     return lines;
   }
@@ -1045,21 +1049,21 @@ export class SolTabCurves extends LitElement {
       const x = this.xp(key, world.sunrise_hour);
       vlines.push(svg`
         <line x1="${x}" y1="${Y0}" x2="${x}" y2="${Y1}" stroke="rgba(255,183,77,0.45)" stroke-dasharray="4 3"></line>
-        <text x="${x + 4}" y="${Y0 + 12}" fill="#c99a4e" font-size="10px" font-family="Roboto, sans-serif">sunrise</text>
+        <text x="${x + 4}" y="${Y0 + 12}" fill="#c99a4e" font-size="10px" font-family="komet, semplicitapro, -apple-system, sans-serif">sunrise</text>
       `);
     }
     if (world.sunset_hour !== null) {
       const x = this.xp(key, world.sunset_hour);
       vlines.push(svg`
         <line x1="${x}" y1="${Y0}" x2="${x}" y2="${Y1}" stroke="rgba(255,183,77,0.45)" stroke-dasharray="4 3"></line>
-        <text x="${x + 4}" y="${Y0 + 12}" fill="#ffb74d" font-size="10px" font-family="Roboto, sans-serif">sunset</text>
+        <text x="${x + 4}" y="${Y0 + 12}" fill="#ffb74d" font-size="10px" font-family="komet, semplicitapro, -apple-system, sans-serif">sunset</text>
       `);
     }
     if (world.dusk_hour !== null) {
       const x = this.xp(key, world.dusk_hour);
       vlines.push(svg`
         <line x1="${x}" y1="${Y0}" x2="${x}" y2="${Y1}" stroke="rgba(149,117,205,0.7)" stroke-dasharray="4 3"></line>
-        <text x="${x + 4}" y="${Y0 + 24}" fill="#b39ddb" font-size="10px" font-family="Roboto, sans-serif">civil dusk</text>
+        <text x="${x + 4}" y="${Y0 + 24}" fill="#b39ddb" font-size="10px" font-family="komet, semplicitapro, -apple-system, sans-serif">civil dusk</text>
       `);
     }
     return vlines;
