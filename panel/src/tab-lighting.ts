@@ -780,19 +780,25 @@ export class SolTabLighting extends LitElement {
             noReset
             .value=${ambVal}
             .min=${0}
-            .max=${40}
+            .max=${100}
             .step=${1}
             @value-changed=${(e: CustomEvent) =>
               this.pushRoom(room.subentry_id, "ambience_level", e.detail.value, e.detail.final)}
           ></sol-slider>
           <div style="display: flex; gap: 3px;">
-            ${[0, 2, 6, 12].map(
-              (lvl) => html`
+            ${[
+              { label: "Off", lvl: 0 },
+              { label: "1%", lvl: 3 },
+              { label: "5%", lvl: 13 },
+              { label: "10%", lvl: 25 },
+              { label: "20%", lvl: 51 },
+            ].map(
+              (p) => html`
                 <button
-                  style="border: none; cursor: pointer; border-radius: 6px; padding: 2px 6px; font-size: 11px; background: ${ambVal === lvl ? "var(--sol-cyan-tint)" : "var(--sol-control)"}; color: ${ambVal === lvl ? "var(--sol-cyan)" : "var(--sol-text-3)"};"
-                  @click=${() => this.pushRoom(room.subentry_id, "ambience_level", lvl, true)}
+                  style="border: none; cursor: pointer; border-radius: 6px; padding: 2px 6px; font-size: 11px; background: ${ambVal === p.lvl ? "var(--sol-cyan-tint)" : "var(--sol-control)"}; color: ${ambVal === p.lvl ? "var(--sol-cyan)" : "var(--sol-text-3)"};"
+                  @click=${() => this.pushRoom(room.subentry_id, "ambience_level", p.lvl, true)}
                 >
-                  ${lvl === 0 ? "Off" : `${lvl} lvl`}
+                  ${p.label}
                 </button>
               `
             )}

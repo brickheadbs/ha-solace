@@ -124,6 +124,7 @@ def test_no_bare_numeric_literals_left_in_the_engine_path():
         "custom_components/solace/coordinator.py": [
             r"cooldown=0\.3", r"return 21\.5", r"\[-5:\]",
             r"min_kelvin = 2000", r"max_kelvin = 9009",
+            r"interval_minutes = 10\.0", r"return 600\.0",
         ],
         "custom_components/solace/writer.py": [
             r"<= 4200", r"<= 7000",
@@ -136,6 +137,36 @@ def test_no_bare_numeric_literals_left_in_the_engine_path():
             assert not re.search(pattern, text), (
                 f"{rel}: `{pattern}` is hardcoded again — it belongs in const.py"
             )
+
+
+def test_every_setting_is_actively_read_in_the_codebase():
+    """Bidirectional check: every setting defined in HOUSE_SETTINGS and ROOM_SETTINGS
+    must be read somewhere in custom_components/solace/ (engine, coordinator, writer, etc.)
+    so we never accumulate 'dead knobs' that persist in config but do nothing.
+    """
+    root = pathlib.Path(__file__).resolve().parents[1] / "custom_components" / "solace"
+    py_code = "\n".join(
+        path.read_text()
+        for path in sorted(root.rglob("*.py"))
+        if path.name != "const.py"
+    )
+
+    unreferenced_house = []
+    for setting in HOUSE_SETTINGS:
+        if setting.key not in py_code:
+            unreferenced_house.append(setting.key)
+
+    unreferenced_room = []
+    for setting in ROOM_SETTINGS:
+        if setting.key not in py_code:
+            unreferenced_room.append(setting.key)
+
+    assert not unreferenced_house, (
+        f"House settings defined but never read in engine/coordinator: {unreferenced_house}"
+    )
+    assert not unreferenced_room, (
+        f"Room settings defined but never read in engine/coordinator: {unreferenced_room}"
+    )
 
 
 def test_no_bulb_counts_are_written_down_anywhere():
