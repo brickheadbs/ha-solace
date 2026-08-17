@@ -266,7 +266,7 @@ export class SolacePanel extends LitElement {
     const masterTarget =
       w.master_target_brightness ??
       (w.demand !== null && w.demand !== undefined ? Math.round(w.demand * 254) : 254);
-    const scheduleLevel = w.master_schedule_brightness ?? 254;
+    const targetPct = Math.round((masterTarget / 254) * 100);
     const derimVal = Math.round(kelvinToDerim(w.kelvin ?? 4000));
     const luxStr = Math.round(w.lux).toLocaleString() + " lx";
 
@@ -276,12 +276,8 @@ export class SolacePanel extends LitElement {
           <span class="status-item">
             <span class="status-badge" style="background: rgba(33, 150, 243, 0.2); color: var(--sol-cyan); font-weight: 600; padding: 4px 10px; font-size: 12px;">
               <ha-icon icon="mdi:brightness-6" style="--mdc-icon-size: 15px; margin-right: 2px;"></ha-icon>
-              Master Target <strong>${masterTarget} lvl</strong> <span style="font-weight: 400; opacity: 0.75; font-size: 11px;">/ 254</span>
+              Master Target <strong>${targetPct}%</strong>
             </span>
-          </span>
-          <span class="status-item">
-            <ha-icon icon="mdi:timeline-clock-outline"></ha-icon>
-            Schedule <strong>${scheduleLevel} lvl</strong>
           </span>
           <span class="status-item">
             <ha-icon icon="mdi:white-balance-sunny"></ha-icon>

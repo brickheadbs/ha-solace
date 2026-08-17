@@ -475,15 +475,14 @@ export class SolTabHome extends LitElement {
     const masterTarget =
       w.master_target_brightness ??
       (w.demand !== null && w.demand !== undefined ? Math.round(w.demand * 254) : 254);
-    const scheduleLevel = w.master_schedule_brightness ?? 254;
-    const demandPct = Math.round((w.demand ?? 0) * 100);
+    const targetPct = Math.round((masterTarget / 254) * 100);
     const luxVal = Math.round(w.lux ?? 0);
     const elevVal = w.elevation !== null && w.elevation !== undefined ? w.elevation.toFixed(1) : "—";
     const gateOpen = this.hass.states["binary_sensor.entry_ambient_gate"]?.state === "on";
     const sleepActive =
       this.hass.states["input_boolean.solace_sleep"]?.state === "on" || w.night_active;
 
-    const spark = generateSparkline(30, 0, 100, demandPct, "lux");
+    const spark = generateSparkline(30, 0, 100, targetPct, "lux");
 
     return html`
       <div class="card-wrap">
@@ -513,8 +512,8 @@ export class SolTabHome extends LitElement {
 
         <div class="c-body">
           <div>
-            <div class="big-val mono-gold">${masterTarget}<span class="unit" style="font-size: 15px; margin-left: 3px;">lvl / 254</span></div>
-            <div class="high-low" style="margin-top: 6px;">Schedule ${scheduleLevel} lvl · Demand ${demandPct}%</div>
+            <div class="big-val mono-gold">${targetPct}<span class="unit" style="font-size: 15px; margin-left: 3px;">%</span></div>
+            <div class="high-low" style="margin-top: 6px;">${masterTarget} lvl</div>
           </div>
           <div class="stat-grid">
             <div class="stat-item">
