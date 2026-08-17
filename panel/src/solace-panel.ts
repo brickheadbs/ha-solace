@@ -269,19 +269,6 @@ export class SolacePanel extends LitElement {
     const scheduleLevel = w.master_schedule_brightness ?? 254;
     const derimVal = Math.round(kelvinToDerim(w.kelvin ?? 4000));
     const luxStr = Math.round(w.lux).toLocaleString() + " lx";
-    const isCloudy = (w.cloud_coverage ?? 0) >= 70;
-    const luxDesc =
-      w.lux > 20000
-        ? "Full Sun"
-        : w.lux > 2500
-        ? isCloudy
-          ? "Overcast Daylight"
-          : "Direct Daylight"
-        : w.lux > 500
-        ? "Moderate Daylight"
-        : w.lux > 50
-        ? "Twilight"
-        : "Dark";
 
     return html`
       <div class="status-banner">
@@ -298,7 +285,7 @@ export class SolacePanel extends LitElement {
           </span>
           <span class="status-item">
             <ha-icon icon="mdi:white-balance-sunny"></ha-icon>
-            <strong>${luxStr}</strong> (${luxDesc})
+            <strong>${luxStr}</strong>
           </span>
           ${w.cloud_coverage !== null && w.cloud_coverage !== undefined
             ? html`<span class="status-item">
