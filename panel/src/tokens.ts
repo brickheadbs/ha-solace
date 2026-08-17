@@ -18,8 +18,8 @@ export const tokens = css`
   @import url("https://use.typekit.net/yte7tax.css");
 
   :host {
-    --sol-font-body: "komet", "semplicitapro", var(--ha-font-family-body, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, sans-serif);
-    --sol-font-caps: "komet-sc", "komet", "semplicitapro", sans-serif;
+    --sol-font-body: "bicyclette", "komet", "semplicitapro", var(--ha-font-family-body, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, sans-serif);
+    --sol-font-caps: "komet-sc", "bicyclette", "komet", "semplicitapro", sans-serif;
     --sol-font-mono: var(--ha-font-family-code, "Roboto Mono", monospace);
 
     --sol-page: var(--primary-background-color, #111213);
