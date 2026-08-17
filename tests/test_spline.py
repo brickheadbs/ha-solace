@@ -74,10 +74,34 @@ def test_24h_periodic_timeline():
         SplinePoint(23.5, 20.0),
         SplinePoint(24.0, 20.0),
     ]
-    spline = MonotoneCubicSpline(points)
+    spline = MonotoneCubicSpline(points, periodic=True)
 
     assert spline.evaluate_periodic_24h(0.0) == 20.0
     assert spline.evaluate_periodic_24h(24.0) == 20.0
     assert spline.evaluate_periodic_24h(9.5) == 254.0
     # Modulo test: hour 25.5 should evaluate at 1.5
     assert spline.evaluate_periodic_24h(25.5) == spline.evaluate(1.5)
+
+
+def test_24h_periodic_wrapping_across_midnight():
+    # Points without explicit 0.0 or 24.0 nodes
+    points = [
+        SplinePoint(6.5, 120.0),
+        SplinePoint(9.5, 254.0),
+        SplinePoint(18.5, 180.0),
+        SplinePoint(23.5, 25.0),
+    ]
+    spline = MonotoneCubicSpline(points, periodic=True)
+
+    # 0.0 and 24.0 must evaluate to identical values
+    val_0 = spline.evaluate(0.0)
+    val_24 = spline.evaluate(24.0)
+    assert abs(val_0 - val_24) < 1e-9
+
+    # Value at midnight must smoothly interpolate between 23.5 (25.0) and 6.5 (120.0)
+    assert 25.0 < val_0 < 120.0
+
+    # Values just before and after midnight must be continuous
+    val_before = spline.evaluate(23.99)
+    val_after = spline.evaluate(0.01)
+    assert abs(val_before - val_after) < 1.0

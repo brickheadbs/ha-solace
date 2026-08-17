@@ -56,7 +56,7 @@ def target_kelvin(
         house = HouseSettings()
 
     timeline = house.colour_timeline or DEFAULT_COLOUR_TIMELINE
-    colour_spline = MonotoneCubicSpline(timeline)
+    colour_spline = MonotoneCubicSpline(timeline, periodic=True)
     time_kelvin = colour_spline.evaluate_periodic_24h(clock_hour)
     return int(round(max(2000.0, min(9000.0, time_kelvin + house.colour_trim_kelvin))))
 

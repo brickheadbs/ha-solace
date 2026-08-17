@@ -24,7 +24,11 @@ class SplinePoint:
 class MonotoneCubicSpline:
     """Evaluates a smooth curve through control points using Fritsch-Carlson interpolation."""
 
-    def __init__(self, points: Sequence[SplinePoint | tuple[float, float]]) -> None:
+    def __init__(
+        self,
+        points: Sequence[SplinePoint | tuple[float, float]],
+        periodic: bool = False,
+    ) -> None:
         raw_pts = [
             (p.x, p.y) if isinstance(p, SplinePoint) else (float(p[0]), float(p[1]))
             for p in points
@@ -39,8 +43,14 @@ class MonotoneCubicSpline:
                 # Overwrite duplicate x with the newest y
                 deduped[-1] = (x, y)
 
+        if periodic and len(deduped) >= 2:
+            prev_pts = [(x - 24.0, y) for x, y in deduped]
+            next_pts = [(x + 24.0, y) for x, y in deduped]
+            deduped = prev_pts + deduped + next_pts
+
         self._pts = deduped
         self._n = len(self._pts)
+        self._periodic = periodic
 
         if self._n < 2:
             self._m: list[float] = [0.0] * self._n
@@ -94,6 +104,9 @@ class MonotoneCubicSpline:
             return 0.0
         if self._n == 1:
             return self._pts[0][1]
+
+        if self._periodic:
+            x_val = ((x_val % 24.0) + 24.0) % 24.0
 
         x = [p[0] for p in self._pts]
         y = [p[1] for p in self._pts]

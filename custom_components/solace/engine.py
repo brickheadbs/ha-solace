@@ -259,7 +259,7 @@ def solve_master(
     trace.append(("demand", round(demand_val, 4)))
 
     # 2. 24h Target Brightness Schedule
-    bright_spline = MonotoneCubicSpline(house.brightness_timeline)
+    bright_spline = MonotoneCubicSpline(house.brightness_timeline, periodic=True)
     time_brightness = bright_spline.evaluate_periodic_24h(clock_hour)
     time_brightness_level = int(round(max(0.0, min(MAX_LEVEL, time_brightness))))
     trace.append(("time_brightness_level", time_brightness_level))
@@ -268,7 +268,7 @@ def solve_master(
     trace.append(("target_brightness", target_brightness))
 
     # 3. 24h Target Colour Temperature Schedule
-    colour_spline = MonotoneCubicSpline(house.colour_timeline)
+    colour_spline = MonotoneCubicSpline(house.colour_timeline, periodic=True)
     time_kelvin = colour_spline.evaluate_periodic_24h(clock_hour)
     target_kelvin = int(round(max(2000.0, min(9000.0, time_kelvin + house.colour_trim_kelvin))))
     trace.append(("target_kelvin", target_kelvin))

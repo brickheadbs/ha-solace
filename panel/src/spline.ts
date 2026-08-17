@@ -40,9 +40,16 @@ export class MonotoneSpline {
       return;
     }
 
-    const n = clean.length;
-    const xs = clean.map((p) => p.x);
-    const ys = clean.map((p) => p.y);
+    let pts = clean;
+    if (this.periodic && clean.length >= 2) {
+      const prev = clean.map((p) => ({ x: p.x - 24.0, y: p.y }));
+      const next = clean.map((p) => ({ x: p.x + 24.0, y: p.y }));
+      pts = [...prev, ...clean, ...next];
+    }
+
+    const n = pts.length;
+    const xs = pts.map((p) => p.x);
+    const ys = pts.map((p) => p.y);
     const hs: number[] = [];
     const deltas: number[] = [];
 
