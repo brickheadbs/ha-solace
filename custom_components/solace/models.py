@@ -220,8 +220,6 @@ class HouseSettings:
     refresh_debounce_s: float = 0.3
     dusk_fallback_hour: float = 21.5
     lux_history_samples: int = 5
-    manual_brightness_threshold: int = 25
-    manual_kelvin_threshold: int = 100
     fallback_min_kelvin: int = 2000
     fallback_max_kelvin: int = 9009
     family_cct_max_kelvin: int = 4200

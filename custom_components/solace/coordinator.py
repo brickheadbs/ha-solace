@@ -1,4 +1,4 @@
-"""The coordinator — two clocks, one writer, and manual detection that survives a boot.
+"""The coordinator — two clocks, one writer, and manual mode that survives a boot.
 
 **Update cadence (decided in the brief):**
 
@@ -249,8 +249,6 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         # Carried as 0/1 in the settings table; the engine wants a real bool.
         for key in (
             "lux_history_samples",
-            "manual_brightness_threshold",
-            "manual_kelvin_threshold",
             "fallback_min_kelvin",
             "fallback_max_kelvin",
             "family_cct_max_kelvin",
@@ -399,16 +397,6 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
 
     @callback
     def _register_listeners(self) -> None:
-        watched = [
-            entity_id
-            for subentry in self._subentries()
-            for entity_id in subentry.data.get(CONF_LIGHTS, [])
-        ]
-        if watched:
-            self._unsubscribes.append(
-                async_track_state_change_event(self.hass, watched, self._on_light_change)
-            )
-
         # Clock 1 — recalculate the instant the world moves, not on the next poll.
         triggers = [self._lux_entity()]
         if weather := self._weather_entity():
@@ -966,86 +954,6 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
     @callback
     def _on_world_change(self, _event: Event[EventStateChangedData]) -> None:
         self.hass.async_create_task(self.async_refresh())
-
-    @callback
-    def _on_light_change(self, event: Event[EventStateChangedData]) -> None:
-        """Did a human touch this light?
-
-        Compare with **thresholds, not equality**. Bulbs echo back values that differ
-        from what was commanded, so an exact comparison flags every echo as a human
-        touch and the room locks itself into manual within a tick.
-        """
-        if self.writer.is_our_context(event.context):
-            return
-
-        entity_id = event.data["entity_id"]
-        old = event.data.get("old_state")
-        new = event.data.get("new_state")
-        if new is None or old is None:
-            return
-
-        # ⚠️ A z2m reconnect or restart drives a bulb unknown/unavailable -> on/off. That is not a
-        # human, and counting it would drop the room into manual for the whole hold
-        # window every time the mesh hiccups or HA starts.
-        transient = {"unknown", "unavailable"}
-        if new.state in transient or old.state in transient:
-            return
-
-        # If both states are "off", it was not a human turning lights on/off
-        if old.state == "off" and new.state == "off":
-            return
-
-        target_room: RoomState | None = None
-        for subentry in self._subentries():
-            if entity_id in subentry.data.get(CONF_LIGHTS, []):
-                target_room = self.rooms.get(subentry.subentry_id)
-                if target_room is not None:
-                    break
-
-        if target_room is None:
-            return
-
-        house = self.house
-        touched = False
-        new_brightness = new.attributes.get("brightness") or 0
-        old_brightness = old.attributes.get("brightness") or 0
-        new_kelvin = new.attributes.get("color_temp_kelvin") or 0
-        old_kelvin = old.attributes.get("color_temp_kelvin") or 0
-
-        expected_level = target_room.last_written.get(entity_id)
-        expected_kelvin = target_room.last_written_kelvin.get(entity_id)
-
-        if old.state != new.state:
-            if new.state == "off":
-                # Turned off: if Solace wanted it off, ignore; otherwise human turned off
-                if expected_level != 0:
-                    touched = True
-            elif new.state == "on":
-                # Turned on: if Solace wanted it off or level diverges from expected, it's a human touch
-                if expected_level is None or expected_level == 0:
-                    touched = True
-                elif abs(new_brightness - expected_level) > house.manual_brightness_threshold:
-                    touched = True
-        else:
-            if abs(new_brightness - old_brightness) > house.manual_brightness_threshold:
-                if expected_level is not None and abs(new_brightness - expected_level) <= max(house.dead_zone, 5):
-                    pass  # Bulb reached commanded brightness target
-                else:
-                    touched = True
-
-            if abs(new_kelvin - old_kelvin) > house.manual_kelvin_threshold:
-                if expected_kelvin is not None and abs(new_kelvin - expected_kelvin) <= max(house.manual_kelvin_threshold // 2, 50):
-                    pass  # Bulb reached commanded colour target
-                else:
-                    touched = True
-
-        if not touched:
-            return
-
-        target_room.manual_touched = True
-        target_room.manual_since = dt_util.utcnow().timestamp()
-        self.hass.async_create_task(self.async_persist())
-        self.async_update_listeners()
 
     # ------------------------------------------------------------------ helpers
 

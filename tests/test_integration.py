@@ -131,28 +131,11 @@ async def test_the_target_sensor_exposes_the_full_trace(hass: HomeAssistant, ent
     assert "clamped" in per_light["trace"]
 
 
-async def test_our_own_writes_are_not_mistaken_for_a_human(
+async def test_external_light_state_change_does_not_trip_manual_mode(
     hass: HomeAssistant, entry, world
 ) -> None:
-    """Context stamping. `context.user_id` cannot do this job — a REST call with a
-    long-lived token carries one too, because the token belongs to a user."""
-    assert await _setup(hass, entry)
-    coordinator = entry.runtime_data.coordinator
-    room = next(iter(coordinator.rooms.values()))
-    room.manual_touched = False
-
-    ours = coordinator.writer.new_context()
-    hass.states.async_set(
-        LIGHT,
-        "on",
-        {"brightness": 250, "min_color_temp_kelvin": 2702, "max_color_temp_kelvin": 6535},
-        context=ours,
-    )
-    await hass.async_block_till_done()
-    assert room.manual_touched is False
-
-
-async def test_a_human_touch_takes_the_room_manual(hass: HomeAssistant, entry) -> None:
+    """Automatic manual detection is removed; external light changes do not engage manual mode."""
+    world(light_on=True)
     assert await _setup(hass, entry)
     coordinator = entry.runtime_data.coordinator
     room = next(iter(coordinator.rooms.values()))
@@ -165,76 +148,9 @@ async def test_a_human_touch_takes_the_room_manual(hass: HomeAssistant, entry) -
         context=Context(),
     )
     await hass.async_block_till_done()
-    assert room.manual_touched is True
-    assert hass.states.get("binary_sensor.kitchen_manual_active").state == "on"
-
-
-async def test_a_small_echo_is_not_a_human_touch(hass: HomeAssistant, entry, world) -> None:
-    """Compare with THRESHOLDS, not equality. Bulbs echo back values that differ from
-    what was commanded; exact comparison flags every echo as a touch and the room locks
-    itself into manual within a tick."""
-    world(light_on=True)
-    assert await _setup(hass, entry)
-    coordinator = entry.runtime_data.coordinator
-    room = next(iter(coordinator.rooms.values()))
-    room.manual_touched = False
-
-    hass.states.async_set(
-        LIGHT,
-        "on",
-        {
-            "brightness": 128,  # 8 levels off the 120 we "sent" — an echo, not a hand
-            "color_temp_kelvin": 4000,
-            "min_color_temp_kelvin": 2702,
-            "max_color_temp_kelvin": 6535,
-        },
-        context=Context(),
-    )
-    await hass.async_block_till_done()
     assert room.manual_touched is False
-
-
-async def test_commanded_colour_glide_echo_is_not_a_human_touch(hass: HomeAssistant, entry, world) -> None:
-    """A large colour glide echo (>100K jump) matching Solace's commanded target
-    must not trip manual mode, even when received with a foreign/MQTT context."""
-    world(light_on=True)
-    assert await _setup(hass, entry)
-    coordinator = entry.runtime_data.coordinator
-    room = next(iter(coordinator.rooms.values()))
-    room.manual_touched = False
-
-    # Simulate Solace commanding a shift to 2200K (e.g. Virtual Sunset)
-    room.last_written_kelvin[LIGHT] = 2200
-
-    # Bulb echoes 2200K with a non-Solace context (e.g. MQTT inbound event)
-    hass.states.async_set(
-        LIGHT,
-        "on",
-        {
-            "brightness": 120,
-            "color_temp_kelvin": 2200,
-            "min_color_temp_kelvin": 2000,
-            "max_color_temp_kelvin": 6535,
-        },
-        context=Context(),
-    )
-    await hass.async_block_till_done()
-    assert room.manual_touched is False
-
-    # If a human changes to an unexpected Kelvin (e.g. 3500K), manual DOES trip
-    hass.states.async_set(
-        LIGHT,
-        "on",
-        {
-            "brightness": 120,
-            "color_temp_kelvin": 3500,
-            "min_color_temp_kelvin": 2000,
-            "max_color_temp_kelvin": 6535,
-        },
-        context=Context(),
-    )
-    await hass.async_block_till_done()
-    assert room.manual_touched is True
+    assert room.manual_switch is False
+    assert hass.states.get("binary_sensor.kitchen_manual_active").state == "off"
 
 
 async def test_manual_stops_solace_writing(hass: HomeAssistant, entry, world) -> None:
@@ -368,26 +284,6 @@ async def test_an_unavailable_dnd_sensor_reads_as_awake(hass: HomeAssistant, ent
     assert await _mode(hass, entry, "unavailable") == "normal"
 
 
-# --------------------------------------------------------------------------------
-# Manual detection must ignore a z2m reconnect
-# --------------------------------------------------------------------------------
-
-
-async def test_a_reconnecting_bulb_is_not_a_human_touch(hass: HomeAssistant, entry, world) -> None:
-    """A z2m reconnect drives a bulb unavailable -> on. Counting that as a touch parks
-    the room in manual for the whole hold window every time the mesh hiccups."""
-    world(light_on=True)
-    assert await _setup(hass, entry)
-    room = next(iter(entry.runtime_data.coordinator.rooms.values()))
-    room.manual_touched = False
-
-    attrs = {"min_color_temp_kelvin": 2702, "max_color_temp_kelvin": 6535}
-    hass.states.async_set(LIGHT, "unavailable", attrs, context=Context())
-    await hass.async_block_till_done()
-    hass.states.async_set(LIGHT, "on", {**attrs, "brightness": 200}, context=Context())
-    await hass.async_block_till_done()
-
-    assert room.manual_touched is False
 
 
 # --------------------------------------------------------------------------------

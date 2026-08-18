@@ -57,8 +57,6 @@ DEFAULT_MAX_INTERVAL_S = 600
 
 CONTEXT_PREFIX = "solace"
 
-MANUAL_BRIGHTNESS_THRESHOLD = 25
-MANUAL_KELVIN_THRESHOLD = 100
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,8 +154,6 @@ HOUSE_SETTINGS: tuple[Setting, ...] = (
     Setting("refresh_debounce_s", "Refresh coalesce", 0, 5, 0.05, 0.3, "s", "mdi:motion-play"),
     Setting("dusk_fallback_hour", "Dusk fallback", 0, 23.75, 0.25, 21.5, "h", "mdi:weather-dusk"),
     Setting("lux_history_samples", "Lux samples kept", 2, 20, 1, 5, None, "mdi:chart-line"),
-    Setting("manual_brightness_threshold", "Manual detect: brightness", 0, 254, 1, 25, None, "mdi:hand-back-right"),
-    Setting("manual_kelvin_threshold", "Manual detect: colour", 0, 2000, 10, 100, "K", "mdi:hand-back-right"),
     Setting("fallback_min_kelvin", "Fallback min Kelvin", 1000, 4000, 10, 2000, "K", "mdi:thermometer-low"),
     Setting("fallback_max_kelvin", "Fallback max Kelvin", 2000, 20000, 10, 9009, "K", "mdi:thermometer-high"),
     Setting("family_cct_max_kelvin", "Family split: CCT ceiling", 2000, 9000, 10, 4200, "K", "mdi:call-split"),

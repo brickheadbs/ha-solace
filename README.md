@@ -8,7 +8,7 @@ A lighting **calculation engine** for Home Assistant, as a HACS custom integrati
 Rooms are added inside the integration as config subentries — not one automation per
 light. One outdoor lux sensor drives the whole house; everything else is a tunable.
 
-> ## ⚠️ ALPHA — v0.6.0
+> ## ⚠️ ALPHA — v0.6.1
 >
 > **This is alpha software driving one person's house, published in the open because
 > there is no reason not to. It is not a product, and there is no support.**
