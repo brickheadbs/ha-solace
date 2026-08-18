@@ -1101,7 +1101,7 @@ var ls=Object.defineProperty;var cs=Object.getOwnPropertyDescriptor;var g=(o,n,e
               </button>
               <button
                 class="hvac-btn ${a==="eco"?"active-eco":""}"
-                @click=${()=>{i==="off"&&this.setHvacMode("heat"),this.setPreset("eco")}}
+                @click=${()=>this.setPreset("eco")}
               >
                 Eco
               </button>

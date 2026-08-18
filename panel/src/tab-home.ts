@@ -872,6 +872,10 @@ export class SolTabHome extends LitElement {
    * `climate.kitchen_kitchen_thermostat` reports `hvac_modes: ["off", "heat"]` and
    * `preset_modes: ["none", "eco"]`. The old Eco button called `set_hvac_mode("eco")`,
    * which HA rejects — the button looked live and did nothing.
+   *
+   * Setting the preset is the whole job: measured on the live Nest 2026-08-18, an eco
+   * preset applied while `hvac_mode: off` moves the thermostat to `heat` / `idle` by
+   * itself. Nudging `hvac_mode` first would be a redundant second call racing the first.
    */
   private setPreset(preset: string) {
     if (!this.hass) return;
@@ -1240,10 +1244,7 @@ export class SolTabHome extends LitElement {
               </button>
               <button
                 class="hvac-btn ${preset === "eco" ? "active-eco" : ""}"
-                @click=${() => {
-                  if (hvacMode === "off") this.setHvacMode("heat");
-                  this.setPreset("eco");
-                }}
+                @click=${() => this.setPreset("eco")}
               >
                 Eco
               </button>
