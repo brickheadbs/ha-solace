@@ -38,26 +38,34 @@ const THERMOSTAT = "climate.kitchen_kitchen_thermostat";
 const TRACKED = [LUX, INSIDE_TEMP, OUTSIDE_TEMP, HOT_WATER_TEMP, FRIDGE_TEMP];
 
 /**
- * Refrigerator alarm thresholds, °C — calibrated against 14 days of recorder history
- * (2026-08-04 → 08-18, 488 samples) rather than picked from food-safety guidance, because
- * the alarm has to describe *this* fridge. Distribution: min 0.3, p5 1.9, p50 3.6,
- * p95 5.1, max 5.4.
+ * Refrigerator alarm thresholds, °C — calibrated against this fridge's own history rather
+ * than food-safety guidance, because the alarm has to describe *this* fridge.
  *
- * Counting only excursions that would survive the automation's 30-minute debounce:
+ * **Cold — 1 °C.** Counting only dips that survive the 30-minute debounce over 14 days:
+ * 0.3 → 0 alerts (never reached; decorative), **1.0 → 1** (the real 233-minute dip to
+ * 0.8 on 08-12), 1.5 → 6, 2.5 → 23. The fridge's moody wobbles bottom out at 1.3, so 1
+ * sits just under them and still catches a genuine excursion.
  *
- *   cold  0.3 → 0 alerts (never reached; the alarm was decorative)
- *         1.0 → 1 alert   ← the real 233-minute dip to 0.8 on 08-12
- *         1.5 → 6 alerts  (catches the fridge's moody 1.3 wobbles)
- *   warm  5.0 → 16 alerts (more than one a day — 5 is inside normal operation here)
- *         6.0 → 0 alerts  ← only fires on something genuinely abnormal
+ * **Warm — 5 °C, and deliberately noisy.** 40 days of daily statistics show *no* drift
+ * (+0.025 °C/week; first-third mean 3.40 vs last-third 3.64). What they do show is a
+ * discrete six-day warm episode, 08-04 → 08-09, daily means 4.0–4.8 against a 3.4
+ * baseline. Split at the recovery:
  *
- * Note the warm side is a *fault* alarm, not a food-safety one: this fridge routinely runs
- * above the 5 °C guidance figure, and the fix for that is its setpoint, not its alarm.
+ *   08-04 → 08-11 (warm spell)   mean 3.85  p95 5.3   >5 °C: 16 alerts   >6 °C: 0
+ *   08-12 → now   (healthy)      mean 3.16  p95 4.3   >5 °C:  0 alerts   >6 °C: 0
  *
- * These are duplicated in `automation.refrigerator_temperature_out_of_range`. Move both.
+ * 5 °C fires sixteen times through the fault and *not once* while healthy — which is the
+ * alarm working, not the alarm being noisy. An earlier pass set this to 6 to quieten
+ * those sixteen; that tuned the threshold to hide the only event it existed to catch.
+ * Do not raise it again without checking which window the "noise" came from.
+ *
+ * Hour-of-day is flat (means 2.9–3.9 across all 24), so warm periods are not hiding at
+ * night — the discrepancy with "it reads under 4 whenever I look" was the anomaly week.
+ *
+ * Duplicated in `automation.refrigerator_temperature_out_of_range`. Move both.
  */
 const FRIDGE_COLD = 1;
-const FRIDGE_WARM = 6;
+const FRIDGE_WARM = 5;
 
 /** `weather.forecast_home` condition → the mdi icon HA already ships for it. */
 const WEATHER_ICON: Record<string, string> = {
