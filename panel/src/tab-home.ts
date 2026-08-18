@@ -17,7 +17,13 @@ import { tokens } from "./tokens";
 import "./ui";
 
 /** The band is this tall in real pixels, on every card, so nothing is stretched. */
-const BAND_H = 62;
+const BAND_H = 96;
+/**
+ * Where the series mean sits inside the band, measured from the floor. Lifts every
+ * curve to the same height so a row of cards reads as one set rather than five
+ * unrelated charts that each happen to hug their own minimum.
+ */
+const SPARK_ANCHOR = 0.66;
 
 const LUX = "sensor.entry_exterior_illuminance";
 const INSIDE_TEMP = "sensor.kitchen_kitchen_thermostat_temperature";
@@ -25,7 +31,48 @@ const OUTSIDE_TEMP = "sensor.entry_exterior_temperature";
 const HOT_WATER_TEMP = "sensor.hot_water_temperature_temperature";
 const FRIDGE_TEMP = "sensor.refrigerator_temperature_temperature";
 
+const WEATHER = "weather.forecast_home";
+const HEAT_LINK = "water_heater.kitchen_kitchen_heat_link";
+const THERMOSTAT = "climate.kitchen_kitchen_thermostat";
+
 const TRACKED = [LUX, INSIDE_TEMP, OUTSIDE_TEMP, HOT_WATER_TEMP, FRIDGE_TEMP];
+
+/** Refrigerator alarm thresholds, °C. Below `COLD` freezes produce; above `WARM` spoils. */
+const FRIDGE_COLD = 0.3;
+const FRIDGE_WARM = 5;
+
+/** `weather.forecast_home` condition → the mdi icon HA already ships for it. */
+const WEATHER_ICON: Record<string, string> = {
+  "clear-night": "mdi:weather-night",
+  cloudy: "mdi:weather-cloudy",
+  exceptional: "mdi:alert-circle-outline",
+  fog: "mdi:weather-fog",
+  hail: "mdi:weather-hail",
+  lightning: "mdi:weather-lightning",
+  "lightning-rainy": "mdi:weather-lightning-rainy",
+  partlycloudy: "mdi:weather-partly-cloudy",
+  pouring: "mdi:weather-pouring",
+  rainy: "mdi:weather-rainy",
+  snowy: "mdi:weather-snowy",
+  "snowy-rainy": "mdi:weather-snowy-rainy",
+  sunny: "mdi:weather-sunny",
+  windy: "mdi:weather-windy",
+  "windy-variant": "mdi:weather-windy-variant",
+};
+
+const weatherIcon = (condition?: string) =>
+  WEATHER_ICON[condition ?? ""] ?? "mdi:weather-cloudy";
+
+interface ForecastPoint {
+  datetime: string;
+  condition?: string;
+  temperature?: number;
+  templow?: number;
+  precipitation?: number;
+}
+
+/** Forecasts move slowly; met.no updates hourly at best. */
+const FORECAST_REFRESH_MS = 600_000;
 
 /** How often the 24h window is re-pulled. The cards themselves tick every second. */
 const HISTORY_REFRESH_MS = 120_000;
@@ -40,21 +87,28 @@ export class SolTabHome extends LitElement {
   @state() private history: Map<string, Sample[]> = new Map();
   /** Window the sparklines share, so all six cards line up on the same 24 hours. */
   @state() private windowEnd = Date.now();
+  @state() private hourly: ForecastPoint[] = [];
+  @state() private daily: ForecastPoint[] = [];
+  @state() private hwOpen = false;
   private timer?: number;
   private historyTimer?: number;
+  private forecastTimer?: number;
   private _debounceTimers: Map<string, number> = new Map();
 
   connectedCallback() {
     super.connectedCallback();
     this.timer = window.setInterval(() => this.requestUpdate(), 1000);
     this.historyTimer = window.setInterval(() => this.loadHistory(), HISTORY_REFRESH_MS);
+    this.forecastTimer = window.setInterval(() => this.loadForecast(), FORECAST_REFRESH_MS);
     this.loadHistory();
+    this.loadForecast();
   }
 
   disconnectedCallback() {
     super.disconnectedCallback();
     if (this.timer) clearInterval(this.timer);
     if (this.historyTimer) clearInterval(this.historyTimer);
+    if (this.forecastTimer) clearInterval(this.forecastTimer);
     for (const t of this._debounceTimers.values()) {
       clearTimeout(t);
     }
@@ -67,6 +121,7 @@ export class SolTabHome extends LitElement {
     if (this.hass && !this.historyRequested) {
       this.historyRequested = true;
       this.loadHistory();
+      this.loadForecast();
     }
   }
 
@@ -78,6 +133,39 @@ export class SolTabHome extends LitElement {
     if (!data.size) return;
     this.history = data;
     this.windowEnd = Date.now();
+  }
+
+  /**
+   * `weather.get_forecasts` with `return_response`, over the WS `call_service` command.
+   *
+   * Preferred over `weather/subscribe_forecast` because a forecast changes hourly at
+   * best — a live subscription would be a lifecycle to manage for no extra freshness.
+   */
+  private async loadForecast() {
+    if (!this.hass) return;
+    const send = this.hass.callWS
+      ? this.hass.callWS.bind(this.hass)
+      : this.hass.connection.sendMessagePromise.bind(this.hass.connection);
+
+    const pull = async (type: "hourly" | "daily"): Promise<ForecastPoint[]> => {
+      try {
+        const res = await send<{ response?: Record<string, { forecast?: ForecastPoint[] }> }>({
+          type: "call_service",
+          domain: "weather",
+          service: "get_forecasts",
+          service_data: { type },
+          target: { entity_id: WEATHER },
+          return_response: true,
+        });
+        return res?.response?.[WEATHER]?.forecast ?? [];
+      } catch {
+        return [];
+      }
+    };
+
+    const [hourly, daily] = await Promise.all([pull("hourly"), pull("daily")]);
+    if (hourly.length) this.hourly = hourly;
+    if (daily.length) this.daily = daily;
   }
 
   static styles = [
@@ -187,14 +275,27 @@ export class SolTabHome extends LitElement {
         --mdc-icon-size: 15px;
       }
 
+      /* One body shape for every card: main readout left, sub-data hard right, both on
+         the same baseline. The cards drifted apart because each one improvised. */
       .c-body {
         position: relative;
         z-index: 1;
         display: flex;
-        align-items: flex-end;
+        align-items: flex-start;
         gap: 22px;
-        margin-top: 10px;
-        flex-wrap: wrap;
+        margin-top: 12px;
+        flex-wrap: nowrap;
+      }
+      .c-main {
+        /* The main figure sits slightly in from the card edge rather than flush with
+           the title above it. */
+        padding-left: 6px;
+        min-width: 0;
+      }
+      .c-side {
+        margin-left: auto;
+        text-align: right;
+        flex-shrink: 0;
       }
 
       .big-val {
@@ -258,13 +359,23 @@ export class SolTabHome extends LitElement {
         font-variant-numeric: tabular-nums;
         color: var(--sol-text-3);
       }
+      /* The side column overlaps the sparkline on tall cards, same as the captions. */
+      .small-grid span {
+        text-shadow:
+          0 0 4px var(--sol-card),
+          0 0 8px var(--sol-card);
+      }
 
+      /* High stacked above Low, both flush left, so "higher" reads vertically. */
       .high-low {
         position: relative;
         z-index: 1;
         display: flex;
-        gap: 18px;
-        margin-top: 10px;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 2px;
+        margin-top: auto;
+        padding-top: 10px;
         font-size: 11.5px;
         color: var(--sol-text-3);
         white-space: nowrap;
@@ -280,6 +391,17 @@ export class SolTabHome extends LitElement {
         font-variant-numeric: tabular-nums;
         color: var(--sol-text-2);
         font-weight: 500;
+      }
+      /* A label column of fixed width is what actually aligns the two numbers; without
+         it "High" and "Low" are different widths and the values step sideways. */
+      .hl-k {
+        display: inline-block;
+        width: 30px;
+        color: var(--sol-faint);
+      }
+      .hl-t {
+        margin-left: 6px;
+        color: var(--sol-faint);
       }
 
       /* Sparkline band.
@@ -410,6 +532,32 @@ export class SolTabHome extends LitElement {
         background: #35383b;
       }
 
+      /* − [Target 20.5°] + on one row, so the control reads as a single unit instead
+         of a value with two loose buttons beside it. */
+      .setpoint {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .setpoint .step-btn {
+        width: 24px;
+        height: 24px;
+        font-size: 15px;
+      }
+      .setpoint-val {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        line-height: 1.15;
+        min-width: 62px;
+      }
+      .setpoint-val span:last-child {
+        font-family: var(--sol-font-body);
+        font-weight: 500;
+        font-size: 17px;
+        font-variant-numeric: tabular-nums;
+      }
+
       /* Progress Bars for Running Now */
       .bar-track {
         position: absolute;
@@ -501,6 +649,198 @@ export class SolTabHome extends LitElement {
         background: var(--sol-green);
         display: inline-block;
       }
+
+      /* Threshold states. Amber and red are load-bearing here (a fridge out of range),
+         which is the one case tokens.ts allows amber for something other than light. */
+      .alert-cold {
+        color: var(--sol-amber) !important;
+      }
+      .alert-warm {
+        color: #ef5350 !important;
+      }
+      .alert-tag {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        font-size: 11px;
+        font-weight: 500;
+        letter-spacing: 0.6px;
+        text-transform: uppercase;
+      }
+
+      /* Weather forecast — hourly precipitation bars under a temperature line, then a
+         six-day strip. Replaces the placeholder hatched panel. */
+      .fc {
+        position: relative;
+        z-index: 1;
+        margin-top: 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        flex: 1;
+      }
+      .fc-now {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+      .fc-now ha-icon {
+        --mdc-icon-size: 40px;
+        color: var(--sol-cyan);
+      }
+      .fc-temp {
+        font-family: var(--sol-font-body);
+        font-weight: 300;
+        font-size: 38px;
+        line-height: 0.9;
+        letter-spacing: -0.03em;
+        font-variant-numeric: tabular-nums;
+      }
+      .fc-cond {
+        font-size: 12px;
+        color: var(--sol-text-3);
+        text-transform: capitalize;
+      }
+      .fc-sub {
+        font-size: 11px;
+        color: var(--sol-faint);
+      }
+      .fc-hours {
+        display: grid;
+        grid-auto-flow: column;
+        grid-auto-columns: 1fr;
+        align-items: end;
+        gap: 2px;
+        height: 42px;
+      }
+      .fc-hour {
+        display: flex;
+        flex-direction: column;
+        justify-content: flex-end;
+        align-items: center;
+        gap: 3px;
+        height: 100%;
+      }
+      .fc-bar {
+        width: 60%;
+        min-height: 1px;
+        border-radius: 2px 2px 0 0;
+        background: var(--sol-cyan);
+        opacity: 0.75;
+      }
+      /* A dry hour still has to occupy the timeline, or a dry morning looks like
+         missing data rather than "no rain". */
+      .fc-bar.dry {
+        background: var(--sol-text-4);
+        opacity: 0.45;
+      }
+      .fc-hlabel {
+        font-size: 9px;
+        color: var(--sol-faint);
+        font-variant-numeric: tabular-nums;
+      }
+      .fc-days {
+        display: grid;
+        grid-template-columns: repeat(6, 1fr);
+        gap: 4px;
+        border-top: 1px solid var(--sol-hair);
+        padding-top: 8px;
+      }
+      .fc-day {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 3px;
+      }
+      .fc-day ha-icon {
+        --mdc-icon-size: 18px;
+        color: var(--sol-text-3);
+      }
+      .fc-dname {
+        font-size: 10px;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+        color: var(--sol-text-4);
+      }
+      .fc-dtemp {
+        font-size: 11px;
+        font-variant-numeric: tabular-nums;
+        color: var(--sol-text-2);
+      }
+      .fc-dtemp span {
+        color: var(--sol-faint);
+      }
+
+      /* Hot-water drawer — same disclosure pattern as the Light card's bias drawer. */
+      .hw-drawer {
+        position: relative;
+        z-index: 1;
+        margin-top: 12px;
+        padding-top: 10px;
+        border-top: 1px solid var(--sol-hair);
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 8px 18px;
+      }
+      @media (max-width: 580px) {
+        .hw-drawer {
+          grid-template-columns: 1fr;
+        }
+      }
+      .hw-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-height: 24px;
+      }
+      .hw-k {
+        flex: 1;
+        font-size: 11.5px;
+        color: var(--sol-text-2);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .hw-v {
+        flex: 0 0 auto;
+        font-family: var(--sol-font-body);
+        font-variant-numeric: tabular-nums;
+        font-size: 11.5px;
+        color: var(--sol-text-3);
+      }
+      .hw-wide {
+        grid-column: 1 / -1;
+      }
+      .hw-seg {
+        display: flex;
+        background: var(--sol-control, #232426);
+        border-radius: 9px;
+        padding: 2px;
+        gap: 2px;
+      }
+      .hw-seg button {
+        border: none;
+        cursor: pointer;
+        border-radius: 7px;
+        padding: 3px 8px;
+        font-size: 10.5px;
+        font-weight: 500;
+        background: transparent;
+        color: var(--sol-text-3);
+      }
+      .hw-seg button.on {
+        background: var(--sol-amber-surface, #2a2418);
+        color: var(--sol-amber);
+      }
+      .hw-time {
+        background: var(--sol-control, #242426);
+        border: none;
+        border-radius: 6px;
+        color: var(--sol-text-2);
+        font-family: var(--sol-font-body);
+        font-size: 11.5px;
+        padding: 3px 6px;
+      }
     `,
   ];
 
@@ -521,19 +861,60 @@ export class SolTabHome extends LitElement {
   private setHvacMode(mode: string) {
     if (!this.hass) return;
     this.hass.callService("climate", "set_hvac_mode", {
-      entity_id: "climate.kitchen_kitchen_thermostat",
+      entity_id: THERMOSTAT,
       hvac_mode: mode,
+    });
+  }
+
+  /**
+   * Eco is a **preset**, not an hvac mode.
+   *
+   * `climate.kitchen_kitchen_thermostat` reports `hvac_modes: ["off", "heat"]` and
+   * `preset_modes: ["none", "eco"]`. The old Eco button called `set_hvac_mode("eco")`,
+   * which HA rejects — the button looked live and did nothing.
+   */
+  private setPreset(preset: string) {
+    if (!this.hass) return;
+    this.hass.callService("climate", "set_preset_mode", {
+      entity_id: THERMOSTAT,
+      preset_mode: preset,
     });
   }
 
   private bumpHvacTemp(delta: number) {
     if (!this.hass) return;
-    const climateState = this.hass.states["climate.kitchen_kitchen_thermostat"];
-    const current = climateState?.attributes?.temperature ?? 20.0;
-    const next = Math.round((current + delta) * 2) / 2;
+    const c = this.hass.states[THERMOSTAT];
+    const min = Number(c?.attributes?.min_temp ?? 9);
+    const max = Number(c?.attributes?.max_temp ?? 32);
+    const step = Number(c?.attributes?.target_temp_step ?? 0.5);
+    // `temperature` is null whenever the thermostat is off, so there is no target to
+    // nudge; start from the room instead of inventing a number.
+    const base = c?.attributes?.temperature ?? c?.attributes?.current_temperature ?? 20;
+    const next = Math.min(max, Math.max(min, Math.round((base + delta) / step) * step));
     this.hass.callService("climate", "set_temperature", {
-      entity_id: "climate.kitchen_kitchen_thermostat",
-      temperature: next,
+      entity_id: THERMOSTAT,
+      temperature: Math.round(next * 10) / 10,
+    });
+  }
+
+  /* ------------------------------------------------------------------- hot water */
+
+  private setNumber(entityId: string, value: number) {
+    this.hass?.callService("input_number", "set_value", { entity_id: entityId, value });
+  }
+
+  private toggleBool(entityId: string) {
+    this.hass?.callService("input_boolean", "toggle", { entity_id: entityId });
+  }
+
+  private setDateTime(entityId: string, time: string) {
+    this.hass?.callService("input_datetime", "set_datetime", { entity_id: entityId, time });
+  }
+
+  private setHeatLink(mode: string) {
+    this.hass?.callService("water_heater", "set_operation_mode", {
+      entity_id: HEAT_LINK,
+      operation_mode: mode,
     });
   }
 
@@ -551,6 +932,7 @@ export class SolTabHome extends LitElement {
     if (!samples || samples.length < 2) return null;
     return buildSpark(samples, {
       height: BAND_H,
+      anchorMean: SPARK_ANCHOR,
       from: this.windowEnd - 24 * 3_600_000,
       to: this.windowEnd,
       ...opts,
@@ -561,7 +943,10 @@ export class SolTabHome extends LitElement {
    * The band itself. `id` only has to be unique inside this shadow root — it names the
    * fill gradient, and two cards sharing one would silently take each other's colour.
    */
-  private renderBand(id: string, spark: Spark | null, colour: string) {
+  private renderBand(id: string, spark: Spark | null, colour: string, hidden = false) {
+    // A band is pinned to the card floor, so an open disclosure drawer would have the
+    // curve running straight through its rows. The drawer wins while it is open.
+    if (hidden) return nothing;
     if (!spark) {
       return html`<div class="band-empty">no recorder history yet</div>`;
     }
@@ -610,8 +995,14 @@ export class SolTabHome extends LitElement {
     if (!spark) return nothing;
     return html`
       <div class="high-low">
-        <span>High <b>${spark.max.toFixed(digits)}${unit}</b> ${clockAt(spark.maxAt)}</span>
-        <span>Low <b>${spark.min.toFixed(digits)}${unit}</b> ${clockAt(spark.minAt)}</span>
+        <span
+          ><span class="hl-k">High</span><b>${spark.max.toFixed(digits)}${unit}</b
+          ><span class="hl-t">${clockAt(spark.maxAt)}</span></span
+        >
+        <span
+          ><span class="hl-k">Low</span><b>${spark.min.toFixed(digits)}${unit}</b
+          ><span class="hl-t">${clockAt(spark.minAt)}</span></span
+        >
       </div>
     `;
   }
@@ -661,23 +1052,20 @@ export class SolTabHome extends LitElement {
         </div>
 
         <div class="c-body">
-          <div>
-            <div class="big-val mono-gold">${targetPct}<span class="unit" style="font-size: 15px; margin-left: 3px;">%</span></div>
-            <div class="high-low" style="margin-top: 6px;">
-              ${masterTarget} lvl${spark
-                ? html` · peak <b>${num(Math.round(spark.max))} lx</b> ${clockAt(spark.maxAt)}`
-                : nothing}
+          <div class="c-main">
+            <div class="big-val mono-gold">
+              ${targetPct}<span class="unit" style="font-size: 15px; margin-left: 3px;">%</span>
             </div>
           </div>
-          <div class="stat-grid">
-            <div class="stat-item">
-              <span class="stat-label">Lux</span>
-              <span class="stat-val" style="color: var(--sol-amber);">${num(luxVal)}</span>
-            </div>
-            <div class="stat-item">
-              <span class="stat-label">Sun</span>
-              <span class="stat-val">${elevVal}°</span>
-            </div>
+          <div class="small-grid c-side">
+            <span class="sg-k">Lux</span>
+            <span class="sg-v" style="color: var(--sol-amber);">${num(luxVal)}</span>
+            <span class="sg-k">Sun</span>
+            <span class="sg-v">${elevVal}°</span>
+            <span class="sg-k">Peak</span>
+            <span class="sg-v">
+              ${spark ? `${num(Math.round(spark.max))} lx · ${clockAt(spark.maxAt)}` : "—"}
+            </span>
           </div>
         </div>
 
@@ -710,49 +1098,110 @@ export class SolTabHome extends LitElement {
             `
           : nothing}
 
-        ${this.renderBand("lux", spark, "var(--sol-amber)")}
+        ${this.renderBand("lux", spark, "var(--sol-amber)", this.biasOpen)}
       </div>
     `;
   }
 
   private renderWeatherCard() {
-    const weather = this.hass.states["weather.forecast_home"];
-    const weatherState = weather?.state ?? "clear";
-    const cloudCover = weather?.attributes?.cloud_coverage ?? 70;
-    const isRaining = weatherState.includes("rain");
+    const weather = this.hass.states[WEATHER];
+    const condition = weather?.state ?? "cloudy";
+    const attrs = weather?.attributes ?? {};
+
+    // met.no publishes no radar imagery and HA exposes no radar entity here, so the
+    // card shows what the integration actually has: 12h of precipitation and a 6-day
+    // strip. See the PR for why a third-party tile server was not the answer.
+    const hours = this.hourly.slice(0, 12);
+    const maxRain = Math.max(0.6, ...hours.map((h) => h.precipitation ?? 0));
+    const rainSoon = hours.slice(0, 6).some((h) => (h.precipitation ?? 0) > 0.1);
+
+    const hourLabel = (iso: string) =>
+      new Date(iso).toLocaleTimeString(undefined, { hour: "2-digit", hour12: false });
+    const dayLabel = (iso: string, i: number) =>
+      i === 0 ? "Today" : new Date(iso).toLocaleDateString(undefined, { weekday: "short" });
 
     return html`
       <div class="card-wrap">
         <div class="c-head">
-          <ha-icon icon="mdi:radar" style="color: var(--sol-cyan);"></ha-icon>
-          <span class="c-title">Weather Radar &amp; Forecast</span>
+          <ha-icon icon="mdi:cloud-outline" style="color: var(--sol-cyan);"></ha-icon>
+          <span class="c-title">Forecast</span>
           <span class="grow"></span>
-          <span class="c-status">${isRaining ? "precipitation active" : "no rain expected"}</span>
+          <span class="c-status">${rainSoon ? "rain within 6h" : "no rain in 6h"}</span>
         </div>
 
-        <div
-          style="flex: 1; margin-top: 10px; border-radius: 10px; background: repeating-linear-gradient(135deg,#1e1f21 0 10px,#191a1b 10px 20px); display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 96px; padding: 12px; box-sizing: border-box; text-align: center; position: relative; z-index: 1;"
-        >
-          <div style="font-size: 15px; font-weight: 500; color: var(--sol-text); text-transform: capitalize; margin-bottom: 4px;">
-            ${weatherState.replace(/_/g, " ")}
+        <div class="fc">
+          <div class="fc-now">
+            <ha-icon icon=${weatherIcon(condition)}></ha-icon>
+            <div>
+              <div class="fc-temp">
+                ${attrs.temperature ?? "—"}<span class="unit" style="font-size: 16px;">°</span>
+              </div>
+              <div class="fc-cond">${condition.replace(/[-_]/g, " ")}</div>
+            </div>
+            <div class="small-grid c-side">
+              <span class="sg-k">Wind</span>
+              <span class="sg-v">${Math.round(attrs.wind_speed ?? 0)} km/h</span>
+              <span class="sg-k">Pressure</span>
+              <span class="sg-v">${attrs.pressure ?? "—"} hPa</span>
+              <span class="sg-k">UV</span>
+              <span class="sg-v">${attrs.uv_index ?? "—"}</span>
+            </div>
           </div>
-          <div style="font-size: 12px; color: var(--sol-text-3);">
-            ${cloudCover}% cloud cover · ${weather?.attributes?.temperature ?? "—"}°C
-          </div>
-          <div style="font-size: 10.5px; color: var(--sol-faint); margin-top: 4px;">
-            weather.forecast_home
-          </div>
+
+          ${hours.length
+            ? html`
+                <div class="fc-hours">
+                  ${hours.map((h) => {
+                    const mm = h.precipitation ?? 0;
+                    return html`
+                      <div class="fc-hour" title="${hourLabel(h.datetime)} · ${mm} mm">
+                        <div
+                          class="fc-bar ${mm > 0.05 ? "" : "dry"}"
+                          style="height: ${mm > 0.05 ? Math.max(6, Math.round((mm / maxRain) * 30)) : 3}px;"
+                        ></div>
+                        <span class="fc-hlabel">${hourLabel(h.datetime)}</span>
+                      </div>
+                    `;
+                  })}
+                </div>
+              `
+            : nothing}
+
+          ${this.daily.length
+            ? html`
+                <div class="fc-days">
+                  ${this.daily.slice(0, 6).map(
+                    (d, i) => html`
+                      <div class="fc-day">
+                        <span class="fc-dname">${dayLabel(d.datetime, i)}</span>
+                        <ha-icon icon=${weatherIcon(d.condition)}></ha-icon>
+                        <span class="fc-dtemp">
+                          ${Math.round(d.temperature ?? 0)}°<span
+                            >/${Math.round(d.templow ?? 0)}°</span
+                          >
+                        </span>
+                      </div>
+                    `
+                  )}
+                </div>
+              `
+            : html`<div class="fc-sub">forecast unavailable</div>`}
         </div>
       </div>
     `;
   }
 
   private renderInsideCard() {
-    const tempState = this.hass.states["sensor.kitchen_kitchen_thermostat_temperature"];
-    const climateState = this.hass.states["climate.kitchen_kitchen_thermostat"];
-    const currentTemp = parseFloat(tempState?.state ?? "20.0");
-    const hvacMode = climateState?.state ?? "heat";
-    const targetTemp = climateState?.attributes?.temperature ?? 20.5;
+    const tempState = this.hass.states[INSIDE_TEMP];
+    const climate = this.hass.states[THERMOSTAT];
+    const currentTemp = parseFloat(tempState?.state ?? "");
+    const hvacMode = climate?.state ?? "off";
+    const preset = climate?.attributes?.preset_mode ?? "none";
+    const action = climate?.attributes?.hvac_action ?? hvacMode;
+    // Null whenever the thermostat is off — showing a fabricated 20.5 was worse than
+    // showing that there is no setpoint.
+    const target = climate?.attributes?.temperature ?? null;
+    const humidity = climate?.attributes?.current_humidity;
 
     const spark = this.spark(INSIDE_TEMP, { minSpan: 1.5 });
 
@@ -760,50 +1209,68 @@ export class SolTabHome extends LitElement {
       <div class="card-wrap">
         <div class="c-head">
           <ha-icon icon="mdi:home-thermometer" style="color: #ef5350;"></ha-icon>
-          <span class="c-title">Inside · Kitchen</span>
+          <span class="c-title">Inside</span>
           <span class="grow"></span>
-          <div class="hvac-modes">
-            <button
-              class="hvac-btn ${hvacMode === "off" ? "active" : ""}"
-              @click=${() => this.setHvacMode("off")}
-            >
-              Off
-            </button>
-            <button
-              class="hvac-btn ${hvacMode === "heat" ? "active-heat" : ""}"
-              @click=${() => this.setHvacMode("heat")}
-            >
-              Heat
-            </button>
-            <button
-              class="hvac-btn ${hvacMode === "eco" ? "active-eco" : ""}"
-              @click=${() => this.setHvacMode("eco")}
-            >
-              Eco
-            </button>
-          </div>
+          <span class="c-status">${action === "heating" ? "heating" : "idle"}</span>
         </div>
 
         <div class="c-body">
-          <div class="big-val">
-            ${isNaN(currentTemp) ? "—" : currentTemp.toFixed(1)}<span class="unit">°</span>
+          <div class="c-main">
+            <div class="big-val">
+              ${isNaN(currentTemp) ? "—" : currentTemp.toFixed(1)}<span class="unit">°</span>
+            </div>
           </div>
-          ${hvacMode !== "off"
-            ? html`
-                <div style="display: flex; align-items: center; gap: 10px; padding-bottom: 5px;">
-                  <div>
-                    <div class="stat-label">${hvacMode === "eco" ? "Eco hold" : "Heating to"}</div>
-                    <div class="stat-val" style="color: ${hvacMode === "eco" ? "#81c784" : "#ef5350"};">
-                      ${targetTemp}°
-                    </div>
-                  </div>
-                  <div class="temp-stepper">
-                    <button class="step-btn" @click=${() => this.bumpHvacTemp(0.5)}>+</button>
-                    <button class="step-btn" @click=${() => this.bumpHvacTemp(-0.5)}>−</button>
-                  </div>
-                </div>
-              `
-            : nothing}
+
+          <div class="c-side" style="display: flex; flex-direction: column; align-items: flex-end; gap: 8px;">
+            <div class="hvac-modes">
+              <button
+                class="hvac-btn ${hvacMode === "off" ? "active" : ""}"
+                @click=${() => this.setHvacMode("off")}
+              >
+                Off
+              </button>
+              <button
+                class="hvac-btn ${hvacMode === "heat" && preset !== "eco" ? "active-heat" : ""}"
+                @click=${() => {
+                  this.setHvacMode("heat");
+                  if (preset === "eco") this.setPreset("none");
+                }}
+              >
+                Heat
+              </button>
+              <button
+                class="hvac-btn ${preset === "eco" ? "active-eco" : ""}"
+                @click=${() => {
+                  if (hvacMode === "off") this.setHvacMode("heat");
+                  this.setPreset("eco");
+                }}
+              >
+                Eco
+              </button>
+            </div>
+
+            <div class="setpoint">
+              <button class="step-btn" @click=${() => this.bumpHvacTemp(-0.5)}>−</button>
+              <div class="setpoint-val">
+                <span class="stat-label">${hvacMode === "off" ? "No setpoint" : "Target"}</span>
+                <span
+                  style="color: ${hvacMode === "off"
+                    ? "var(--sol-text-4)"
+                    : preset === "eco"
+                      ? "#81c784"
+                      : "#ef5350"};"
+                >
+                  ${target === null ? "—" : `${target.toFixed(1)}°`}
+                </span>
+              </div>
+              <button class="step-btn" @click=${() => this.bumpHvacTemp(0.5)}>+</button>
+            </div>
+
+            <div class="small-grid">
+              <span class="sg-k">Humidity</span>
+              <span class="sg-v">${humidity ?? "—"}%</span>
+            </div>
+          </div>
         </div>
 
         ${this.renderHighLow(spark, "°")}
@@ -813,18 +1280,16 @@ export class SolTabHome extends LitElement {
   }
 
   private renderOutsideCard() {
-    const tempState = this.hass.states["sensor.entry_exterior_temperature"];
-    const currentTemp = parseFloat(tempState?.state ?? "14.1");
-    const weather = this.hass.states["weather.forecast_home"];
-    const humidityState = this.hass.states["sensor.kitchen_kitchen_thermostat_humidity"];
-    const gateState = this.hass.states["binary_sensor.entry_ambient_gate"];
+    const tempState = this.hass.states[OUTSIDE_TEMP];
+    const currentTemp = parseFloat(tempState?.state ?? "");
+    const weather = this.hass.states[WEATHER];
+    const attrs = weather?.attributes ?? {};
+    const condition = weather?.state ?? "cloudy";
 
-    const pressure = weather?.attributes?.pressure ?? 1020.5;
-    const windSpeed = weather?.attributes?.wind_speed ?? 13;
-    const windBearing = weather?.attributes?.wind_bearing ?? 300;
-    const cloud = weather?.attributes?.cloud_coverage ?? 75;
-    const humidity = humidityState?.state ?? 47;
-    const gateOpen = gateState?.state === "on";
+    const humidityIn = this.hass.states["sensor.kitchen_kitchen_thermostat_humidity"]?.state;
+    // Exterior humidity comes off the weather entity — there is no outdoor hygrometer.
+    const humidityOut = attrs.humidity;
+    const fmtPct = (v: unknown) => (v === undefined || v === null ? "—" : Number(v).toFixed(1));
 
     const spark = this.spark(OUTSIDE_TEMP, { minSpan: 2 });
 
@@ -832,26 +1297,33 @@ export class SolTabHome extends LitElement {
       <div class="card-wrap">
         <div class="c-head">
           <ha-icon icon="mdi:tree" style="color: var(--sol-cyan);"></ha-icon>
-          <span class="c-title">Outside · Entry</span>
+          <span class="c-title">Outside</span>
           <span class="grow"></span>
-          <span class="c-status">${weather?.state?.replace(/_/g, " ") ?? "partly cloudy"}</span>
+          <span class="c-status">${condition.replace(/[-_]/g, " ")}</span>
+          <ha-icon
+            icon=${weatherIcon(condition)}
+            title=${condition}
+            style="--mdc-icon-size: 22px; color: var(--sol-cyan);"
+          ></ha-icon>
         </div>
 
         <div class="c-body">
-          <div class="big-val">
-            ${isNaN(currentTemp) ? "—" : currentTemp.toFixed(1)}<span class="unit">°</span>
+          <div class="c-main">
+            <div class="big-val">
+              ${isNaN(currentTemp) ? "—" : currentTemp.toFixed(1)}<span class="unit">°</span>
+            </div>
           </div>
-          <div class="small-grid">
+          <div class="small-grid c-side">
             <span class="sg-k">Pressure</span>
-            <span class="sg-v">${pressure} hPa</span>
+            <span class="sg-v">${attrs.pressure ?? "—"} hPa</span>
             <span class="sg-k">Wind</span>
-            <span class="sg-v">${windBearing}° · ${windSpeed} km/h</span>
+            <span class="sg-v">
+              ${Math.round(attrs.wind_bearing ?? 0)}° · ${Math.round(attrs.wind_speed ?? 0)} km/h
+            </span>
             <span class="sg-k">Cloud cover</span>
-            <span class="sg-v">${cloud}%</span>
-            <span class="sg-k">Humidity, kitchen</span>
-            <span class="sg-v">${humidity}%</span>
-            <span class="sg-k">Ambient gate</span>
-            <span class="sg-v">${gateOpen ? "open (dark enough)" : "closed (bright)"}</span>
+            <span class="sg-v">${Math.round(attrs.cloud_coverage ?? 0)}%</span>
+            <span class="sg-k">Humidity in/out</span>
+            <span class="sg-v">${fmtPct(humidityIn)}/${fmtPct(humidityOut)}%</span>
           </div>
         </div>
 
@@ -861,15 +1333,55 @@ export class SolTabHome extends LitElement {
     `;
   }
 
+  /**
+   * Observed recovery rate, °C per minute, from the steepest sustained rise in the last
+   * 24h of tank temperature.
+   *
+   * Derived from the tank curve rather than from `input_boolean.hw_cycle_running`,
+   * because that helper misses cycles: on 2026-08-17 the heat link ran `boost_2h` for
+   * 35 minutes and the boolean never flipped. A rate divided by a run time that did not
+   * get recorded is worse than no rate at all.
+   */
+  private recoveryRate(): number | null {
+    const samples = this.history.get(HOT_WATER_TEMP);
+    if (!samples || samples.length < 3) return null;
+
+    let best: { gain: number; minutes: number } | null = null;
+    let runStart = 0;
+    for (let i = 1; i < samples.length; i++) {
+      // A drop of more than a tenth ends the run; smaller wobbles are sensor noise.
+      if (samples[i].v < samples[i - 1].v - 0.1) {
+        runStart = i;
+        continue;
+      }
+      const gain = samples[i].v - samples[runStart].v;
+      const minutes = (samples[i].t - samples[runStart].t) / 60_000;
+      if (gain >= 3 && minutes >= 5 && (!best || gain / minutes > best.gain / best.minutes)) {
+        best = { gain, minutes };
+      }
+    }
+    return best ? best.gain / best.minutes : null;
+  }
+
   private renderHotWaterCard() {
-    const hwTempState = this.hass.states["sensor.hot_water_temperature_temperature"];
-    const currentTemp = parseFloat(hwTempState?.state ?? "51.2");
+    const hwTempState = this.hass.states[HOT_WATER_TEMP];
+    const currentTemp = parseFloat(hwTempState?.state ?? "");
     const running = this.hass.states["input_boolean.hw_cycle_running"]?.state === "on";
-    const nextStart = this.hass.states["sensor.hot_water_next_start"]?.state ?? "06:10";
-    const targetState =
-      this.hass.states["input_number.hw_target_summer"]?.state ??
-      this.hass.states["input_number.hw_target_winter"]?.state ??
-      "56.0";
+    const nextStart = this.hass.states["sensor.hot_water_next_start"]?.state ?? "—";
+    const winter = this.hass.states["input_boolean.hw_winter_mode"]?.state === "on";
+    const enabled = this.hass.states["input_boolean.hw_enabled"]?.state === "on";
+    const heatLink = this.hass.states[HEAT_LINK];
+    const heatLinkMode = heatLink?.state ?? "off";
+    const boosting = heatLinkMode.startsWith("boost");
+
+    const num_ = (id: string, fallback: number) =>
+      parseFloat(this.hass.states[id]?.state ?? String(fallback));
+
+    const targetSummer = num_("input_number.hw_target_summer", 47);
+    const targetWinter = num_("input_number.hw_target_winter", 53);
+    const target = winter ? targetWinter : targetSummer;
+    const learnedRate = num_("input_number.hw_heat_rate", 0.53);
+    const observed = this.recoveryRate();
 
     const spark = this.spark(HOT_WATER_TEMP, { minSpan: 4 });
 
@@ -879,48 +1391,187 @@ export class SolTabHome extends LitElement {
           <ha-icon icon="mdi:water-boiler" style="color: var(--sol-amber);"></ha-icon>
           <span class="c-title">Hot Water</span>
           <span class="grow"></span>
-          <span class="c-status">${running ? "heating now" : `idle · next ${nextStart}`}</span>
+          <span class="c-status">
+            ${boosting ? heatLinkMode.replace("boost_", "boost ") : running ? "heating now" : `next ${nextStart}`}
+          </span>
+          <button
+            class="btn-pill"
+            style="background: ${this.hwOpen ? "var(--sol-cyan-tint)" : "var(--sol-control)"}; color: ${this.hwOpen ? "var(--sol-cyan)" : "var(--sol-text-3)"};"
+            @click=${() => (this.hwOpen = !this.hwOpen)}
+          >
+            <ha-icon icon="mdi:tune"></ha-icon>
+            Controls
+            <ha-icon icon=${this.hwOpen ? "mdi:chevron-up" : "mdi:chevron-down"}></ha-icon>
+          </button>
         </div>
 
         <div class="c-body">
-          <div class="big-val">
-            ${isNaN(currentTemp) ? "—" : currentTemp.toFixed(1)}<span class="unit">°</span>
-          </div>
-          <div class="stat-grid">
-            <div class="stat-item">
-              <span class="stat-label">Target</span>
-              <span class="stat-val" style="color: var(--sol-amber);">${targetState}°</span>
+          <div class="c-main">
+            <div class="big-val">
+              ${isNaN(currentTemp) ? "—" : currentTemp.toFixed(1)}<span class="unit">°</span>
             </div>
+          </div>
+          <div class="small-grid c-side">
+            <span class="sg-k">Target</span>
+            <span class="sg-v" style="color: var(--sol-amber);">
+              ${target.toFixed(1)}° ${winter ? "winter" : "summer"}
+            </span>
+            <span class="sg-k">Recovery</span>
+            <span class="sg-v">${observed === null ? "—" : `${observed.toFixed(2)} °C/min`}</span>
+            <span class="sg-k">Learned rate</span>
+            <span class="sg-v">${learnedRate.toFixed(2)} °C/min</span>
+            <span class="sg-k">Automation</span>
+            <span class="sg-v">${enabled ? "on" : "off"}</span>
           </div>
         </div>
 
-        ${this.renderHighLow(spark, "°")}
-        ${this.renderBand("hotwater", spark, "var(--sol-amber)")}
+        ${this.hwOpen
+          ? html`
+              <div class="hw-drawer">
+                <div class="hw-row hw-wide">
+                  <span class="hw-k">Heat link</span>
+                  <div class="hw-seg">
+                    ${(heatLink?.attributes?.operation_list ?? ["off"]).map(
+                      (m: string) => html`
+                        <button
+                          class=${heatLinkMode === m ? "on" : ""}
+                          @click=${() => this.setHeatLink(m)}
+                        >
+                          ${m.replace("boost_", "")}
+                        </button>
+                      `
+                    )}
+                  </div>
+                </div>
+
+                <div class="hw-row">
+                  <span class="hw-k">Ready by</span>
+                  <input
+                    class="hw-time"
+                    type="time"
+                    .value=${(this.hass.states["input_datetime.hw_shower_time"]?.state ?? "08:30:00").slice(0, 5)}
+                    @change=${(e: Event) =>
+                      this.setDateTime(
+                        "input_datetime.hw_shower_time",
+                        `${(e.target as HTMLInputElement).value}:00`
+                      )}
+                  />
+                </div>
+
+                ${this.renderHwToggle("Automation", "input_boolean.hw_enabled", enabled)}
+                ${this.renderHwToggle("Winter mode", "input_boolean.hw_winter_mode", winter)}
+
+                <div class="hw-row">
+                  <span class="hw-k">Cycle running</span>
+                  <span class="hw-v">${running ? "yes" : "no"}</span>
+                </div>
+
+                ${this.renderHwNumber("Summer target", "input_number.hw_target_summer", targetSummer, "°C")}
+                ${this.renderHwNumber("Winter target", "input_number.hw_target_winter", targetWinter, "°C")}
+                ${this.renderHwNumber("Weekly purge", "input_number.hw_purge_temp", num_("input_number.hw_purge_temp", 60), "°C")}
+                ${this.renderHwNumber("Ready margin", "input_number.hw_ready_margin", num_("input_number.hw_ready_margin", 10), "min")}
+                ${this.renderHwNumber("Max runtime", "input_number.hw_max_runtime", num_("input_number.hw_max_runtime", 90), "min")}
+                ${this.renderHwNumber("Learned heat rate", "input_number.hw_heat_rate", learnedRate, "°C/min")}
+              </div>
+            `
+          : nothing}
+
+        ${this.hwOpen ? nothing : this.renderHighLow(spark, "°")}
+        ${this.renderBand("hotwater", spark, "var(--sol-amber)", this.hwOpen)}
+      </div>
+    `;
+  }
+
+  private renderHwNumber(label: string, entityId: string, value: number, unit: string) {
+    const attrs = this.hass.states[entityId]?.attributes ?? {};
+    return html`
+      <div class="hw-row">
+        <span class="hw-k">${label}</span>
+        <sol-number
+          .value=${value}
+          .min=${attrs.min ?? null}
+          .max=${attrs.max ?? null}
+          .step=${attrs.step ?? 0.1}
+          .suffix=${unit}
+          .width=${58}
+          @value-changed=${(e: CustomEvent) => {
+            const v = Number(e.detail.value);
+            if (Number.isFinite(v)) this.setNumber(entityId, v);
+          }}
+        ></sol-number>
+      </div>
+    `;
+  }
+
+  /** On/Off as a segmented control — the panel has no switch primitive of its own. */
+  private renderHwToggle(label: string, entityId: string, on: boolean) {
+    return html`
+      <div class="hw-row">
+        <span class="hw-k">${label}</span>
+        <sol-segmented
+          .options=${[
+            { value: "off", label: "Off" },
+            { value: "on", label: "On" },
+          ]}
+          .value=${on ? "on" : "off"}
+          @value-changed=${(e: CustomEvent) => {
+            if ((e.detail.value === "on") !== on) this.toggleBool(entityId);
+          }}
+        ></sol-segmented>
       </div>
     `;
   }
 
   private renderFridgeCard() {
-    const fridgeTempState = this.hass.states["sensor.refrigerator_temperature_temperature"];
-    const currentTemp = parseFloat(fridgeTempState?.state ?? "3.6");
+    const fridgeTempState = this.hass.states[FRIDGE_TEMP];
+    const currentTemp = parseFloat(fridgeTempState?.state ?? "");
+
+    const tooCold = !isNaN(currentTemp) && currentTemp <= FRIDGE_COLD;
+    const tooWarm = !isNaN(currentTemp) && currentTemp >= FRIDGE_WARM;
+    const alertClass = tooCold ? "alert-cold" : tooWarm ? "alert-warm" : "";
+    // The curve tracks the value's own state so an excursion is visible in the history,
+    // not only in the current reading.
+    const colour = tooCold ? "var(--sol-amber)" : tooWarm ? "#ef5350" : "#81d4fa";
 
     const spark = this.spark(FRIDGE_TEMP, { minSpan: 2 });
 
     return html`
       <div class="card-wrap">
         <div class="c-head">
-          <ha-icon icon="mdi:fridge" style="color: #81d4fa;"></ha-icon>
+          <ha-icon icon="mdi:fridge" style="color: ${colour};"></ha-icon>
           <span class="c-title">Refrigerator</span>
+          <span class="grow"></span>
+          ${tooCold || tooWarm
+            ? html`
+                <span class="alert-tag ${alertClass}">
+                  <ha-icon
+                    icon=${tooCold ? "mdi:snowflake-alert" : "mdi:thermometer-alert"}
+                    style="--mdc-icon-size: 15px;"
+                  ></ha-icon>
+                  ${tooCold ? "too cold" : "too warm"}
+                </span>
+              `
+            : html`<span class="c-status">in range</span>`}
         </div>
 
         <div class="c-body">
-          <div class="big-val">
-            ${isNaN(currentTemp) ? "—" : currentTemp.toFixed(1)}<span class="unit">°</span>
+          <div class="c-main">
+            <div class="big-val ${alertClass}">
+              ${isNaN(currentTemp) ? "—" : currentTemp.toFixed(1)}<span class="unit">°</span>
+            </div>
+          </div>
+          <div class="small-grid c-side">
+            <span class="sg-k">Safe band</span>
+            <span class="sg-v">${FRIDGE_COLD}–${FRIDGE_WARM}°</span>
+            <span class="sg-k">Battery</span>
+            <span class="sg-v">
+              ${this.hass.states["sensor.refrigerator_temperature_battery"]?.state ?? "—"}%
+            </span>
           </div>
         </div>
 
         ${this.renderHighLow(spark, "°")}
-        ${this.renderBand("fridge", spark, "#81d4fa")}
+        ${this.renderBand("fridge", spark, colour)}
       </div>
     `;
   }
@@ -1027,13 +1678,13 @@ export class SolTabHome extends LitElement {
             </div>
 
             <div class="c-body">
-              <div>
+              <div class="c-main">
                 <div class="run-phase">${washerPhase}</div>
-                <div class="high-low" style="margin-top: 8px;">
+                <div class="high-low" style="margin-top: 8px; padding-top: 0;">
                   ${Math.round(washerProgress)}% through · remaining ${washerRemaining}
                 </div>
               </div>
-              <div class="small-grid">
+              <div class="small-grid c-side">
                 <span class="sg-k">Remaining</span>
                 <span class="sg-v" style="color: var(--sol-cyan);">${washerRemaining}</span>
                 <span class="sg-k">Draw</span>
@@ -1079,13 +1730,15 @@ export class SolTabHome extends LitElement {
             </div>
 
             <div class="c-body">
-              <div>
+              <div class="c-main">
                 <div class="big-val" style="color: var(--sol-green);">
                   ${chargerPower.toFixed(2)}<span class="unit">W</span>
                 </div>
-                <div class="high-low" style="margin-top: 8px;">Active charging cycle</div>
+                <div class="high-low" style="margin-top: 8px; padding-top: 0;">
+                  Active charging cycle
+                </div>
               </div>
-              <div class="small-grid">
+              <div class="small-grid c-side">
                 <span class="sg-k">Cut-off</span>
                 <span class="sg-v" style="color: #ef5350;">${chargeCutoff.toFixed(2)} W</span>
                 <span class="sg-k">Profile</span>

@@ -39,6 +39,23 @@ export interface SparkOptions {
   minSpan?: number;
   /** Log scale for values that span decades (lux). Values ≤ 0 clamp to the floor. */
   scale?: "linear" | "log";
+  /**
+   * Linearly interpolate between reports instead of holding the last value.
+   *
+   * Step-hold is the honest choice for a discrete state, but every sensor plotted here
+   * is a continuous physical quantity sampled irregularly — a tank that reads 41° then
+   * 47° twelve minutes later passed through the values between. Holding draws that as a
+   * staircase, which is the "stepping" these cards showed on hot water.
+   */
+  interpolate?: boolean;
+  /**
+   * Put the series *mean* at this fraction of the band height, measured from the floor.
+   *
+   * Without it the domain is min..max, so a series that spent the day near its own
+   * minimum hugs the bottom of the band. Anchoring the mean lifts the whole curve to a
+   * consistent height across cards, which is what makes a row of them read as a set.
+   */
+  anchorMean?: number;
   /** Window start/end in epoch ms. Defaults to the samples' own extent. */
   from?: number;
   to?: number;
@@ -120,17 +137,24 @@ export function buildSpark(samples: Sample[], opts: SparkOptions = {}): Spark | 
   const to = opts.to ?? clean[clean.length - 1].t;
   if (!(to > from)) return null;
 
-  // --- resample onto an even time grid, holding the last known value ----------------
+  // --- resample onto an even time grid ----------------------------------------------
+  const interpolate = opts.interpolate ?? true;
   const grid = new Array<number>(columns);
   let cursor = 0;
-  let held = clean[0].v;
   for (let i = 0; i < columns; i++) {
     const t = from + ((to - from) * i) / (columns - 1);
-    while (cursor < clean.length && clean[cursor].t <= t) {
-      held = clean[cursor].v;
-      cursor++;
+    while (cursor < clean.length && clean[cursor].t <= t) cursor++;
+    const prev = clean[Math.max(0, cursor - 1)];
+    const next = clean[cursor];
+    if (!next || next === prev) {
+      grid[i] = prev.v;
+    } else if (!interpolate) {
+      grid[i] = prev.v;
+    } else {
+      const span = next.t - prev.t;
+      const f = span > 0 ? Math.min(1, Math.max(0, (t - prev.t) / span)) : 0;
+      grid[i] = prev.v + (next.v - prev.v) * f;
     }
-    grid[i] = held;
   }
 
   // --- extremes come from the raw samples, so the label matches what happened -------
@@ -153,14 +177,34 @@ export function buildSpark(samples: Sample[], opts: SparkOptions = {}): Spark | 
 
   // --- y domain ---------------------------------------------------------------------
   const project = (v: number) => (logScale ? Math.log10(Math.max(LOG_FLOOR, v)) : v);
-  let lo = project(min);
-  let hi = project(max);
-  const span = hi - lo;
+  const pMin = project(min);
+  const pMax = project(max);
   const floor = logScale ? 0.3 : minSpan;
-  if (span < floor) {
-    const mid = (hi + lo) / 2;
-    lo = mid - floor / 2;
-    hi = mid + floor / 2;
+
+  let lo: number;
+  let hi: number;
+
+  const anchor = opts.anchorMean;
+  if (anchor !== undefined && anchor > 0.02 && anchor < 0.98) {
+    // Widen the domain just enough that the mean lands on the anchor with every sample
+    // still inside the band. Solving both bounds for the range and taking the larger is
+    // what keeps the anchor exact without ever clipping the extremes.
+    const pMean = grid.reduce((a, v) => a + project(v), 0) / grid.length;
+    const need = Math.max(
+      (pMean - pMin) / anchor,
+      (pMax - pMean) / (1 - anchor),
+      floor
+    );
+    lo = pMean - anchor * need;
+    hi = lo + need;
+  } else {
+    lo = pMin;
+    hi = pMax;
+    if (hi - lo < floor) {
+      const mid = (hi + lo) / 2;
+      lo = mid - floor / 2;
+      hi = mid + floor / 2;
+    }
   }
   const range = hi - lo || 1;
 
