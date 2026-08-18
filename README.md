@@ -8,7 +8,7 @@ A lighting **calculation engine** for Home Assistant, as a HACS custom integrati
 Rooms are added inside the integration as config subentries — not one automation per
 light. One outdoor lux sensor drives the whole house; everything else is a tunable.
 
-> ## ⚠️ ALPHA — v0.4.0
+> ## ⚠️ ALPHA — v0.6.0
 >
 > **This is alpha software driving one person's house, published in the open because
 > there is no reason not to. It is not a product, and there is no support.**
@@ -47,6 +47,9 @@ so it survives restarts. A value that cannot be changed from the UI is a bug.
 | `coordinator.py` | Two clocks, manual detection, the calculation loop. |
 | `writer.py` | The **sole** writer to lights. Context stamping lives here. |
 | `config_flow.py` | House entry + one subentry per room. |
+| `websocket_api.py` | WebSocket API bridge for the custom panel. |
+| `panel.py` | Registers the custom sidebar panel. |
+| `panel/` | Lit + TypeScript custom settings panel frontend. |
 
 The four pure modules are where the logic bugs live, and they are unit-tested with plain
 pytest. Everything else is plumbing, covered by integration tests against a real HA.
@@ -117,13 +120,6 @@ brightness fade for 420 s against a clean control. Solace serialises them on tha
 | Manual age with no touched flag | A fresh boot has age 0, which is always less than the hold window ⇒ manual forever. |
 | `always_update=False` with a mutable data object | Identity comparison says "unchanged" every tick; every sensor freezes while the lights keep updating. |
 | The default request-refresh debouncer | 10 s cooldown, not immediate — a slider does nothing, then snaps. |
-
-## Not built yet
-
-* **The Lit + TypeScript settings panel.** The `number` entities are the interim control
-  surface and write the same config entry the panel will.
-* **Cutover.** Removing the live blueprint automations is a behaviour change to a working
-  house and is gated on an explicit go-ahead.
 
 ## Licence
 
