@@ -37,9 +37,27 @@ const THERMOSTAT = "climate.kitchen_kitchen_thermostat";
 
 const TRACKED = [LUX, INSIDE_TEMP, OUTSIDE_TEMP, HOT_WATER_TEMP, FRIDGE_TEMP];
 
-/** Refrigerator alarm thresholds, °C. Below `COLD` freezes produce; above `WARM` spoils. */
-const FRIDGE_COLD = 0.3;
-const FRIDGE_WARM = 5;
+/**
+ * Refrigerator alarm thresholds, °C — calibrated against 14 days of recorder history
+ * (2026-08-04 → 08-18, 488 samples) rather than picked from food-safety guidance, because
+ * the alarm has to describe *this* fridge. Distribution: min 0.3, p5 1.9, p50 3.6,
+ * p95 5.1, max 5.4.
+ *
+ * Counting only excursions that would survive the automation's 30-minute debounce:
+ *
+ *   cold  0.3 → 0 alerts (never reached; the alarm was decorative)
+ *         1.0 → 1 alert   ← the real 233-minute dip to 0.8 on 08-12
+ *         1.5 → 6 alerts  (catches the fridge's moody 1.3 wobbles)
+ *   warm  5.0 → 16 alerts (more than one a day — 5 is inside normal operation here)
+ *         6.0 → 0 alerts  ← only fires on something genuinely abnormal
+ *
+ * Note the warm side is a *fault* alarm, not a food-safety one: this fridge routinely runs
+ * above the 5 °C guidance figure, and the fix for that is its setpoint, not its alarm.
+ *
+ * These are duplicated in `automation.refrigerator_temperature_out_of_range`. Move both.
+ */
+const FRIDGE_COLD = 1;
+const FRIDGE_WARM = 6;
 
 /** `weather.forecast_home` condition → the mdi icon HA already ships for it. */
 const WEATHER_ICON: Record<string, string> = {
