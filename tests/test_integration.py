@@ -736,3 +736,25 @@ async def test_remote_dispatcher_executes_actions(hass: HomeAssistant, entry, wo
 
     new_bias = float(entry.subentries[subentry.subentry_id].data.get("bias_stops", 0.0))
     assert new_bias == initial_bias + 0.5
+
+
+async def test_work_mode_overrides_office_lights_and_auto_clears(hass: HomeAssistant, entry, world) -> None:
+    """Work mode overrides office lights with manual levels and auto-clears on sleep."""
+    world(lux=50.0)
+    await async_setup_component(hass, "input_boolean", {"input_boolean": {"work_mode": None}})
+    hass.states.async_set("input_boolean.work_mode", "off")
+    hass.states.async_set("binary_sensor.living_presence_occupancy", "on")
+    assert await _setup(hass, entry)
+    coordinator = entry.runtime_data.coordinator
+    assert coordinator._work_mode() is False
+
+    # Turn on Work Mode
+    hass.states.async_set("input_boolean.work_mode", "on")
+    await hass.async_block_till_done()
+    assert coordinator._work_mode() is True
+
+    # Test auto-clearing on night mode / sleep
+    coordinator._clear_work_mode()
+    await hass.async_block_till_done()
+    assert hass.states.get("input_boolean.work_mode").state == "off"
+

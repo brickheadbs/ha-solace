@@ -6,7 +6,7 @@
 import { LitElement, css, html, nothing, svg } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import type { Hass, Snapshot } from "./api";
-import { setHouse, setRoom, setSunriseCurve, setSunsetCurve, toggleSleep } from "./api";
+import { setHouse, setRoom, setSunriseCurve, setSunsetCurve, toggleSleep, toggleWorkMode } from "./api";
 import { MonotoneSpline } from "./spline";
 import { tokens } from "./tokens";
 import "./ui";
@@ -96,6 +96,11 @@ export class SolTabSettings extends LitElement {
         flex-direction: column;
         gap: 16px;
       }
+      .modes-row {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+        gap: 16px;
+      }
       .bed-card {
         background: var(--sol-control);
         border-radius: 10px;
@@ -176,6 +181,14 @@ export class SolTabSettings extends LitElement {
       .manual-sleep-btn.active ha-icon {
         color: #ffb74d;
       }
+      .manual-sleep-btn.active-work {
+        background: rgba(33, 150, 243, 0.22);
+        border-color: #64b5f6;
+        color: #64b5f6;
+      }
+      .manual-sleep-btn.active-work ha-icon {
+        color: #64b5f6;
+      }
       .sleep-inputs-grid {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -205,6 +218,10 @@ export class SolTabSettings extends LitElement {
       .badge-amber {
         background: rgba(255, 183, 77, 0.18);
         color: #ffb74d;
+      }
+      .badge-blue {
+        background: rgba(33, 150, 243, 0.2);
+        color: #64b5f6;
       }
       .badge-dim {
         background: rgba(255, 255, 255, 0.06);
@@ -610,6 +627,8 @@ export class SolTabSettings extends LitElement {
 
     const world = this.snap?.world;
     const sleepActive = !!world?.asleep;
+    const workActive =
+      this.hass.states["input_boolean.work_mode"]?.state === "on" || !!world?.work_mode;
     const phoneActive = !!world?.phone_dnd;
     const watchActive = !!world?.watch_bedtime;
     const manualActive = !!world?.manual_sleep;
@@ -635,65 +654,189 @@ export class SolTabSettings extends LitElement {
 
     return html`
       <div class="grid">
-        <!-- 1. Bedroom Special Modes -->
+        <!-- 1. Special Modes (Work & Bedroom Special Modes) -->
         <div class="card full-col">
           <div class="head">
-            <ha-icon icon="mdi:bed-outline" style="color: var(--sol-blue);"></ha-icon>
-            <div class="title">Bedroom special modes</div>
+            <ha-icon icon="mdi:tune" style="color: var(--sol-blue);"></ha-icon>
+            <div class="title">Special modes</div>
           </div>
           <div class="bed-grid">
-            <!-- Mode 1: Sleep -->
-            <div class="bed-card">
-              <div class="bed-head">
-                <ha-icon icon="mdi:weather-night" style="color: var(--sol-amber);"></ha-icon>
-                <div class="bed-title">1 · Sleep mode</div>
-                <sol-help text="Forces bedroom lights to dark even during a 04:30 summer sunrise or daytime nap. Triggered by Phone DND, Watch Bedtime, or manual sleep switch. Unlatches automatically when Virtual Sunrise begins or upon dawn outdoor daylight."></sol-help>
-                <div class="spacer"></div>
-                <div class="badge ${sleepActive ? "badge-amber" : "badge-dim"}">
-                  ${sleepActive ? "Asleep (Night active)" : "Awake (Standby)"}
-                </div>
-              </div>
-
-              <!-- Triggers Status Bar -->
-              <div class="triggers-bar">
-                <div class="trigger-item ${phoneActive ? "active" : ""}">
-                  <ha-icon icon="mdi:cellphone"></ha-icon>
-                  <span>Phone DND: <strong>${phoneActive ? "Priority Only" : "Off"}</strong></span>
-                </div>
-                <div class="trigger-item ${watchActive ? "active" : ""}">
-                  <ha-icon icon="mdi:watch-variant"></ha-icon>
-                  <span>Pixel Watch: <strong>${watchActive ? "Bedtime Mode" : "Off"}</strong></span>
-                </div>
-                <button
-                  class="manual-sleep-btn ${manualActive ? "active" : ""}"
-                  @click="${() => toggleSleep(this.hass)}"
-                  title="Toggle manual sleep helper"
-                >
-                  <ha-icon icon="mdi:power-sleep"></ha-icon>
-                  <span>Manual Switch: <strong>${manualActive ? "ON" : "OFF"}</strong></span>
-                </button>
-              </div>
-
-              <!-- Dawn Release Setting -->
-              <div class="sleep-inputs-grid">
-                <div>
-                  <div style="display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--sol-text-2); margin-bottom: 4px;">
-                    <ha-icon icon="mdi:weather-sunset-up" style="--mdc-icon-size: 14px; color: var(--sol-amber);"></ha-icon>
-                    Release lux (dawn unlatch)
-                    <sol-help text="Outdoor light level at which sleep mode automatically unlatches so daytime lighting takes over seamlessly."></sol-help>
+            <div class="modes-row">
+              <!-- Mode: Work Mode (Left) -->
+              <div class="bed-card">
+                <div class="bed-head">
+                  <ha-icon icon="mdi:desk-lamp" style="color: var(--sol-blue);"></ha-icon>
+                  <div class="bed-title">Work mode</div>
+                  <sol-help text="Overrides office zone lights with manual work brightness levels while occupied (with 5-min off-debounce). Resets automatically overnight."></sol-help>
+                  <div class="spacer"></div>
+                  <div class="badge ${workActive ? "badge-blue" : "badge-dim"}">
+                    ${workActive ? "Working (Active)" : "Standby (Normal)"}
                   </div>
-                  <div class="input-with-unit">
-                    <input
-                      type="number"
-                      class="num-input"
-                      style="flex: 1;"
-                      .value="${String(house.night_release_lux ?? 10)}"
-                      @change="${(e: Event) => {
-                        const v = parseFloat((e.target as HTMLInputElement).value);
-                        setHouse(this.hass, { night_release_lux: v });
-                      }}"
-                    />
-                    <span class="unit-label">lx</span>
+                </div>
+
+                <!-- Triggers Status Bar -->
+                <div class="triggers-bar">
+                  <div class="trigger-item ${workActive ? "active" : ""}">
+                    <ha-icon icon="mdi:gesture-tap-hold"></ha-icon>
+                    <span>Sonoff Button: <strong>Hold to toggle</strong></span>
+                  </div>
+                  <button
+                    class="manual-sleep-btn ${workActive ? "active-work" : ""}"
+                    @click="${() => toggleWorkMode(this.hass)}"
+                    title="Toggle work mode helper"
+                  >
+                    <ha-icon icon="mdi:desk-lamp"></ha-icon>
+                    <span>Manual Switch: <strong>${workActive ? "ON" : "OFF"}</strong></span>
+                  </button>
+                </div>
+
+                <!-- Office Zone Lights & Debounce -->
+                <div class="sleep-inputs-grid">
+                  <div>
+                    <div style="display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--sol-text-2); margin-bottom: 4px;">
+                      <ha-icon icon="mdi:lamp" style="--mdc-icon-size: 14px; color: var(--sol-amber);"></ha-icon>
+                      Desk lamp brightness
+                    </div>
+                    <div class="input-with-unit">
+                      <input
+                        type="number"
+                        class="num-input"
+                        style="flex: 1;"
+                        min="0"
+                        max="254"
+                        .value="${String(house.work_mode_desk_level ?? 254)}"
+                        @change="${(e: Event) => {
+                          const v = parseFloat((e.target as HTMLInputElement).value);
+                          setHouse(this.hass, { work_mode_desk_level: v });
+                        }}"
+                      />
+                      <span class="unit-label">/254</span>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div style="display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--sol-text-2); margin-bottom: 4px;">
+                      <ha-icon icon="mdi:lightbulb-outline" style="--mdc-icon-size: 14px; color: var(--sol-amber);"></ha-icon>
+                      Backlight brightness
+                    </div>
+                    <div class="input-with-unit">
+                      <input
+                        type="number"
+                        class="num-input"
+                        style="flex: 1;"
+                        min="0"
+                        max="254"
+                        .value="${String(house.work_mode_backlight_level ?? 200)}"
+                        @change="${(e: Event) => {
+                          const v = parseFloat((e.target as HTMLInputElement).value);
+                          setHouse(this.hass, { work_mode_backlight_level: v });
+                        }}"
+                      />
+                      <span class="unit-label">/254</span>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div style="display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--sol-text-2); margin-bottom: 4px;">
+                      <ha-icon icon="mdi:lightbulb" style="--mdc-icon-size: 14px; color: var(--sol-amber);"></ha-icon>
+                      Corner brightness
+                    </div>
+                    <div class="input-with-unit">
+                      <input
+                        type="number"
+                        class="num-input"
+                        style="flex: 1;"
+                        min="0"
+                        max="254"
+                        .value="${String(house.work_mode_corner_level ?? 180)}"
+                        @change="${(e: Event) => {
+                          const v = parseFloat((e.target as HTMLInputElement).value);
+                          setHouse(this.hass, { work_mode_corner_level: v });
+                        }}"
+                      />
+                      <span class="unit-label">/254</span>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div style="display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--sol-text-2); margin-bottom: 4px;">
+                      <ha-icon icon="mdi:timer-sand" style="--mdc-icon-size: 14px; color: var(--sol-amber);"></ha-icon>
+                      Occupancy debounce
+                      <sol-help text="Delay before turning office lights off when no presence is detected in work mode."></sol-help>
+                    </div>
+                    <div class="input-with-unit">
+                      <input
+                        type="number"
+                        class="num-input"
+                        style="flex: 1;"
+                        min="0.5"
+                        max="60"
+                        step="0.5"
+                        .value="${String(house.work_mode_debounce_minutes ?? 5)}"
+                        @change="${(e: Event) => {
+                          const v = parseFloat((e.target as HTMLInputElement).value);
+                          setHouse(this.hass, { work_mode_debounce_minutes: v });
+                        }}"
+                      />
+                      <span class="unit-label">min</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Mode 1: Sleep (Right) -->
+              <div class="bed-card">
+                <div class="bed-head">
+                  <ha-icon icon="mdi:weather-night" style="color: var(--sol-amber);"></ha-icon>
+                  <div class="bed-title">1 · Sleep mode</div>
+                  <sol-help text="Forces bedroom lights to dark even during a 04:30 summer sunrise or daytime nap. Triggered by Phone DND, Watch Bedtime, or manual sleep switch. Unlatches automatically when Virtual Sunrise begins or upon dawn outdoor daylight."></sol-help>
+                  <div class="spacer"></div>
+                  <div class="badge ${sleepActive ? "badge-amber" : "badge-dim"}">
+                    ${sleepActive ? "Asleep (Night active)" : "Awake (Standby)"}
+                  </div>
+                </div>
+
+                <!-- Triggers Status Bar -->
+                <div class="triggers-bar">
+                  <div class="trigger-item ${phoneActive ? "active" : ""}">
+                    <ha-icon icon="mdi:cellphone"></ha-icon>
+                    <span>Phone DND: <strong>${phoneActive ? "Priority Only" : "Off"}</strong></span>
+                  </div>
+                  <div class="trigger-item ${watchActive ? "active" : ""}">
+                    <ha-icon icon="mdi:watch-variant"></ha-icon>
+                    <span>Pixel Watch: <strong>${watchActive ? "Bedtime Mode" : "Off"}</strong></span>
+                  </div>
+                  <button
+                    class="manual-sleep-btn ${manualActive ? "active" : ""}"
+                    @click="${() => toggleSleep(this.hass)}"
+                    title="Toggle manual sleep helper"
+                  >
+                    <ha-icon icon="mdi:power-sleep"></ha-icon>
+                    <span>Manual Switch: <strong>${manualActive ? "ON" : "OFF"}</strong></span>
+                  </button>
+                </div>
+
+                <!-- Dawn Release Setting -->
+                <div class="sleep-inputs-grid">
+                  <div>
+                    <div style="display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--sol-text-2); margin-bottom: 4px;">
+                      <ha-icon icon="mdi:weather-sunset-up" style="--mdc-icon-size: 14px; color: var(--sol-amber);"></ha-icon>
+                      Release lux (dawn unlatch)
+                      <sol-help text="Outdoor light level at which sleep mode automatically unlatches so daytime lighting takes over seamlessly."></sol-help>
+                    </div>
+                    <div class="input-with-unit">
+                      <input
+                        type="number"
+                        class="num-input"
+                        style="flex: 1;"
+                        .value="${String(house.night_release_lux ?? 10)}"
+                        @change="${(e: Event) => {
+                          const v = parseFloat((e.target as HTMLInputElement).value);
+                          setHouse(this.hass, { night_release_lux: v });
+                        }}"
+                      />
+                      <span class="unit-label">lx</span>
+                    </div>
                   </div>
                 </div>
               </div>

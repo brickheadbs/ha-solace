@@ -300,6 +300,11 @@ export class SolTabHome extends LitElement {
       .btn-pill ha-icon {
         --mdc-icon-size: 15px;
       }
+      .head-btn-stack {
+        display: inline-flex;
+        flex-direction: column;
+        gap: 5px;
+      }
 
       /* One body shape for every card: main readout left, sub-data hard right, both on
          the same baseline. The cards drifted apart because each one improvised. */
@@ -955,6 +960,13 @@ export class SolTabHome extends LitElement {
     });
   }
 
+  private toggleWorkMode() {
+    if (!this.hass) return;
+    this.hass.callService("input_boolean", "toggle", {
+      entity_id: "input_boolean.work_mode",
+    });
+  }
+
   /* ---------------------------------------------------------------- sparklines */
 
   private spark(entityId: string, opts: SparkOptions = {}): Spark | null {
@@ -1050,6 +1062,8 @@ export class SolTabHome extends LitElement {
     const gateOpen = this.hass.states["binary_sensor.entry_ambient_gate"]?.state === "on";
     const sleepActive =
       this.hass.states["input_boolean.solace_sleep"]?.state === "on" || w.night_active;
+    const workActive =
+      this.hass.states["input_boolean.work_mode"]?.state === "on" || !!w.work_mode;
 
     // Outdoor lux spans four decades between a dark night and midday, so a linear axis
     // renders the whole night as a flat line against one spike. Log keeps the shape.
@@ -1071,14 +1085,24 @@ export class SolTabHome extends LitElement {
             Bias
             <ha-icon icon=${this.biasOpen ? "mdi:chevron-up" : "mdi:chevron-down"}></ha-icon>
           </button>
-          <button
-            class="btn-pill"
-            style="background: ${sleepActive ? "rgba(149,117,205,.2)" : "var(--sol-control)"}; color: ${sleepActive ? "#b39ddb" : "var(--sol-text-3)"};"
-            @click=${() => this.toggleSleep()}
-          >
-            <ha-icon icon="mdi:weather-night"></ha-icon>
-            ${sleepActive ? "Sleep ON" : "Sleep"}
-          </button>
+          <div class="head-btn-stack">
+            <button
+              class="btn-pill"
+              style="background: ${workActive ? "rgba(33,150,243,.25)" : "var(--sol-control)"}; color: ${workActive ? "#64b5f6" : "var(--sol-text-3)"};"
+              @click=${() => this.toggleWorkMode()}
+            >
+              <ha-icon icon="mdi:desk-lamp"></ha-icon>
+              ${workActive ? "Work ON" : "Work"}
+            </button>
+            <button
+              class="btn-pill"
+              style="background: ${sleepActive ? "rgba(149,117,205,.2)" : "var(--sol-control)"}; color: ${sleepActive ? "#b39ddb" : "var(--sol-text-3)"};"
+              @click=${() => this.toggleSleep()}
+            >
+              <ha-icon icon="mdi:weather-night"></ha-icon>
+              ${sleepActive ? "Sleep ON" : "Sleep"}
+            </button>
+          </div>
         </div>
 
         <div class="c-body">

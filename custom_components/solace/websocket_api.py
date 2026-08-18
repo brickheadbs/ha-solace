@@ -83,6 +83,7 @@ def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_set_sunrise_curve)
     websocket_api.async_register_command(hass, ws_set_sunset_curve)
     websocket_api.async_register_command(hass, ws_toggle_sleep)
+    websocket_api.async_register_command(hass, ws_toggle_work_mode)
     websocket_api.async_register_command(hass, ws_set_room)
     websocket_api.async_register_command(hass, ws_set_light)
     websocket_api.async_register_command(hass, ws_room_action)
@@ -326,6 +327,7 @@ def _snapshot(hass: HomeAssistant, coordinator: SolaceCoordinator) -> dict[str, 
             "elevation": sun_attrs.get("elevation"),
             "kelvin": master_out.target_kelvin,
             "asleep": coordinator._asleep(),  # noqa: SLF001
+            "work_mode": coordinator._work_mode(),  # noqa: SLF001
             "phone_dnd": coordinator._phone_dnd(),  # noqa: SLF001
             "watch_bedtime": coordinator._watch_bedtime(),  # noqa: SLF001
             "manual_sleep": coordinator._manual_sleep(),  # noqa: SLF001
@@ -666,6 +668,25 @@ async def ws_toggle_sleep(hass: HomeAssistant, connection, msg: dict[str, Any]) 
     )
     await coordinator.async_request_refresh()
     connection.send_result(msg["id"], {"success": True, "asleep": coordinator._asleep()})
+
+
+@websocket_api.websocket_command({vol.Required("type"): "solace/toggle_work_mode"})
+@websocket_api.async_response
+async def ws_toggle_work_mode(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    """Toggle work mode helper."""
+    entry = _entry(hass)
+    if entry is None:
+        connection.send_error(msg["id"], "not_loaded", "Solace is not set up")
+        return
+    coordinator = entry.runtime_data.coordinator
+    await hass.services.async_call(
+        "input_boolean",
+        "toggle",
+        {"entity_id": "input_boolean.work_mode"},
+        context=coordinator.writer.new_context(),
+    )
+    await coordinator.async_request_refresh()
+    connection.send_result(msg["id"], {"success": True, "work_mode": coordinator._work_mode()})
 
 
 

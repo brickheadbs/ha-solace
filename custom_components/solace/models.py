@@ -241,6 +241,12 @@ class HouseSettings:
     bedtime_dwell_hour: float = 22.5
     bedtime_dwell_level: int = 15
 
+    # -- Work Mode ----------------------------------------------------------------
+    work_mode_desk_level: int = 254
+    work_mode_backlight_level: int = 200
+    work_mode_corner_level: int = 180
+    work_mode_debounce_minutes: float = 5.0
+
     # -- Display Only -------------------------------------------------------------
     gamma: float = 2.39
 

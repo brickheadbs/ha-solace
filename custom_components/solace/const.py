@@ -181,6 +181,11 @@ HOUSE_SETTINGS: tuple[Setting, ...] = (
     Setting("bedtime_dwell_enabled", "Bedtime wind-down", 0, 1, 1, 1, None, "mdi:bed-outline"),
     Setting("bedtime_dwell_hour", "Bedtime wind-down hour", 0, 23.75, 0.25, 22.5, "h", "mdi:bed-clock"),
     Setting("bedtime_dwell_level", "Bedtime wind-down level", 0, 254, 1, 15, None, "mdi:bed"),
+    # Work Mode
+    Setting("work_mode_desk_level", "Work mode: Desk brightness", 0, 254, 1, 254, None, "mdi:lamp"),
+    Setting("work_mode_backlight_level", "Work mode: Backlight brightness", 0, 254, 1, 200, None, "mdi:lightbulb-outline"),
+    Setting("work_mode_corner_level", "Work mode: Corner brightness", 0, 254, 1, 180, None, "mdi:lightbulb"),
+    Setting("work_mode_debounce_minutes", "Work mode: Occupancy debounce", 0.5, 60, 0.5, 5, "min", "mdi:timer-sand"),
     # Display only
     Setting("gamma", "Gamma (display only)", 1, 4, 0.01, 2.39, None, "mdi:chart-bell-curve"),
 )

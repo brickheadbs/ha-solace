@@ -16,7 +16,7 @@ absolutes.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import timedelta
 from typing import Any
 
@@ -210,6 +210,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         self._lux_warned = False
         self._night_latched = False
         self._unsubscribes: list[Any] = []
+        self._last_presence: dict[str, float] = {}
         self.last_tick: Any = None
         self._tuning = False
 
@@ -431,9 +432,10 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         for key in (CONF_SLEEP_TOGGLE, CONF_ALARM_ENTITY, CONF_AWAY_ENTITY):
             if extra := (self.config_entry.options.get(key) or self.config_entry.data.get(key)):
                 triggers.append(extra)
-        # Always listen for away_mode helper and watch bedtime sensors if present in HA
+        # Always listen for away_mode / work_mode helpers and watch bedtime sensors if present in HA
         for extra_sensor in (
             "input_boolean.away_mode",
+            "input_boolean.work_mode",
             "binary_sensor.google_pixel_watch_2_bedtime_mode",
             "sensor.google_pixel_watch_2_do_not_disturb_sensor",
         ):
@@ -501,9 +503,11 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                 RoomState(subentry_id=subentry.subentry_id, name=subentry.title),
             )
             is_occupied = self._any_on(subentry.data.get(CONF_PRESENCE), default=True)
-            if is_occupied and not room.occupied:
-                room.occupied_since = now.timestamp()
-            elif not is_occupied:
+            if is_occupied:
+                if not room.occupied:
+                    room.occupied_since = now.timestamp()
+                self._last_presence[subentry.subentry_id] = now.timestamp()
+            else:
                 room.occupied_since = None
             room.occupied = is_occupied
 
@@ -630,6 +634,29 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
             ),
             zone=zone,
         )
+
+        # Work Mode overrides the 3 office zone lights with manual work brightness when occupied (with debounce).
+        if self._work_mode() and entity_id in (
+            "light.living_office_desk_lamp",
+            "light.living_office_e",
+            "light.living_office_w",
+        ):
+            last_occ = self._last_presence.get(subentry.subentry_id, 0.0)
+            now_ts = dt_util.utcnow().timestamp()
+            elapsed = (now_ts - last_occ) if last_occ > 0 else 999999.0
+            debounce_s = float(house.work_mode_debounce_minutes) * 60.0
+            if occupied or elapsed < debounce_s:
+                if entity_id == "light.living_office_desk_lamp":
+                    work_target = house.work_mode_desk_level
+                elif entity_id == "light.living_office_e":
+                    work_target = house.work_mode_backlight_level
+                else:
+                    work_target = house.work_mode_corner_level
+                work_target = min(254, max(0, int(work_target)))
+                solution = replace(solution, level=work_target, source="work", should_write=True)
+            else:
+                solution = replace(solution, level=0, source="off", should_write=True)
+
         room.solutions[entity_id] = solution
         # ⚠️ Read the PREVIOUS source before overwriting it. Reading it back afterwards made
         # `last_src` identical to `solution.source`, so every "what changed" branch in the
@@ -898,6 +925,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         if self._dnd():
             if not self._night_latched:
                 _LOGGER.debug("Solace: entering night mode (dnd/bedtime sensor)")
+                self._clear_work_mode()
             self._night_latched = True
             return
 
@@ -913,9 +941,11 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                 _LOGGER.info("Solace: leaving night mode (dawn/sunrise/alarm override on sleep toggle)")
                 self._night_latched = False
                 self._clear_sleep_toggle()
+                self._clear_work_mode()
                 return
             if not self._night_latched:
                 _LOGGER.debug("Solace: entering night mode (sleep toggle)")
+                self._clear_work_mode()
             self._night_latched = True
             return
 
@@ -926,6 +956,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
             _LOGGER.debug("Solace: leaving night mode (sunrise / alarm / dawn lux %s)", lux)
             self._night_latched = False
             self._clear_sleep_toggle()
+            self._clear_work_mode()
 
     def _night_active(self) -> bool:
         return self._night_latched
@@ -1139,6 +1170,33 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
             or "input_boolean.solace_sleep"
         )
         return self._is_on(entity_id, default=False)
+
+    def _work_mode(self) -> bool:
+        """Is work mode active?"""
+        return self._is_on("input_boolean.work_mode", default=False)
+
+    def _clear_work_mode(self) -> None:
+        """Auto-clear work mode helper when night mode or morning release fires."""
+        if self._work_mode():
+            _LOGGER.info("Solace: auto-clearing work mode helper")
+            if self.hass.services.has_service("input_boolean", "turn_off"):
+                self.hass.async_create_task(
+                    self.hass.services.async_call(
+                        "input_boolean",
+                        "turn_off",
+                        {"entity_id": "input_boolean.work_mode"},
+                        context=self.writer.new_context(),
+                    )
+                )
+            elif self.hass.services.has_service("homeassistant", "turn_off"):
+                self.hass.async_create_task(
+                    self.hass.services.async_call(
+                        "homeassistant",
+                        "turn_off",
+                        {"entity_id": "input_boolean.work_mode"},
+                        context=self.writer.new_context(),
+                    )
+                )
 
     def _dnd(self) -> bool:
         """Asleep? Checks configured DND entity and Pixel Watch bedtime sensors."""
