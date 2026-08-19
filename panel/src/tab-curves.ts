@@ -6,7 +6,8 @@
  */
 
 import { LitElement, css, html, nothing, svg } from "lit";
-import { customElement, property, state } from "lit/decorators.js";
+import { property, state } from "lit/decorators.js";
+import { customElement } from "./custom-element";
 import type { BrightnessPoint, ColourPoint, Hass, LuxPoint, Snapshot } from "./api";
 import { setBrightnessTimeline, setColourTimeline, setHouse, setLuxCurve, setLuxCloudyCurve } from "./api";
 import { derimToKelvin, formatDerimWithKelvin, kelvinToDerim } from "./derim";

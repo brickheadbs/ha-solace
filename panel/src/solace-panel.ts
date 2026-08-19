@@ -16,7 +16,8 @@
  */
 
 import { LitElement, css, html, nothing } from "lit";
-import { customElement, property, state } from "lit/decorators.js";
+import { property, state } from "lit/decorators.js";
+import { customElement } from "./custom-element";
 import type { Hass, Snapshot } from "./api";
 import { subscribe } from "./api";
 import { kelvinToDerim } from "./derim";

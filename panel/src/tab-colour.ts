@@ -11,7 +11,8 @@
  */
 
 import { LitElement, css, html, nothing } from "lit";
-import { customElement, property, state } from "lit/decorators.js";
+import { property, state } from "lit/decorators.js";
+import { customElement } from "./custom-element";
 import type { FamilyFade, Hass, Schema, Snapshot } from "./api";
 import { setHouse } from "./api";
 import "./chart";

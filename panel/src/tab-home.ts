@@ -7,7 +7,8 @@
  */
 
 import { LitElement, css, html, nothing, svg } from "lit";
-import { customElement, property, state } from "lit/decorators.js";
+import { property, state } from "lit/decorators.js";
+import { customElement } from "./custom-element";
 import type { Hass, RoomRow, Snapshot } from "./api";
 import { setRoom } from "./api";
 import { num, stopLabel } from "./fmt";

@@ -4,7 +4,8 @@
  */
 
 import { LitElement, css, html, nothing, svg } from "lit";
-import { customElement, property, state } from "lit/decorators.js";
+import { property, state } from "lit/decorators.js";
+import { customElement } from "./custom-element";
 import type { Hass, Snapshot } from "./api";
 import { setHouse, setRoom, setSunriseCurve, setSunsetCurve, toggleSleep, toggleWorkMode } from "./api";
 import { MonotoneSpline } from "./spline";

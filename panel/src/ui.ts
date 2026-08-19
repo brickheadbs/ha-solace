@@ -14,7 +14,8 @@
  */
 
 import { LitElement, css, html, nothing } from "lit";
-import { customElement, property } from "lit/decorators.js";
+import { property } from "lit/decorators.js";
+import { customElement } from "./custom-element";
 import { tokens } from "./tokens";
 
 /* ------------------------------------------------------------------ help bubble */

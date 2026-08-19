@@ -8,7 +8,8 @@
  */
 
 import { LitElement, css, html, nothing } from "lit";
-import { customElement, property, state } from "lit/decorators.js";
+import { property, state } from "lit/decorators.js";
+import { customElement } from "./custom-element";
 import type { Hass, LightRow, RoomRow, Snapshot, ZoneRow } from "./api";
 import { roomAction, setHouse, setLight, setRoom, setZones } from "./api";
 import { ago, consequence, countdown, lightPct, num, stopLabel } from "./fmt";
