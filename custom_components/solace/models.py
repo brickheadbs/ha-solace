@@ -190,7 +190,7 @@ class HouseSettings:
     # -- Cutoffs & Limits ---------------------------------------------------------
     min_cutoff: int = 1
     rate_limit_step: int = 0
-    dead_zone: int = 2
+    dead_zone: int = 8
 
     # -- The 7 Transitions Matrix -------------------------------------------------
     transition_up_occupancy_s: float = 2.0

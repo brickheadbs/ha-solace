@@ -106,7 +106,7 @@ HOUSE_SETTINGS: tuple[Setting, ...] = (
     ),
     Setting("min_cutoff", "Minimum cutoff", 0, 254, 1, 1, None, "mdi:arrow-collapse-down"),
     Setting("rate_limit_step", "Rate limit", 0, 254, 1, 0, None, "mdi:speedometer-slow"),
-    Setting("dead_zone", "Dead zone", 0, 50, 1, 2, None, "mdi:circle-off-outline"),
+    Setting("dead_zone", "Dead zone", 0, 50, 1, 8, None, "mdi:circle-off-outline"),
     # Transitions Matrix (7 Dedicated Speeds)
     # UP
     Setting("transition_up_occupancy_s", "Occupancy", 0, 60, 0.1, 2, "s", "mdi:motion-sensor"),

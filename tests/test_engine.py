@@ -395,6 +395,8 @@ def test_rate_limiter_zero_step_means_unlimited():
 def test_dead_zone_suppresses_small_changes():
     assert past_dead_zone(52, 51, dead_zone=2) is False
     assert past_dead_zone(54, 52, dead_zone=2) is True
+    assert past_dead_zone(52, 45, dead_zone=8) is False
+    assert past_dead_zone(52, 44, dead_zone=8) is True
 
 
 def test_dead_zone_never_swallows_an_off_or_an_on():

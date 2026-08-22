@@ -948,7 +948,24 @@ export class SolTabHome extends LitElement {
   }
 
   private setHeatLink(mode: string) {
-    this.hass?.callService("water_heater", "set_operation_mode", {
+    if (!this.hass) return;
+    if (mode === "heat_now" || mode === "boost_2h") {
+      this.hass.callService("script", "hw_heat_now");
+      return;
+    }
+    if (mode === "off") {
+      this.hass.callService("water_heater", "set_operation_mode", {
+        entity_id: HEAT_LINK,
+        operation_mode: "off",
+      });
+      if (this.hass.states["input_boolean.hw_cycle_running"]?.state === "on") {
+        this.hass.callService("input_boolean", "turn_off", {
+          entity_id: "input_boolean.hw_cycle_running",
+        });
+      }
+      return;
+    }
+    this.hass.callService("water_heater", "set_operation_mode", {
       entity_id: HEAT_LINK,
       operation_mode: mode,
     });
@@ -1444,7 +1461,7 @@ export class SolTabHome extends LitElement {
           <span class="c-title">Hot Water</span>
           <span class="grow"></span>
           <span class="c-status">
-            ${boosting ? heatLinkMode.replace("boost_", "boost ") : running ? "heating now" : `next ${nextStart}`}
+            ${running ? `heating to ${target.toFixed(0)}°` : boosting ? heatLinkMode.replace("boost_", "boost ") : `next ${nextStart}`}
           </span>
           <button
             class="btn-pill"
@@ -1468,12 +1485,6 @@ export class SolTabHome extends LitElement {
             <span class="sg-v" style="color: var(--sol-amber);">
               ${target.toFixed(1)}° ${winter ? "winter" : "summer"}
             </span>
-            <span class="sg-k">Recovery</span>
-            <span class="sg-v">${observed === null ? "—" : `${observed.toFixed(2)} °C/min`}</span>
-            <span class="sg-k">Learned rate</span>
-            <span class="sg-v">${learnedRate.toFixed(2)} °C/min</span>
-            <span class="sg-k">Automation</span>
-            <span class="sg-v">${enabled ? "on" : "off"}</span>
           </div>
         </div>
 
@@ -1483,15 +1494,20 @@ export class SolTabHome extends LitElement {
                 <div class="hw-row hw-wide">
                   <span class="hw-k">Heat link</span>
                   <div class="hw-seg">
-                    ${(heatLink?.attributes?.operation_list ?? ["off"]).map(
-                      (m: string) => html`
-                        <button
-                          class=${heatLinkMode === m ? "on" : ""}
-                          @click=${() => this.setHeatLink(m)}
-                        >
-                          ${m.replace("boost_", "")}
-                        </button>
-                      `
+                    ${["off", "schedule", "boost_30m", "boost_1h", "heat_now"].map(
+                      (m: string) => {
+                        const isHeatNow = m === "heat_now";
+                        const isOn = isHeatNow ? running : !running && heatLinkMode === m;
+                        const label = isHeatNow ? "heat now" : m.replace("boost_", "");
+                        return html`
+                          <button
+                            class=${isOn ? "on" : ""}
+                            @click=${() => this.setHeatLink(m)}
+                          >
+                            ${label}
+                          </button>
+                        `;
+                      }
                     )}
                   </div>
                 </div>

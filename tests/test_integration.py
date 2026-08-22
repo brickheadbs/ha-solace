@@ -654,3 +654,78 @@ async def test_work_mode_overrides_office_lights_and_auto_clears(hass: HomeAssis
     await hass.async_block_till_done()
     assert hass.states.get("input_boolean.work_mode").state == "off"
 
+
+async def test_occupied_room_turning_on_due_to_falling_lux_uses_automatic_transition(
+    hass: HomeAssistant, entry, world
+) -> None:
+    """When a room is already occupied during daytime and lights turn on from 0 due to
+
+    falling lux, use transition_automatic_s (slow continuous glide), not
+    transition_up_occupancy_s (which is for freshly entering the room).
+    """
+    # 1. Daytime + occupied: lights are off due to full daylight demand = 0.
+    world(lux=5000.0, occupied=True, light_on=False)
+    assert await _setup(hass, entry)
+    coordinator = entry.runtime_data.coordinator
+    room = next(iter(coordinator.rooms.values()))
+    assert room.occupied is True
+    assert room.fresh_occupancy is True  # initial tick set it
+
+    # 2. Advance to next tick: room is still occupied, fresh_occupancy clears to False.
+    world(lux=5000.0, occupied=True, light_on=False)
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+    assert room.occupied is True
+    assert room.fresh_occupancy is False
+
+    calls: list[dict] = []
+    hass.bus.async_listen(
+        "call_service",
+        lambda e: calls.append(e.data) if e.data.get("domain") == "light" else None,
+    )
+
+    # 3. Outdoor lux falls to 10 lx. Demand rises, turning the light on from 0.
+    world(lux=10.0, occupied=True, light_on=False)
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    turn_ons = [c for c in calls if c["service"] == "turn_on"]
+    assert turn_ons, "Solace never wrote to the light on lux drop"
+    got = turn_ons[-1]["service_data"]["transition"]
+    assert got == coordinator.house.transition_automatic_s, (
+        f"lux drop while occupied used {got}s; expected transition_automatic_s "
+        f"({coordinator.house.transition_automatic_s}s)"
+    )
+
+
+async def test_fresh_occupancy_turning_on_from_off_uses_occupancy_transition(
+    hass: HomeAssistant, entry, world
+) -> None:
+    """Entering a dark unoccupied room uses the fast transition_up_occupancy_s."""
+    # 1. Dark + unoccupied: lights are off (ambience level is 0).
+    world(lux=10.0, occupied=False, light_on=False)
+    assert await _setup(hass, entry)
+    coordinator = entry.runtime_data.coordinator
+    room = next(iter(coordinator.rooms.values()))
+    assert room.occupied is False
+
+    calls: list[dict] = []
+    hass.bus.async_listen(
+        "call_service",
+        lambda e: calls.append(e.data) if e.data.get("domain") == "light" else None,
+    )
+
+    # 2. Walk in: presence becomes True.
+    world(lux=10.0, occupied=True, light_on=False)
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    turn_ons = [c for c in calls if c["service"] == "turn_on"]
+    assert turn_ons, "entering dark room never wrote to light"
+    got = turn_ons[-1]["service_data"]["transition"]
+    assert got == coordinator.house.transition_up_occupancy_s, (
+        f"fresh occupancy used {got}s; expected transition_up_occupancy_s "
+        f"({coordinator.house.transition_up_occupancy_s}s)"
+    )
+
+

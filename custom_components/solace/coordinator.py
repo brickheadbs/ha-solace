@@ -112,6 +112,7 @@ class RoomState:
     last_mode: Mode = Mode.NORMAL
     occupied: bool = False
     occupied_since: float | None = None
+    fresh_occupancy: bool = False
 
     def is_manual(self, hold_minutes: float, now: float) -> bool:
         if self.manual_switch:
@@ -264,7 +265,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         )
         fields["min_cutoff"] = int(fields.get("min_cutoff", 1))
         fields["rate_limit_step"] = int(fields.get("rate_limit_step", 0))
-        fields["dead_zone"] = int(fields.get("dead_zone", 2))
+        fields["dead_zone"] = int(fields.get("dead_zone", 8))
         fields["day_kelvin"] = int(fields.get("day_kelvin", 4000))
         fields["night_kelvin"] = int(fields.get("night_kelvin", 2200))
         fields["colour_trim_kelvin"] = int(fields.get("colour_trim_kelvin", 0))
@@ -494,9 +495,13 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
             if is_occupied:
                 if not room.occupied:
                     room.occupied_since = now.timestamp()
+                    room.fresh_occupancy = True
+                else:
+                    room.fresh_occupancy = False
                 self._last_presence[subentry.subentry_id] = now.timestamp()
             else:
                 room.occupied_since = None
+                room.fresh_occupancy = False
             room.occupied = is_occupied
 
         away = self._away()
@@ -666,14 +671,17 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
 
         was_off = current == 0
 
-        if was_off:
-            if solution.source == "ambience":
-                transition = house.transition_up_ambience_s
-            else:
-                transition = house.transition_up_occupancy_s
-        elif self._tuning:
+        if self._tuning:
             # A slider is being dragged in the dashboard.
             transition = house.transition_manual_s
+        elif was_off:
+            if solution.source == "ambience":
+                transition = house.transition_up_ambience_s
+            elif room.fresh_occupancy:
+                transition = house.transition_up_occupancy_s
+            else:
+                # Room was already occupied; turn-on is driven by falling lux / curve change.
+                transition = house.transition_automatic_s
         elif solution.source == "diminish" and last_src == "demand":
             transition = house.transition_down_diminish_s
         elif solution.source == "ambience" and last_src in ("demand", "diminish"):
