@@ -402,8 +402,14 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         triggers = [self._lux_entity()]
         if weather := self._weather_entity():
             triggers.append(weather)
-        if dnd := self.config_entry.options.get(CONF_DND_ENTITY):
-            triggers.append(dnd)
+        dnd_opt = (
+            self.config_entry.options.get(CONF_DND_ENTITY)
+            or self.config_entry.data.get(CONF_DND_ENTITY)
+        )
+        if isinstance(dnd_opt, str) and dnd_opt:
+            triggers.append(dnd_opt)
+        elif isinstance(dnd_opt, list):
+            triggers.extend(dnd_opt)
         for subentry in self._subentries():
             for key in (CONF_PRESENCE, CONF_NEAR_PRESENCE):
                 value = subentry.data.get(key)
@@ -421,10 +427,11 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         for key in (CONF_SLEEP_TOGGLE, CONF_ALARM_ENTITY, CONF_AWAY_ENTITY):
             if extra := (self.config_entry.options.get(key) or self.config_entry.data.get(key)):
                 triggers.append(extra)
-        # Always listen for away_mode / work_mode helpers and watch bedtime sensors if present in HA
+        # Always listen for away_mode / work_mode helpers and phone/watch bedtime sensors if present in HA
         for extra_sensor in (
             "input_boolean.away_mode",
             "input_boolean.work_mode",
+            "sensor.pixel_8a_do_not_disturb_sensor",
             "binary_sensor.google_pixel_watch_2_bedtime_mode",
             "sensor.google_pixel_watch_2_do_not_disturb_sensor",
         ):

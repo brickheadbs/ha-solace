@@ -729,3 +729,32 @@ async def test_fresh_occupancy_turning_on_from_off_uses_occupancy_transition(
     )
 
 
+async def test_dnd_sensor_in_entry_data_is_subscribed_and_engages_night_mode(
+    hass: HomeAssistant, entry, world
+) -> None:
+    """Phone DND sensor configured in entry.data must be subscribed and latch night mode on priority_only."""
+    from custom_components.solace.const import CONF_DND_ENTITY
+
+    hass.config_entries.async_update_entry(
+        entry,
+        data={**entry.data, CONF_DND_ENTITY: "sensor.pixel_8a_do_not_disturb_sensor"},
+        options={k: v for k, v in entry.options.items() if k != CONF_DND_ENTITY},
+    )
+    hass.states.async_set("sensor.pixel_8a_do_not_disturb_sensor", "off")
+    world(lux=5.0, occupied=True, light_on=True)
+
+    assert await _setup(hass, entry)
+    coordinator = entry.runtime_data.coordinator
+    assert coordinator._phone_dnd() is False
+    assert coordinator._night_latched is False
+
+    # Simulate Pixel 8a switching to priority_only (event triggers _on_world_change).
+    hass.states.async_set("sensor.pixel_8a_do_not_disturb_sensor", "priority_only")
+    await hass.async_block_till_done()
+
+    assert coordinator._phone_dnd() is True
+    assert coordinator._night_latched is True
+
+
+
+
