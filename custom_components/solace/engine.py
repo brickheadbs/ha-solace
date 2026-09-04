@@ -188,6 +188,7 @@ def solve_master(
     clock_hour: float,
     house: HouseSettings,
     cloud_coverage: float | None = None,
+    demand_override: float | None = None,
 ) -> MasterOutput:
     """Run Master Processing to generate baseline Target Brightness and Target Kelvin."""
     trace: list[tuple[str, object]] = []
@@ -208,8 +209,12 @@ def solve_master(
     trace.append(("cloud_coverage", cloud_coverage))
     trace.append(("cloud_alpha", round(alpha, 4)))
 
-    spline_demand = (1.0 - alpha) * demand_clear + alpha * demand_cloudy
-    demand_val = _clamp01(spline_demand)
+    if demand_override is not None:
+        demand_val = _clamp01(demand_override)
+        trace.append(("demand_override", round(demand_val, 4)))
+    else:
+        spline_demand = (1.0 - alpha) * demand_clear + alpha * demand_cloudy
+        demand_val = _clamp01(spline_demand)
     trace.append(("demand", round(demand_val, 4)))
 
     # 2. 24h Target Brightness Schedule
@@ -323,6 +328,7 @@ def solve(
         data.clock_hour,
         house,
         cloud_coverage=data.cloud_coverage,
+        demand_override=data.demand_override,
     )
     trace.extend(master.trace)
 

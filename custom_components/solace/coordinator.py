@@ -63,21 +63,42 @@ from .const import (
     ROOM_DEFAULTS,
     SUBENTRY_TYPE_ROOM,
 )
-from .engine import ambience_threshold, debounce_ambience, solve
+from .engine import (
+    ambience_threshold,
+    compute_state_table,
+    debounce_ambience,
+    demand,
+    solve,
+    solve_master,
+)
 from .fade import FadeProfile, fade_profile
+from .filter import AsymmetricFilter
+from .horizon import (
+    InteractivePreviewAutomaton,
+    PredictiveHorizonPlanner,
+    PreviewState,
+    WatchdogState,
+    WatchdogSupervisor,
+)
 from .models import (
     EngineInput,
     Family,
+    FixtureStandbyState,
     HouseSettings,
     LightSettings,
     Mode,
+    RampKind,
     RampPoint,
     RoomSettings,
     Solution,
     SplinePoint,
+    StandbyStateCache,
+    StandbyTarget,
+    StateTier,
     ZoneSettings,
 )
 from .remotes import RemoteDispatcher
+from .solar import ClearSkySolarModel
 from .writer import LightWriter, infer_family
 
 _LOGGER = logging.getLogger(__name__)
@@ -214,6 +235,13 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         self._last_presence: dict[str, float] = {}
         self.last_tick: Any = None
         self._tuning = False
+        self.standby_cache = StandbyStateCache()
+        self.watchdog = WatchdogSupervisor(nominal_sync_s=300.0, timeout_s=1800.0)
+        self.preview = InteractivePreviewAutomaton(throttle_interval_s=0.150)
+        self._demand_filter = AsymmetricFilter(initial_value=0.0, sample_period_s=300.0)
+        self._last_demand_filter_time: float | None = None
+        self._hourly_cloud_forecast: list[dict[str, Any]] = []
+        self._last_forecast_refresh: float = 0.0
 
     # ------------------------------------------------------------------ settings
 
@@ -516,6 +544,31 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         sunset_progress = self._sunset_progress(clock_hour, house)
         bedtime_dwell_active = self._bedtime_dwell_active(clock_hour, house)
 
+        # Refresh hourly weather forecast if due
+        await self._async_refresh_forecast()
+
+        # Compute raw master demand and filter via AsymmetricFilter (instant attack, damped decay)
+        cloud_coverage = self._cloud_coverage()
+        raw_master = solve_master(lux, clock_hour, house, cloud_coverage=cloud_coverage)
+        now_ts = now.timestamp()
+        if (
+            self._last_demand_filter_time is None
+            or (now_ts - self._last_demand_filter_time) < 1.0
+            or self._tuning
+        ):
+            # Cold boot, tuning slider drag, or zero-elapsed-time test: sync filter immediately
+            filtered_demand = raw_master.demand
+            self._demand_filter.reset(filtered_demand)
+        else:
+            dt_s = now_ts - self._last_demand_filter_time
+            filtered_demand = self._demand_filter.update(raw_master.demand, dt_s=dt_s)
+        self._last_demand_filter_time = now_ts
+        self.watchdog.last_sync_time = now_ts
+        self.watchdog.last_valid_demand = filtered_demand
+
+        # Update continuous 4-level (+ Ls) Standby State Cache
+        self._update_standby_cache(house, clock_hour, filtered_demand, lux, cloud_coverage)
+
         for subentry in self._subentries():
             room = self.rooms[subentry.subentry_id]
             settings = self.room_settings(subentry)
@@ -553,6 +606,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                     await self._async_apply_light(
                         entity_id, subentry, house, settings, room, lux, dnd, clock_hour,
                         occupied, near_clear, manual, asleep, away, sunrise_progress, sunset_progress, bedtime_dwell_active, zone,
+                        filtered_demand=filtered_demand,
                     )
                 except Exception:  # noqa: BLE001
                     _LOGGER.exception("Solace: failed to apply %s", entity_id)
@@ -597,6 +651,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         sunset_progress: float | None,
         bedtime_dwell_active: bool,
         zone: ZoneSettings | None = None,
+        filtered_demand: float | None = None,
     ) -> None:
         state = self.hass.states.get(entity_id)
         if state is None:
@@ -631,6 +686,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                 last_written_level=room.last_written.get(entity_id),
                 last_source=room.last_source.get(entity_id),
                 cloud_coverage=self._cloud_coverage(),
+                demand_override=filtered_demand,
             ),
             zone=zone,
         )
@@ -672,34 +728,46 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
 
         if solution.level <= 0:
             if current > 0:
-                await self.writer.async_turn_off(entity_id, house.transition_down_off_s)
+                await self.writer.async_turn_off(entity_id, house.transition_down_off_s, is_acute=True)
                 room.last_written[entity_id] = 0
             return
 
         was_off = current == 0
 
+        is_acute = False
         if self._tuning:
             # A slider is being dragged in the dashboard.
             transition = house.transition_manual_s
+            is_acute = True
         elif was_off:
             if solution.source == "ambience":
                 transition = house.transition_up_ambience_s
             elif room.fresh_occupancy:
                 transition = house.transition_up_occupancy_s
+                is_acute = True
             else:
                 # Room was already occupied; turn-on is driven by falling lux / curve change.
                 transition = house.transition_automatic_s
         elif solution.source == "diminish" and last_src == "demand":
             transition = house.transition_down_diminish_s
+            is_acute = True
         elif solution.source == "ambience" and last_src in ("demand", "diminish"):
             transition = house.transition_down_ambience_s
         elif solution.source == "demand" and last_src in ("diminish", "ambience"):
             transition = house.transition_up_occupancy_s
+            is_acute = True
         elif solution.mode is Mode.NIGHT and room.last_mode is not Mode.NIGHT:
             transition = house.transition_down_ambience_s
         else:
             # Automatic: steady-state lux / cloud / curve tracking
             transition = house.transition_automatic_s
+
+        # RampLock hardware lease check: suppress chronic writes if fixture is leased to an acute ramp
+        loop_now = self.hass.loop.time()
+        if not is_acute and self.writer.ramp_tracker.should_suppress_chronic_write(entity_id, loop_now):
+            _LOGGER.debug("%s: suppressing chronic background write (RampLock active)", entity_id)
+            room.last_written[entity_id] = solution.level
+            return
 
         # An OFF bulb rejects a colour command — it wakes at its old colour. So colour
         # has to ride in the same turn-on, and only then.
@@ -710,7 +778,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
             ).kelvin
 
         await self.writer.async_set_brightness(
-            entity_id, solution.level, transition, wake_kelvin=wake_kelvin
+            entity_id, solution.level, transition, wake_kelvin=wake_kelvin, is_acute=is_acute
         )
         room.last_written[entity_id] = solution.level
 
@@ -964,10 +1032,155 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
     def _night_active(self) -> bool:
         return self._night_latched
 
+    async def _async_refresh_forecast(self) -> None:
+        """Fetch hourly weather forecast if weather service is available."""
+        now_ts = self.hass.loop.time()
+        if now_ts - self._last_forecast_refresh < 1800.0:
+            return
+        self._last_forecast_refresh = now_ts
+        weather_entity = self._weather_entity()
+        if not weather_entity:
+            return
+        try:
+            if self.hass.services.has_service("weather", "get_forecasts"):
+                res = await self.hass.services.async_call(
+                    "weather",
+                    "get_forecasts",
+                    {"entity_id": weather_entity, "type": "hourly"},
+                    blocking=True,
+                    return_response=True,
+                )
+                if res and weather_entity in res:
+                    self._hourly_cloud_forecast = res[weather_entity].get("forecast") or []
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug("Solace: hourly weather forecast call failed or not supported")
+
+    def _update_standby_cache(
+        self,
+        house: HouseSettings,
+        clock_hour: float,
+        filtered_demand: float,
+        lux: float,
+        cloud_coverage: float | None,
+    ) -> None:
+        """Pre-compute L0, L1, L2, L3, Ls targets for all fixtures across all rooms."""
+        master = solve_master(
+            lux,
+            clock_hour,
+            house,
+            cloud_coverage=cloud_coverage,
+            demand_override=filtered_demand,
+        )
+        dusk = self._dusk_hour()
+        for subentry in self._subentries():
+            room_settings = self.room_settings(subentry)
+            zone_for = {
+                light_id: zone
+                for zone in room_settings.zones
+                for light_id in zone.lights
+            }
+            fixture_states: dict[str, FixtureStandbyState] = {}
+            for entity_id in subentry.data.get(CONF_LIGHTS, []):
+                light = self.light_settings(entity_id, subentry)
+                zone = zone_for.get(entity_id)
+                table = compute_state_table(
+                    master, house, room_settings, light, clock_hour=clock_hour, zone=zone
+                )
+                wake_colour = resolve_colour(clock_hour, dusk, house, light).kelvin
+
+                l0 = StandbyTarget(
+                    level=0,
+                    kelvin=None,
+                    transition_s=house.transition_down_off_s,
+                )
+                l1 = StandbyTarget(
+                    level=table.l1,
+                    kelvin=table.target_kelvin,
+                    transition_s=house.transition_up_occupancy_s,
+                )
+                l2 = StandbyTarget(
+                    level=table.l2,
+                    kelvin=table.target_kelvin,
+                    transition_s=house.transition_down_diminish_s,
+                )
+                l3 = StandbyTarget(
+                    level=table.l3,
+                    kelvin=wake_colour,
+                    transition_s=house.transition_up_ambience_s,
+                )
+                ls = StandbyTarget(
+                    level=table.ls,
+                    kelvin=house.night_kelvin,
+                    transition_s=house.transition_up_occupancy_s,
+                )
+                fixture_states[entity_id] = FixtureStandbyState(
+                    l0=l0, l1=l1, l2=l2, l3=l3, ls=ls
+                )
+            self.standby_cache.update_room(subentry.subentry_id, fixture_states)
+
+    def _handle_fast_path_presence(self, entity_id: str) -> None:
+        """Instant deployment of pre-computed standby state upon occupancy trigger (<10ms)."""
+        now_ts = dt_util.utcnow().timestamp()
+        for subentry in self._subentries():
+            presence_entities = subentry.data.get(CONF_PRESENCE)
+            matches = False
+            if isinstance(presence_entities, str) and presence_entities == entity_id:
+                matches = True
+            elif isinstance(presence_entities, (list, tuple)) and entity_id in presence_entities:
+                matches = True
+
+            if not matches:
+                continue
+
+            room = self.rooms.get(subentry.subentry_id)
+            if room is None:
+                continue
+
+            settings = self.room_settings(subentry)
+            if room.occupied or room.is_manual(settings.manual_hold_minutes, now_ts):
+                continue
+
+            room.occupied = True
+            room.occupied_since = now_ts
+            room.fresh_occupancy = True
+            self._last_presence[subentry.subentry_id] = now_ts
+
+            tier = StateTier.LS_NIGHT if self._night_active() else StateTier.L1_DEMAND
+            fixtures = subentry.data.get(CONF_LIGHTS, [])
+            groups = self.standby_cache.batch_room_dispatch(subentry.subentry_id, fixtures, tier)
+
+            for (level, kelvin, transition_s), entity_ids in groups.items():
+                if level > 0:
+                    self.hass.async_create_task(
+                        self.writer.async_set_brightness(
+                            entity_ids,
+                            level=level,
+                            transition_s=transition_s,
+                            wake_kelvin=kelvin,
+                            is_acute=True,
+                        )
+                    )
+                for eid in entity_ids:
+                    room.last_written[eid] = level
+                    room.last_source[eid] = "night" if tier == StateTier.LS_NIGHT else "demand"
+
     # ------------------------------------------------------------------ listeners
 
     @callback
-    def _on_world_change(self, _event: Event[EventStateChangedData]) -> None:
+    def _on_world_change(self, event: Event[EventStateChangedData]) -> None:
+        data = event.data
+        new_state = data.get("new_state")
+        old_state = data.get("old_state")
+        entity_id = data.get("entity_id")
+
+        if (
+            new_state is not None
+            and new_state.state == STATE_ON
+            and (old_state is None or old_state.state != STATE_ON)
+            and entity_id
+        ):
+            self._handle_fast_path_presence(entity_id)
+
         self.hass.async_create_task(self.async_refresh())
 
     # ------------------------------------------------------------------ helpers
@@ -1026,7 +1239,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         )
 
     def _cloud_coverage(self) -> float | None:
-        """Current cloud coverage percentage (0.0 to 100.0) from the weather entity."""
+        """Current effective cloud coverage percentage (0.0 to 100.0) adjusted for optical depth."""
         entity_id = self._weather_entity()
         if not entity_id:
             return None
@@ -1037,7 +1250,10 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         if cov is None:
             return None
         try:
-            return float(cov)
+            cov_val = float(cov)
+            cond = str(state.state or "")
+            precip = float(state.attributes.get("precipitation") or 0.0)
+            return ClearSkySolarModel.effective_cloud_coverage(cov_val, cond, precip)
         except (TypeError, ValueError):
             return None
 

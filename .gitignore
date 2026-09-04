@@ -9,3 +9,8 @@ __pycache__/
 panel/node_modules
 panel/node_modules/
 panel/package-lock.json
+
+# Agent swarm scratch
+.agents/
+ORIGINAL_REQUEST.md
+PROJECT.md
