@@ -14,6 +14,15 @@ from dataclasses import dataclass, field, replace
 from enum import Enum
 
 from .spline import SplinePoint
+from .standby import (
+    FixtureRamp,
+    FixtureStandbyState,
+    RampKind,
+    RampTracker,
+    StandbyStateCache,
+    StandbyTarget,
+    StateTier,
+)
 
 __all__ = [
     "Family",
@@ -29,6 +38,13 @@ __all__ = [
     "EngineInput",
     "Solution",
     "RemoteSettings",
+    "StateTier",
+    "StandbyTarget",
+    "FixtureStandbyState",
+    "StandbyStateCache",
+    "RampKind",
+    "FixtureRamp",
+    "RampTracker",
     "DEFAULT_LUX_CURVE",
     "DEFAULT_LUX_CLOUDY_CURVE",
     "DEFAULT_BRIGHTNESS_TIMELINE",
@@ -332,6 +348,7 @@ class EngineInput:
     last_written_level: int | None = None
     last_source: str | None = None
     cloud_coverage: float | None = None
+    demand_override: float | None = None
 
 
 @dataclass(frozen=True, slots=True)

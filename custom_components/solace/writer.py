@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from typing import Any, Sequence
 
 from homeassistant.components.light import (
     ATTR_BRIGHTNESS,
@@ -24,8 +25,9 @@ from homeassistant.util import ulid as ulid_util
 
 from .colour import kelvin_to_mired, mired_to_kelvin
 from .const import CONTEXT_PREFIX
-from .fade import FadeProfile, colour_transition_is_safe
+from .fade import FadeProfile, colour_transition_is_safe, may_run_concurrently
 from .models import Family, LightSettings
+from .standby import RampKind, RampTracker
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -70,6 +72,10 @@ class LightWriter:
     _context_ids: set[str] = field(default_factory=set)
     _busy_until: dict[str, float] = field(default_factory=dict)
     """entity_id → monotonic timestamp when its in-flight brightness fade ends."""
+    _colour_busy_until: dict[str, float] = field(default_factory=dict)
+    """entity_id → monotonic timestamp when its in-flight colour step ends."""
+    ramp_tracker: RampTracker = field(default_factory=RampTracker)
+    """RampLock hardware lease tracker preventing background preemption."""
 
     # ------------------------------------------------------------------ context
 
@@ -96,43 +102,81 @@ class LightWriter:
 
     # ------------------------------------------------------------------ writes
 
-    async def async_turn_off(self, entity_id: str, transition_s: float) -> None:
+    async def async_turn_off(
+        self,
+        entity_id: str | Sequence[str],
+        transition_s: float,
+        *,
+        is_acute: bool = False,
+    ) -> None:
         """Off, with an explicit transition. Always explicit — every bulb in this house
         carries ``transition: 4`` in z2m's configuration.yaml, so omitting it inherits a
         hidden 4 s fade and reads as sluggish."""
+        entities = [entity_id] if isinstance(entity_id, str) else list(entity_id)
+        if not entities:
+            return
+        target_payload = entities[0] if len(entities) == 1 else entities
         await self.hass.services.async_call(
             LIGHT_DOMAIN,
             SERVICE_TURN_OFF,
-            {ATTR_ENTITY_ID: entity_id, ATTR_TRANSITION: transition_s},
+            {ATTR_ENTITY_ID: target_payload, ATTR_TRANSITION: transition_s},
             blocking=False,
             context=self.new_context(),
         )
-        self._busy_until.pop(entity_id, None)
+        loop_now = self.hass.loop.time()
+        for eid in entities:
+            self._busy_until.pop(eid, None)
+            self._colour_busy_until.pop(eid, None)
+            if is_acute:
+                self.ramp_tracker.acquire_lock(
+                    eid,
+                    kind=RampKind.ACUTE_FAST_PATH,
+                    duration_s=transition_s,
+                    start_time=loop_now,
+                    target_level=0,
+                )
+            else:
+                self.ramp_tracker.release_lock(eid)
 
     async def async_set_brightness(
         self,
-        entity_id: str,
+        entity_id: str | Sequence[str],
         level: int,
         transition_s: float,
         *,
         wake_kelvin: int | None = None,
-    ) -> None:
+        family: Family | None = None,
+        is_acute: bool = False,
+    ) -> bool:
         """Brightness as **one long hardware transition** — the safe, free channel.
 
-        ``genLevelCtrl`` is verified linear to 40 minutes with no rate floor found, so
-        there is nothing to plan around here. The bulb does the interpolation; we send
-        one command and no per-tick traffic.
-
-        ``wake_kelvin`` rides along **only when the light is currently off**. An off bulb
-        *rejects* a colour command (measured: sent 4000 K while off, it woke at its old
-        2801 K), so colour has to be in the same turn-on. There is no fade to break when
-        coming from off. While the light is already on, colour is sent separately —
-        brightness + colour in one payload is
-        `z2m#19186 <https://github.com/Koenkk/zigbee2mqtt/issues/19186>`_ (they don't
-        fade together; closed won't-fix).
+        Supports single entity or batched entity list (eliminating Zigbee queuing/popcorning).
+        Guards against IKEA TRADFRI reverse hazard: defers brightness writes while colour step
+        is in flight on non-concurrent fixtures.
+        Acquires RampLock lease when is_acute=True.
         """
-        data: dict = {
-            ATTR_ENTITY_ID: entity_id,
+        entities = [entity_id] if isinstance(entity_id, str) else list(entity_id)
+        if not entities:
+            return False
+
+        loop_now = self.hass.loop.time()
+        target_entities: list[str] = []
+        for eid in entities:
+            f = family
+            if f is None:
+                st = self.hass.states.get(eid)
+                if st is not None:
+                    f = infer_family(st)
+            if f is not None and not may_run_concurrently(f) and self.is_colour_busy(eid):
+                _LOGGER.debug("%s: deferring brightness write, colour step in flight", eid)
+                continue
+            target_entities.append(eid)
+
+        if not target_entities:
+            return False
+
+        data: dict[str, Any] = {
+            ATTR_ENTITY_ID: target_entities[0] if len(target_entities) == 1 else target_entities,
             ATTR_BRIGHTNESS: int(level),
             ATTR_TRANSITION: transition_s,
         }
@@ -146,8 +190,18 @@ class LightWriter:
             blocking=False,
             context=self.new_context(),
         )
-        loop_now = self.hass.loop.time()
-        self._busy_until[entity_id] = loop_now + max(transition_s, 0.0)
+
+        for eid in target_entities:
+            self._busy_until[eid] = loop_now + max(transition_s, 0.0)
+            if is_acute:
+                self.ramp_tracker.acquire_fast_path_lease(
+                    eid,
+                    target_level=int(level),
+                    target_kelvin=int(wake_kelvin) if wake_kelvin is not None else None,
+                    now=loop_now,
+                    duration_s=max(transition_s, 0.0),
+                )
+        return True
 
     async def async_step_colour(
         self,
@@ -194,7 +248,18 @@ class LightWriter:
             blocking=False,
             context=self.new_context(),
         )
+        loop_now = self.hass.loop.time()
+        self._colour_busy_until[entity_id] = loop_now + max(actual_transition, 0.0)
         return kelvin
+
+    def is_colour_busy(self, entity_id: str) -> bool:
+        """Returns True if a colour step transition is actively in flight on the bulb."""
+        until = self._colour_busy_until.get(entity_id)
+        return until is not None and self.hass.loop.time() < until
+
+    def is_brightness_busy(self, entity_id: str) -> bool:
+        """Returns True if a brightness fade is actively in flight on the bulb."""
+        return self._is_busy(entity_id)
 
     def _is_busy(self, entity_id: str) -> bool:
         until = self._busy_until.get(entity_id)
