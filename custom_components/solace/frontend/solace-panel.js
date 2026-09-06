@@ -1425,7 +1425,46 @@ var cs=Object.defineProperty;var ds=Object.getOwnPropertyDescriptor;var v=(o,i,e
               <b>${l.toFixed(2)} W</b>
             </span>
           </div>
-        `;return u`<div class="g2 g2-run">${d}${h}</div>`}render(){return!this.snap||!this.hass?b:u`
+        `;return u`<div class="g2 g2-run">${d}${h}</div>`}renderCameraCard(){if(!this.hass)return b;if(!(this.hass.states["switch.kitchen_kitchen_streaming"]?.state==="on"))return b;let t=this.hass.states["camera.kitchen_kitchen"];if(!t)return b;let s=()=>{let n=new CustomEvent("hass-more-info",{detail:{entityId:"camera.kitchen_kitchen"},bubbles:!0,composed:!0});this.dispatchEvent(n)};return u`
+      <div class="sec-head">
+        <ha-icon icon="mdi:cctv" style="color: var(--sol-cyan);"></ha-icon>
+        <div class="sec-title">Security & Cameras</div>
+        <div class="sec-line"></div>
+        <div class="sec-sub">Live Away Stream</div>
+      </div>
+
+      <div class="card-wrap cam-card">
+        <div class="c-head">
+          <ha-icon icon="mdi:video" style="color: var(--sol-cyan);"></ha-icon>
+          <span class="c-title">${t.attributes.friendly_name||"Kitchen Camera"}</span>
+          <span class="grow"></span>
+          <span class="run-badge" style="color: var(--sol-cyan);">
+            <span class="run-dot" style="background: var(--sol-cyan);"></span>
+            Live
+          </span>
+          <button
+            class="btn-pill"
+            @click=${s}
+            style="background: rgba(38, 198, 218, 0.15); color: var(--sol-cyan); margin-left: 8px;"
+          >
+            <ha-icon icon="mdi:fullscreen"></ha-icon>
+            Expand
+          </button>
+        </div>
+
+        <div class="cam-stream-container" @click=${s}>
+          <ha-camera-stream
+            .hass=${this.hass}
+            .stateObj=${t}
+            controls
+            allow-exoplayer
+            muted
+          ></ha-camera-stream>
+        </div>
+      </div>
+    `}render(){return!this.snap||!this.hass?b:u`
+      ${this.renderCameraCard()}
+
       <div class="sec-head">
         <ha-icon icon="mdi:leaf"></ha-icon>
         <div class="sec-title">Environment</div>
@@ -1932,6 +1971,30 @@ var cs=Object.defineProperty;var ds=Object.getOwnPropertyDescriptor;var v=(o,i,e
         border-radius: 50%;
         background: var(--sol-green);
         display: inline-block;
+      }
+
+      /* Camera Stream */
+      .cam-card {
+        margin-bottom: 10px;
+        padding: 14px 18px 18px;
+      }
+      .cam-stream-container {
+        margin-top: 12px;
+        position: relative;
+        width: 100%;
+        border-radius: var(--sol-r-card, 14px);
+        overflow: hidden;
+        background: #000;
+        aspect-ratio: 16 / 9;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+      }
+      .cam-stream-container ha-camera-stream {
+        width: 100%;
+        height: 100%;
+        display: block;
       }
 
       /* Threshold states. Amber and red are load-bearing here (a fridge out of range),

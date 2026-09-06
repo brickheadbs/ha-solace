@@ -682,6 +682,30 @@ export class SolTabHome extends LitElement {
         display: inline-block;
       }
 
+      /* Camera Stream */
+      .cam-card {
+        margin-bottom: 10px;
+        padding: 14px 18px 18px;
+      }
+      .cam-stream-container {
+        margin-top: 12px;
+        position: relative;
+        width: 100%;
+        border-radius: var(--sol-r-card, 14px);
+        overflow: hidden;
+        background: #000;
+        aspect-ratio: 16 / 9;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+      }
+      .cam-stream-container ha-camera-stream {
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+
       /* Threshold states. Amber and red are load-bearing here (a fridge out of range),
          which is the one case tokens.ts allows amber for something other than light. */
       .alert-cold {
@@ -1830,6 +1854,62 @@ export class SolTabHome extends LitElement {
     return html`<div class="g2 g2-run">${washer}${charging}</div>`;
   }
 
+  private renderCameraCard() {
+    if (!this.hass) return nothing;
+    const streaming = this.hass.states["switch.kitchen_kitchen_streaming"]?.state === "on";
+    if (!streaming) return nothing;
+
+    const camera = this.hass.states["camera.kitchen_kitchen"];
+    if (!camera) return nothing;
+
+    const openCamera = () => {
+      const event = new CustomEvent("hass-more-info", {
+        detail: { entityId: "camera.kitchen_kitchen" },
+        bubbles: true,
+        composed: true,
+      });
+      this.dispatchEvent(event);
+    };
+
+    return html`
+      <div class="sec-head">
+        <ha-icon icon="mdi:cctv" style="color: var(--sol-cyan);"></ha-icon>
+        <div class="sec-title">Security & Cameras</div>
+        <div class="sec-line"></div>
+        <div class="sec-sub">Live Away Stream</div>
+      </div>
+
+      <div class="card-wrap cam-card">
+        <div class="c-head">
+          <ha-icon icon="mdi:video" style="color: var(--sol-cyan);"></ha-icon>
+          <span class="c-title">${camera.attributes.friendly_name || "Kitchen Camera"}</span>
+          <span class="grow"></span>
+          <span class="run-badge" style="color: var(--sol-cyan);">
+            <span class="run-dot" style="background: var(--sol-cyan);"></span>
+            Live
+          </span>
+          <button
+            class="btn-pill"
+            @click=${openCamera}
+            style="background: rgba(38, 198, 218, 0.15); color: var(--sol-cyan); margin-left: 8px;"
+          >
+            <ha-icon icon="mdi:fullscreen"></ha-icon>
+            Expand
+          </button>
+        </div>
+
+        <div class="cam-stream-container" @click=${openCamera}>
+          <ha-camera-stream
+            .hass=${this.hass}
+            .stateObj=${camera}
+            controls
+            allow-exoplayer
+            muted
+          ></ha-camera-stream>
+        </div>
+      </div>
+    `;
+  }
 
   render() {
     // The parent gates on the snapshot before mounting this tab, but the coordinator can
@@ -1837,6 +1917,8 @@ export class SolTabHome extends LitElement {
     if (!this.snap || !this.hass) return nothing;
 
     return html`
+      ${this.renderCameraCard()}
+
       <div class="sec-head">
         <ha-icon icon="mdi:leaf"></ha-icon>
         <div class="sec-title">Environment</div>
