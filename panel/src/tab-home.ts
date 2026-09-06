@@ -10,7 +10,7 @@ import { LitElement, css, html, nothing, svg } from "lit";
 import { property, state } from "lit/decorators.js";
 import { customElement } from "./custom-element";
 import type { Hass, RoomRow, Snapshot } from "./api";
-import { setRoom } from "./api";
+import { setRoom, toggleGate } from "./api";
 import { num, stopLabel } from "./fmt";
 import { fetchHistory, type Sample } from "./history";
 import { buildSpark, clockAt, type Spark, type SparkOptions } from "./sparkline";
@@ -1009,6 +1009,21 @@ export class SolTabHome extends LitElement {
     });
   }
 
+  private async toggleGate() {
+    if (!this.hass) return;
+    try {
+      if (this.hass.callWS) {
+        await this.hass.callWS({ type: "solace/toggle_gate" });
+      } else {
+        await toggleGate(this.hass);
+      }
+    } catch {
+      await this.hass.callService("input_boolean", "toggle", {
+        entity_id: "input_boolean.ambient_gate",
+      });
+    }
+  }
+
   /* ---------------------------------------------------------------- sparklines */
 
   private spark(entityId: string, opts: SparkOptions = {}): Spark | null {
@@ -1101,7 +1116,10 @@ export class SolTabHome extends LitElement {
     const targetPct = Math.round((masterTarget / 254) * 100);
     const luxVal = Math.round(w.lux ?? 0);
     const elevVal = w.elevation !== null && w.elevation !== undefined ? w.elevation.toFixed(1) : "—";
-    const gateOpen = this.hass.states["binary_sensor.entry_ambient_gate"]?.state === "on";
+    const gateOpen =
+      this.hass.states["input_boolean.ambient_gate"]?.state === "on" ||
+      this.hass.states["binary_sensor.entry_ambient_gate"]?.state === "on" ||
+      !!w.gate_open;
     const sleepActive =
       this.hass.states["input_boolean.solace_sleep"]?.state === "on" || w.night_active;
     const workActive =
@@ -1117,17 +1135,16 @@ export class SolTabHome extends LitElement {
           <ha-icon icon="mdi:lightbulb" style="color: var(--sol-amber);"></ha-icon>
           <span class="c-title">Light</span>
           <span class="grow"></span>
-          <span class="c-status">${gateOpen ? "ambient gate open" : "ambient gate closed"}</span>
-          <button
-            class="btn-pill"
-            style="background: ${this.biasOpen ? "var(--sol-cyan-tint)" : "var(--sol-control)"}; color: ${this.biasOpen ? "var(--sol-cyan)" : "var(--sol-text-3)"};"
-            @click=${() => (this.biasOpen = !this.biasOpen)}
-          >
-            <ha-icon icon="mdi:tune"></ha-icon>
-            Bias
-            <ha-icon icon=${this.biasOpen ? "mdi:chevron-up" : "mdi:chevron-down"}></ha-icon>
-          </button>
           <div class="head-btn-stack">
+            <button
+              class="btn-pill"
+              style="background: ${this.biasOpen ? "var(--sol-cyan-tint)" : "var(--sol-control)"}; color: ${this.biasOpen ? "var(--sol-cyan)" : "var(--sol-text-3)"};"
+              @click=${() => (this.biasOpen = !this.biasOpen)}
+            >
+              <ha-icon icon="mdi:tune"></ha-icon>
+              Bias
+              <ha-icon icon=${this.biasOpen ? "mdi:chevron-up" : "mdi:chevron-down"}></ha-icon>
+            </button>
             <button
               class="btn-pill"
               style="background: ${workActive ? "rgba(33,150,243,.25)" : "var(--sol-control)"}; color: ${workActive ? "#64b5f6" : "var(--sol-text-3)"};"
@@ -1135,6 +1152,16 @@ export class SolTabHome extends LitElement {
             >
               <ha-icon icon="mdi:desk-lamp"></ha-icon>
               ${workActive ? "Work ON" : "Work"}
+            </button>
+          </div>
+          <div class="head-btn-stack">
+            <button
+              class="btn-pill"
+              style="background: ${gateOpen ? "rgba(255,183,77,.22)" : "var(--sol-control)"}; color: ${gateOpen ? "var(--sol-amber)" : "var(--sol-text-3)"};"
+              @click=${() => this.toggleGate()}
+            >
+              <ha-icon icon="mdi:theme-light-dark"></ha-icon>
+              ${gateOpen ? "Gate Open" : "Gate Closed"}
             </button>
             <button
               class="btn-pill"

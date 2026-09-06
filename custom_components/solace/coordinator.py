@@ -233,6 +233,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         self._startup_time = hass.loop.time()
         self._lux_warned = False
         self._night_latched = False
+        self._gate_override: bool | None = None
         self._unsubscribes: list[Any] = []
         self._last_presence: dict[str, float] = {}
         self.last_tick: Any = None
@@ -467,6 +468,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         for extra_sensor in (
             "input_boolean.away_mode",
             "input_boolean.work_mode",
+            "input_boolean.ambient_gate",
             "sensor.pixel_8a_do_not_disturb_sensor",
             "binary_sensor.google_pixel_watch_2_bedtime_mode",
             "sensor.google_pixel_watch_2_do_not_disturb_sensor",
@@ -593,10 +595,13 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                 subentry.data.get(CONF_NEAR_PRESENCE), default=True
             )
 
-            raw_gate = ambience_threshold(lux, room.ambience_open, house)
-            room.ambience_open, room.ambience_pending_since = debounce_ambience(
-                raw_gate, room.ambience_open, loop_now, room.ambience_pending_since, house
-            )
+            if self._gate_override is not None:
+                room.ambience_open = self._gate_override
+            else:
+                raw_gate = ambience_threshold(lux, room.ambience_open, house)
+                room.ambience_open, room.ambience_pending_since = debounce_ambience(
+                    raw_gate, room.ambience_open, loop_now, room.ambience_pending_since, house
+                )
 
             manual = room.is_manual(settings.manual_hold_minutes, now.timestamp())
             if not manual and room.manual_touched and not room.manual_switch:
@@ -1206,6 +1211,9 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         ):
             self._handle_fast_path_presence(entity_id)
 
+        if entity_id == "input_boolean.ambient_gate" and new_state is not None:
+            self._gate_override = (new_state.state == STATE_ON)
+
         self.hass.async_create_task(self.async_refresh())
 
     # ------------------------------------------------------------------ helpers
@@ -1359,6 +1367,29 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
     def _work_mode(self) -> bool:
         """Is work mode active?"""
         return self._is_on("input_boolean.work_mode", default=False)
+
+    def _gate_open(self) -> bool:
+        """Is ambient gate open across rooms?"""
+        if self._gate_override is not None:
+            return self._gate_override
+        return any(r.ambience_open for r in self.rooms.values())
+
+    async def async_toggle_gate(self) -> bool:
+        """Toggle ambient gate override."""
+        current = self._gate_open()
+        new_state = not current
+        self._gate_override = new_state
+        for r in self.rooms.values():
+            r.ambience_open = new_state
+        if self.hass.states.get("input_boolean.ambient_gate") is not None:
+            await self.hass.services.async_call(
+                "input_boolean",
+                "turn_on" if new_state else "turn_off",
+                {"entity_id": "input_boolean.ambient_gate"},
+                context=self.writer.new_context(),
+            )
+        await self.async_request_refresh()
+        return new_state
 
     def _clear_work_mode(self) -> None:
         """Auto-clear work mode helper when night mode or morning release fires."""

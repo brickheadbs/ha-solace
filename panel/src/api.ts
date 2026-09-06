@@ -96,6 +96,7 @@ export interface World {
   kelvin: number;
   asleep: boolean;
   work_mode?: boolean;
+  gate_open?: boolean;
   phone_dnd?: boolean;
   watch_bedtime?: boolean;
   manual_sleep?: boolean;
@@ -303,6 +304,9 @@ export const toggleSleep = (hass: Hass) =>
 
 export const toggleWorkMode = (hass: Hass) =>
   hass.connection.sendMessagePromise({ type: "solace/toggle_work_mode" });
+
+export const toggleGate = (hass: Hass) =>
+  hass.connection.sendMessagePromise({ type: "solace/toggle_gate" });
 
 export const setSunriseCurve = (hass: Hass, sunrise_curve: ProgressPoint[]) =>
   hass.connection.sendMessagePromise({
