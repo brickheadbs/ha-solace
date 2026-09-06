@@ -229,6 +229,8 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         self._store: Store = Store(hass, STORAGE_VERSION, STORAGE_KEY)
         self._lux_history: list[float] = []
         self._last_good_lux: float | None = None
+        self._first_lux_reported = False
+        self._startup_time = hass.loop.time()
         self._lux_warned = False
         self._night_latched = False
         self._unsubscribes: list[Any] = []
@@ -413,6 +415,12 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         # The latch must survive a restart — an HA restart at 3 am would otherwise drop
         # night mode and relight the house.
         self._night_latched = bool(stored.get("_night_latched", False))
+        if (saved_lux := stored.get("_last_good_lux")) is not None:
+            try:
+                self._last_good_lux = float(saved_lux)
+                _LOGGER.info("Solace: restored last known good lux (%.1f lx)", self._last_good_lux)
+            except (TypeError, ValueError):
+                pass
         for subentry in self._subentries():
             saved = stored.get(subentry.subentry_id, {})
             self.rooms[subentry.subentry_id] = RoomState(
@@ -489,10 +497,11 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         while self._unsubscribes:
             self._unsubscribes.pop()()
 
-    async def async_persist(self) -> None:
-        # The night latch is persisted alongside the per-room manual flags. An HA restart
-        # at 3 am must not drop night mode and relight the house.
-        payload: dict[str, Any] = {"_night_latched": self._night_latched}
+    def _data_to_save(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "_night_latched": self._night_latched,
+            "_last_good_lux": self._last_good_lux,
+        }
         for room in self.rooms.values():
             payload[room.subentry_id] = {
                 "manual_switch": room.manual_switch,
@@ -503,7 +512,12 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                 # glow suppressed until lux falls all the way past the *falling* edge.
                 "ambience_open": room.ambience_open,
             }
-        await self._store.async_save(payload)
+        return payload
+
+    async def async_persist(self) -> None:
+        # The night latch and last known good lux are persisted alongside the per-room manual flags.
+        # An HA restart must not drop night mode or lose the baseline outdoor illuminance.
+        await self._store.async_save(self._data_to_save())
 
     # ------------------------------------------------------------------ the loop
 
@@ -728,6 +742,18 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
 
         if solution.level <= 0:
             if current > 0:
+                # Cold boot startup hold: suppress turning off lights that are already on
+                # during the initial startup window (60s) if the lux sensor hasn't reported a live reading yet.
+                if (
+                    not self._first_lux_reported
+                    and (self.hass.loop.time() - self._startup_time) < 60.0
+                ):
+                    _LOGGER.debug(
+                        "Solace: startup hold — suppressing turn-off of %s while waiting for %s",
+                        entity_id,
+                        self._lux_entity(),
+                    )
+                    return
                 await self.writer.async_turn_off(entity_id, house.transition_down_off_s, is_acute=True)
                 room.last_written[entity_id] = 0
             return
@@ -766,7 +792,6 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         loop_now = self.hass.loop.time()
         if not is_acute and self.writer.ramp_tracker.should_suppress_chronic_write(entity_id, loop_now):
             _LOGGER.debug("%s: suppressing chronic background write (RampLock active)", entity_id)
-            room.last_written[entity_id] = solution.level
             return
 
         # An OFF bulb rejects a colour command — it wakes at its old colour. So colour
@@ -1195,16 +1220,15 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
 
         ⚠️ The obvious fallbacks are both bad. Treating an unknown reading as **0 lx**
         means a dead sensor drives every room to full demand all day — the worst outcome
-        in a house whose whole reason for automating
-        lighting was to avoid exactly that. Treating it as **bright** leaves rooms dark
-        when occupied.
+        in a house whose whole reason for automating lighting was to avoid exactly that.
+        Treating it as **bright** (float("inf")) leaves rooms dark when occupied.
 
-        So: hold the **last good reading**. That covers the realistic failure — a z2m
-        reconnect blip lasting seconds — with no visible effect at all. Only if we have
-        never seen a value (a cold boot before the sensor first reports) does it fall
-        back, and it falls back to *bright*, because a few dark seconds at startup is a
-        smaller failure than the lights slamming to full, and manual control is always
-        available.
+        So: hold the **last good reading** (restored across restarts from persistent store).
+        That covers the realistic failure — an HA restart or z2m reconnect blip lasting seconds —
+        with no visible effect at all. Only if we have never seen a value (a cold boot before
+        the sensor first reports and with no stored history) does it fall back to the astronomical
+        solar clear-sky model (ClearSkySolarModel.clear_sky_illuminance(sun_elevation)), aligning
+        with actual dusk/night/day conditions.
         """
         state = self.hass.states.get(self._lux_entity())
         try:
@@ -1216,6 +1240,25 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         except (AttributeError, TypeError, ValueError):
             if self._last_good_lux is not None:
                 return self._last_good_lux
+
+            # Astronomical model fallback: if sensor has not reported yet and no stored lux exists
+            sun = self.hass.states.get("sun.sun")
+            if sun and sun.attributes and "elevation" in sun.attributes:
+                try:
+                    elevation = float(sun.attributes["elevation"])
+                    fallback_lux = ClearSkySolarModel.clear_sky_illuminance(elevation)
+                    if not self._lux_warned:
+                        self._lux_warned = True
+                        _LOGGER.warning(
+                            "Solace: no reading yet from %s — falling back to astronomical solar model (%.1f lx at %.1f° elevation)",
+                            self._lux_entity(),
+                            fallback_lux,
+                            elevation,
+                        )
+                    return fallback_lux
+                except (TypeError, ValueError):
+                    pass
+
             # Log the TRANSITION, not the condition. This is called once per room per
             # tick, so logging unconditionally turns a single dead sensor into hundreds
             # of identical lines — and a noisy check camouflages the real fault sitting
@@ -1223,14 +1266,17 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
             if not self._lux_warned:
                 self._lux_warned = True
                 _LOGGER.warning(
-                    "Solace: no reading yet from %s — holding lights off until it reports",
+                    "Solace: no reading yet from %s and sun elevation unavailable — holding 0 lx",
                     self._lux_entity(),
                 )
-            return float("inf")
+            return 0.0
+
         if self._lux_warned:
             self._lux_warned = False
             _LOGGER.info("Solace: %s is reporting again (%s lx)", self._lux_entity(), value)
         self._last_good_lux = value
+        self._first_lux_reported = True
+        self._store.async_delay_save(self._data_to_save, delay=60)
         return value
 
     def _weather_entity(self) -> str:

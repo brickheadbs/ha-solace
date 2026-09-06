@@ -14,7 +14,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry, async_
 
 from custom_components.solace.const import DOMAIN, HOUSE_SETTINGS
 
-from .conftest import LIGHT
+from .conftest import LIGHT, LUX
 
 pytestmark = pytest.mark.usefixtures("world")
 
@@ -756,5 +756,67 @@ async def test_dnd_sensor_in_entry_data_is_subscribed_and_engages_night_mode(
     assert coordinator._night_latched is True
 
 
+async def test_last_good_lux_persists_and_restores_across_restart(
+    hass: HomeAssistant, entry, world
+) -> None:
+    """Last known good lux persists and restores across reboots so startup gap holds the prior level."""
+    world(lux=42.0)
+    assert await _setup(hass, entry)
+    coordinator = entry.runtime_data.coordinator
+    assert coordinator._lux() == 42.0
+    await coordinator.async_persist()
+
+    # Simulate reboot: lux sensor goes unavailable before reload
+    hass.states.async_set(LUX, "unavailable")
+    await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+
+    reloaded_coordinator = entry.runtime_data.coordinator
+    # Restored value must be 42.0 despite sensor being unavailable
+    assert reloaded_coordinator._last_good_lux == 42.0
+    assert reloaded_coordinator._lux() == 42.0
 
 
+async def test_cold_boot_sensor_unavailable_falls_back_to_astronomical_model(
+    hass: HomeAssistant, entry
+) -> None:
+    """Without prior stored lux, an unavailable sensor falls back to clear-sky solar elevation."""
+    from custom_components.solace.solar import ClearSkySolarModel
+
+    # Sun elevation is negative (night): clear-sky model returns 0.0 lx
+    hass.states.async_set("sun.sun", "below_horizon", {"elevation": -12.0})
+    hass.states.async_set(LUX, "unavailable")
+    assert await _setup(hass, entry)
+    coordinator = entry.runtime_data.coordinator
+    assert coordinator._last_good_lux is None
+    assert coordinator._lux() == 0.0
+
+    # Daytime elevation (+25.0°): falls back to daylight lux
+    hass.states.async_set("sun.sun", "above_horizon", {"elevation": 25.0})
+    coordinator._last_good_lux = None
+    expected_lux = ClearSkySolarModel.clear_sky_illuminance(25.0)
+    assert coordinator._lux() == expected_lux
+
+
+async def test_startup_hold_prevents_turning_off_lights_before_first_live_lux(
+    hass: HomeAssistant, entry, world
+) -> None:
+    """During cold boot startup window, Solace suppresses turn-off commands on lights currently on."""
+    # Light is physically on, sensor is unavailable, sun elevation is bright (would compute level 0)
+    hass.states.async_set("sun.sun", "above_horizon", {"elevation": 45.0})
+    world(occupied=False, light_on=True)
+    hass.states.async_set(LUX, "unavailable")
+
+    calls: list[dict] = []
+    hass.bus.async_listen(
+        "call_service",
+        lambda e: calls.append(e.data) if e.data.get("domain") == "light" else None,
+    )
+
+    assert await _setup(hass, entry)
+    coordinator = entry.runtime_data.coordinator
+    assert coordinator._first_lux_reported is False
+
+    # Verify no turn_off service call was dispatched while startup hold was active
+    turn_offs = [c for c in calls if c.get("service") == "turn_off"]
+    assert not turn_offs, f"Expected no turn_off during startup hold, got {turn_offs}"
