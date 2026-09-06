@@ -351,7 +351,7 @@ export class SolacePanel extends LitElement {
             </button>`
           )}
         </nav>
-        ${this.renderStatusHeader()}
+        ${this.tab !== "home" ? this.renderStatusHeader() : nothing}
       </header>
       <main>
         ${this.snap

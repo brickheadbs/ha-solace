@@ -12,6 +12,7 @@ import { customElement } from "./custom-element";
 import type { Hass, RoomRow, Snapshot } from "./api";
 import { setRoom, toggleGate } from "./api";
 import { num, stopLabel } from "./fmt";
+import { kelvinToDerim } from "./derim";
 import { fetchHistory, type Sample } from "./history";
 import { buildSpark, clockAt, type Spark, type SparkOptions } from "./sparkline";
 import { tokens } from "./tokens";
@@ -305,6 +306,67 @@ export class SolTabHome extends LitElement {
         display: inline-flex;
         flex-direction: column;
         gap: 5px;
+      }
+
+      .status-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 2px 7px;
+        border-radius: 6px;
+        font-size: 11px;
+        font-weight: 500;
+        vertical-align: middle;
+      }
+      .status-badge ha-icon {
+        --mdc-icon-size: 13px;
+      }
+      .badge-normal {
+        background: rgba(76, 175, 80, 0.15);
+        color: #81c784;
+      }
+      .badge-night {
+        background: rgba(156, 39, 176, 0.15);
+        color: #ce93d8;
+      }
+      .badge-away {
+        background: rgba(239, 83, 80, 0.15);
+        color: #ef5350;
+      }
+      .badge-sunrise {
+        background: rgba(255, 152, 0, 0.15);
+        color: #ffb74d;
+      }
+
+      .room-badges {
+        position: relative;
+        z-index: 1;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex-wrap: wrap;
+        margin-top: 10px;
+        padding-top: 8px;
+        border-top: 1px solid rgba(255, 255, 255, 0.05);
+      }
+      .room-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 11px;
+        padding: 2px 7px;
+        border-radius: 4px;
+        background: var(--sol-control);
+        color: var(--sol-text-3);
+      }
+      .room-chip.lit {
+        color: var(--sol-text-1);
+        border: 1px solid rgba(255, 183, 77, 0.4);
+        background: rgba(255, 183, 77, 0.08);
+      }
+      .room-chip strong {
+        color: var(--sol-amber);
+        font-weight: 600;
       }
 
       /* One body shape for every card: main readout left, sub-data hard right, both on
@@ -1108,12 +1170,30 @@ export class SolTabHome extends LitElement {
 
   /* ---------------------------------------------------------------- render */
 
+  private renderModeBadge() {
+    const w = this.snap.world;
+    if (w.away) {
+      return html`<span class="status-badge badge-away"><ha-icon icon="mdi:airplane"></ha-icon> Away</span>`;
+    }
+    if (w.sunrise_progress !== null && w.sunrise_progress !== undefined) {
+      return html`<span class="status-badge badge-sunrise"><ha-icon icon="mdi:weather-sunset-up"></ha-icon> Sunrise ${Math.round(w.sunrise_progress * 100)}%</span>`;
+    }
+    if (w.night_active) {
+      return html`<span class="status-badge badge-night"><ha-icon icon="mdi:weather-night"></ha-icon> Night</span>`;
+    }
+    if (w.bedtime_dwell_active) {
+      return html`<span class="status-badge badge-night"><ha-icon icon="mdi:bed"></ha-icon> Bedtime</span>`;
+    }
+    return html`<span class="status-badge badge-normal">Normal</span>`;
+  }
+
   private renderLightCard() {
     const w = this.snap.world;
     const masterTarget =
       w.master_target_brightness ??
       (w.demand !== null && w.demand !== undefined ? Math.round(w.demand * 254) : 254);
     const targetPct = Math.round((masterTarget / 254) * 100);
+    const derimVal = Math.round(kelvinToDerim(w.kelvin ?? 4000));
     const luxVal = Math.round(w.lux ?? 0);
     const elevVal = w.elevation !== null && w.elevation !== undefined ? w.elevation.toFixed(1) : "—";
     const gateOpen =
@@ -1134,6 +1214,7 @@ export class SolTabHome extends LitElement {
         <div class="c-head">
           <ha-icon icon="mdi:lightbulb" style="color: var(--sol-amber);"></ha-icon>
           <span class="c-title">Light</span>
+          ${this.renderModeBadge()}
           <span class="grow"></span>
           <div class="head-btn-stack">
             <button
@@ -1161,7 +1242,7 @@ export class SolTabHome extends LitElement {
               @click=${() => this.toggleGate()}
             >
               <ha-icon icon="mdi:theme-light-dark"></ha-icon>
-              ${gateOpen ? "Gate Open" : "Gate Closed"}
+              Ambient
             </button>
             <button
               class="btn-pill"
@@ -1179,8 +1260,15 @@ export class SolTabHome extends LitElement {
             <div class="big-val mono-gold">
               ${targetPct}<span class="unit" style="font-size: 15px; margin-left: 3px;">%</span>
             </div>
+            <div style="font-size: 11px; color: var(--sol-text-3); margin-top: 3px;">
+              Master Target
+            </div>
           </div>
           <div class="small-grid c-side">
+            <span class="sg-k">Circadian</span>
+            <span class="sg-v" style="color: var(--sol-amber); font-weight: 600;">
+              ${w.kelvin ?? 4000} K <span style="font-weight: 400; color: var(--sol-text-3); font-size: 10px;">(${derimVal} Ɯ)</span>
+            </span>
             <span class="sg-k">Lux</span>
             <span class="sg-v" style="color: var(--sol-amber);">${num(luxVal)}</span>
             <span class="sg-k">Sun</span>
@@ -1220,6 +1308,15 @@ export class SolTabHome extends LitElement {
               </div>
             `
           : nothing}
+
+        <div class="room-badges">
+          ${this.snap.rooms.map((r) => {
+            const lit = (r.level ?? 0) > 0;
+            return html`<span class="room-chip ${lit ? "lit" : ""}">
+              ${r.name}: <strong>${r.manual.active ? "Manual" : lit ? `${r.level} lvl` : "Off"}</strong>
+            </span>`;
+          })}
+        </div>
 
         ${this.renderBand("lux", spark, "var(--sol-amber)", this.biasOpen)}
       </div>
@@ -1401,10 +1498,19 @@ export class SolTabHome extends LitElement {
 
   private renderOutsideCard() {
     const tempState = this.hass.states[OUTSIDE_TEMP];
-    const currentTemp = parseFloat(tempState?.state ?? "");
+    const rawTemp = parseFloat(tempState?.state ?? "");
     const weather = this.hass.states[WEATHER];
     const attrs = weather?.attributes ?? {};
-    const condition = weather?.state ?? "cloudy";
+    const officialTemp =
+      attrs.temperature !== undefined && attrs.temperature !== null
+        ? Number(attrs.temperature)
+        : null;
+
+    const luxState = this.hass.states[LUX];
+    const currentLux = parseFloat(luxState?.state ?? "0");
+    const isSolarHeated = currentLux >= 25000;
+
+    const displayTemp = isSolarHeated && officialTemp !== null ? officialTemp : rawTemp;
 
     const humidityIn = this.hass.states["sensor.kitchen_kitchen_thermostat_humidity"]?.state;
     // Exterior humidity comes off the weather entity — there is no outdoor hygrometer.
@@ -1418,32 +1524,39 @@ export class SolTabHome extends LitElement {
         <div class="c-head">
           <ha-icon icon="mdi:tree" style="color: var(--sol-cyan);"></ha-icon>
           <span class="c-title">Outside</span>
+          ${isSolarHeated
+            ? html`<span class="status-badge badge-sunrise" title="Direct sunlight on sensor (${Math.round(currentLux).toLocaleString()} lx) — Met Éireann fallback active">
+                <ha-icon icon="mdi:white-balance-sunny"></ha-icon> Solar Clamped
+              </span>`
+            : nothing}
           <span class="grow"></span>
-          <span class="c-status">${condition.replace(/[-_]/g, " ")}</span>
-          <ha-icon
-            icon=${weatherIcon(condition)}
-            title=${condition}
-            style="--mdc-icon-size: 22px; color: var(--sol-cyan);"
-          ></ha-icon>
+          <span class="c-status">${isSolarHeated ? "Met fallback" : "calibrated probe"}</span>
         </div>
 
         <div class="c-body">
           <div class="c-main">
             <div class="big-val">
-              ${isNaN(currentTemp) ? "—" : currentTemp.toFixed(1)}<span class="unit">°</span>
+              ${isNaN(displayTemp) ? "—" : displayTemp.toFixed(1)}<span class="unit">°</span>
             </div>
+            ${isSolarHeated && !isNaN(rawTemp)
+              ? html`<div style="font-size: 11px; color: var(--sol-amber); margin-top: 3px;">
+                  Probe ${rawTemp.toFixed(1)}° (+${(rawTemp - (officialTemp ?? 0)).toFixed(1)}° sun)
+                </div>`
+              : nothing}
           </div>
           <div class="small-grid c-side">
-            <span class="sg-k">Pressure</span>
-            <span class="sg-v">${attrs.pressure ?? "—"} hPa</span>
-            <span class="sg-k">Wind</span>
-            <span class="sg-v">
-              ${Math.round(attrs.wind_bearing ?? 0)}° · ${Math.round(attrs.wind_speed ?? 0)} km/h
+            <span class="sg-k">Solar Lux</span>
+            <span class="sg-v" style="color: ${isSolarHeated ? "var(--sol-amber)" : "inherit"};">
+              ${num(Math.round(currentLux))} lx
             </span>
             <span class="sg-k">Cloud cover</span>
             <span class="sg-v">${Math.round(attrs.cloud_coverage ?? 0)}%</span>
             <span class="sg-k">Humidity in/out</span>
             <span class="sg-v">${fmtPct(humidityIn)}/${fmtPct(humidityOut)}%</span>
+            <span class="sg-k">Probe status</span>
+            <span class="sg-v" style="color: ${isSolarHeated ? "var(--sol-amber)" : "var(--sol-cyan)"};">
+              ${isSolarHeated ? "Sun biased" : "Shaded"}
+            </span>
           </div>
         </div>
 
@@ -1947,20 +2060,34 @@ export class SolTabHome extends LitElement {
       ${this.renderCameraCard()}
 
       <div class="sec-head">
-        <ha-icon icon="mdi:leaf"></ha-icon>
-        <div class="sec-title">Environment</div>
+        <ha-icon icon="mdi:home-lightbulb" style="color: var(--sol-amber);"></ha-icon>
+        <div class="sec-title">Indoor Living</div>
         <div class="sec-line"></div>
-        <div class="sec-sub">last 24 hours</div>
+        <div class="sec-sub">lighting & climate</div>
       </div>
 
       <div class="g2">
         ${this.renderLightCard()}
-        ${this.renderWeatherCard()}
+        ${this.renderInsideCard()}
+      </div>
+
+      <div class="sec-head">
+        <ha-icon icon="mdi:weather-partly-cloudy" style="color: var(--sol-cyan);"></ha-icon>
+        <div class="sec-title">Outdoor Conditions</div>
+        <div class="sec-line"></div>
+        <div class="sec-sub">microclimate & forecast</div>
       </div>
 
       <div class="g2">
-        ${this.renderInsideCard()}
         ${this.renderOutsideCard()}
+        ${this.renderWeatherCard()}
+      </div>
+
+      <div class="sec-head">
+        <ha-icon icon="mdi:flash" style="color: var(--sol-cyan);"></ha-icon>
+        <div class="sec-title">Appliances & Utilities</div>
+        <div class="sec-line"></div>
+        <div class="sec-sub">last 24 hours</div>
       </div>
 
       <div class="g2">
