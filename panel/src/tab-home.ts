@@ -338,37 +338,6 @@ export class SolTabHome extends LitElement {
         color: #ffb74d;
       }
 
-      .room-badges {
-        position: relative;
-        z-index: 1;
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        flex-wrap: wrap;
-        margin-top: 10px;
-        padding-top: 8px;
-        border-top: 1px solid rgba(255, 255, 255, 0.05);
-      }
-      .room-chip {
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-        font-size: 11px;
-        padding: 2px 7px;
-        border-radius: 4px;
-        background: var(--sol-control);
-        color: var(--sol-text-3);
-      }
-      .room-chip.lit {
-        color: var(--sol-text-1);
-        border: 1px solid rgba(255, 183, 77, 0.4);
-        background: rgba(255, 183, 77, 0.08);
-      }
-      .room-chip strong {
-        color: var(--sol-amber);
-        font-weight: 600;
-      }
-
       /* One body shape for every card: main readout left, sub-data hard right, both on
          the same baseline. The cards drifted apart because each one improvised. */
       .c-body {
@@ -1184,7 +1153,7 @@ export class SolTabHome extends LitElement {
     if (w.bedtime_dwell_active) {
       return html`<span class="status-badge badge-night"><ha-icon icon="mdi:bed"></ha-icon> Bedtime</span>`;
     }
-    return html`<span class="status-badge badge-normal">Normal</span>`;
+    return nothing;
   }
 
   private renderLightCard() {
@@ -1194,8 +1163,6 @@ export class SolTabHome extends LitElement {
       (w.demand !== null && w.demand !== undefined ? Math.round(w.demand * 254) : 254);
     const targetPct = Math.round((masterTarget / 254) * 100);
     const derimVal = Math.round(kelvinToDerim(w.kelvin ?? 4000));
-    const luxVal = Math.round(w.lux ?? 0);
-    const elevVal = w.elevation !== null && w.elevation !== undefined ? w.elevation.toFixed(1) : "—";
     const gateOpen =
       this.hass.states["input_boolean.ambient_gate"]?.state === "on" ||
       this.hass.states["binary_sensor.entry_ambient_gate"]?.state === "on" ||
@@ -1205,8 +1172,6 @@ export class SolTabHome extends LitElement {
     const workActive =
       this.hass.states["input_boolean.work_mode"]?.state === "on" || !!w.work_mode;
 
-    // Outdoor lux spans four decades between a dark night and midday, so a linear axis
-    // renders the whole night as a flat line against one spike. Log keeps the shape.
     const spark = this.spark(LUX, { scale: "log" });
 
     return html`
@@ -1269,14 +1234,15 @@ export class SolTabHome extends LitElement {
             <span class="sg-v" style="color: var(--sol-amber); font-weight: 600;">
               ${w.kelvin ?? 4000} K <span style="font-weight: 400; color: var(--sol-text-3); font-size: 10px;">(${derimVal} Ɯ)</span>
             </span>
-            <span class="sg-k">Lux</span>
-            <span class="sg-v" style="color: var(--sol-amber);">${num(luxVal)}</span>
-            <span class="sg-k">Sun</span>
-            <span class="sg-v">${elevVal}°</span>
-            <span class="sg-k">Peak</span>
-            <span class="sg-v">
-              ${spark ? `${num(Math.round(spark.max))} lx · ${clockAt(spark.maxAt)}` : "—"}
-            </span>
+            ${this.snap.rooms.map((r) => {
+              const lit = (r.level ?? 0) > 0;
+              return html`
+                <span class="sg-k">${r.name}</span>
+                <span class="sg-v" style="color: ${lit ? "var(--sol-amber)" : "var(--sol-text-4)"}; font-weight: ${lit ? "600" : "400"};">
+                  ${r.manual.active ? "Manual" : lit ? `${r.level} lvl` : "Off"}
+                </span>
+              `;
+            })}
           </div>
         </div>
 
@@ -1308,15 +1274,6 @@ export class SolTabHome extends LitElement {
               </div>
             `
           : nothing}
-
-        <div class="room-badges">
-          ${this.snap.rooms.map((r) => {
-            const lit = (r.level ?? 0) > 0;
-            return html`<span class="room-chip ${lit ? "lit" : ""}">
-              ${r.name}: <strong>${r.manual.active ? "Manual" : lit ? `${r.level} lvl` : "Off"}</strong>
-            </span>`;
-          })}
-        </div>
 
         ${this.renderBand("lux", spark, "var(--sol-amber)", this.biasOpen)}
       </div>
@@ -1512,10 +1469,9 @@ export class SolTabHome extends LitElement {
 
     const displayTemp = isSolarHeated && officialTemp !== null ? officialTemp : rawTemp;
 
-    const humidityIn = this.hass.states["sensor.kitchen_kitchen_thermostat_humidity"]?.state;
-    // Exterior humidity comes off the weather entity — there is no outdoor hygrometer.
+    const w = this.snap.world;
+    const elevVal = w.elevation !== null && w.elevation !== undefined ? w.elevation.toFixed(1) : "—";
     const humidityOut = attrs.humidity;
-    const fmtPct = (v: unknown) => (v === undefined || v === null ? "—" : Number(v).toFixed(1));
 
     const spark = this.spark(OUTSIDE_TEMP, { minSpan: 2 });
 
@@ -1545,14 +1501,16 @@ export class SolTabHome extends LitElement {
               : nothing}
           </div>
           <div class="small-grid c-side">
-            <span class="sg-k">Solar Lux</span>
+            <span class="sg-k">Lux</span>
             <span class="sg-v" style="color: ${isSolarHeated ? "var(--sol-amber)" : "inherit"};">
               ${num(Math.round(currentLux))} lx
             </span>
+            <span class="sg-k">Sun</span>
+            <span class="sg-v">${elevVal}°</span>
             <span class="sg-k">Cloud cover</span>
             <span class="sg-v">${Math.round(attrs.cloud_coverage ?? 0)}%</span>
-            <span class="sg-k">Humidity in/out</span>
-            <span class="sg-v">${fmtPct(humidityIn)}/${fmtPct(humidityOut)}%</span>
+            <span class="sg-k">Humidity</span>
+            <span class="sg-v">${humidityOut !== undefined && humidityOut !== null ? `${humidityOut}%` : "—"}</span>
             <span class="sg-k">Probe status</span>
             <span class="sg-v" style="color: ${isSolarHeated ? "var(--sol-amber)" : "var(--sol-cyan)"};">
               ${isSolarHeated ? "Sun biased" : "Shaded"}
