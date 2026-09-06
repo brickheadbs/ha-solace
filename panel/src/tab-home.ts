@@ -264,7 +264,8 @@ export class SolTabHome extends LitElement {
         display: flex;
         align-items: center;
         gap: 9px;
-        flex-wrap: wrap;
+        min-height: 28px;
+        box-sizing: border-box;
       }
       .c-head ha-icon {
         --mdc-icon-size: 19px;
@@ -275,6 +276,7 @@ export class SolTabHome extends LitElement {
         letter-spacing: 0.8px;
         text-transform: uppercase;
         color: var(--sol-text-3);
+        line-height: 1;
       }
       .grow {
         flex: 1;
@@ -284,28 +286,33 @@ export class SolTabHome extends LitElement {
         color: var(--sol-text-4);
       }
 
+      .head-btns {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        margin-left: auto;
+      }
       .btn-pill {
         display: inline-flex;
         align-items: center;
-        gap: 6px;
+        gap: 5px;
         border: none;
         border-radius: 11px;
-        padding: 5px 11px;
-        font-size: 11.5px;
+        padding: 4px 9px;
+        font-size: 11px;
         font-weight: 500;
         cursor: pointer;
         transition: filter 0.15s ease;
+        line-height: 1.2;
+        white-space: nowrap;
+        height: 24px;
+        box-sizing: border-box;
       }
       .btn-pill:hover {
         filter: brightness(1.25);
       }
       .btn-pill ha-icon {
-        --mdc-icon-size: 15px;
-      }
-      .head-btn-stack {
-        display: inline-flex;
-        flex-direction: column;
-        gap: 5px;
+        --mdc-icon-size: 14px;
       }
 
       .status-badge {
@@ -373,7 +380,7 @@ export class SolTabHome extends LitElement {
       }
       .big-val.mono-gold {
         color: var(--sol-amber, #ffb74d);
-        font-size: 50px;
+        font-size: 48px;
       }
       .big-val .unit {
         font-size: 20px;
@@ -1181,7 +1188,7 @@ export class SolTabHome extends LitElement {
           <span class="c-title">Light</span>
           ${this.renderModeBadge()}
           <span class="grow"></span>
-          <div class="head-btn-stack">
+          <div class="head-btns">
             <button
               class="btn-pill"
               style="background: ${this.biasOpen ? "var(--sol-cyan-tint)" : "var(--sol-control)"}; color: ${this.biasOpen ? "var(--sol-cyan)" : "var(--sol-text-3)"};"
@@ -1199,8 +1206,6 @@ export class SolTabHome extends LitElement {
               <ha-icon icon="mdi:desk-lamp"></ha-icon>
               ${workActive ? "Work ON" : "Work"}
             </button>
-          </div>
-          <div class="head-btn-stack">
             <button
               class="btn-pill"
               style="background: ${gateOpen ? "rgba(255,183,77,.22)" : "var(--sol-control)"}; color: ${gateOpen ? "var(--sol-amber)" : "var(--sol-text-3)"};"
