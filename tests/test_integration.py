@@ -655,13 +655,12 @@ async def test_work_mode_overrides_office_lights_and_auto_clears(hass: HomeAssis
     assert hass.states.get("input_boolean.work_mode").state == "off"
 
 
-async def test_occupied_room_turning_on_due_to_falling_lux_uses_automatic_transition(
+async def test_occupied_room_turning_on_due_to_falling_lux_uses_occupancy_transition(
     hass: HomeAssistant, entry, world
 ) -> None:
     """When a room is already occupied during daytime and lights turn on from 0 due to
-
-    falling lux, use transition_automatic_s (slow continuous glide), not
-    transition_up_occupancy_s (which is for freshly entering the room).
+    falling lux, use transition_up_occupancy_s (acute turn-on ramp) rather than 300s
+    background glide to ensure smooth dimming from 0 without hardware rate floor stalls.
     """
     # 1. Daytime + occupied: lights are off due to full daylight demand = 0.
     world(lux=5000.0, occupied=True, light_on=False)
@@ -692,9 +691,9 @@ async def test_occupied_room_turning_on_due_to_falling_lux_uses_automatic_transi
     turn_ons = [c for c in calls if c["service"] == "turn_on"]
     assert turn_ons, "Solace never wrote to the light on lux drop"
     got = turn_ons[-1]["service_data"]["transition"]
-    assert got == coordinator.house.transition_automatic_s, (
-        f"lux drop while occupied used {got}s; expected transition_automatic_s "
-        f"({coordinator.house.transition_automatic_s}s)"
+    assert got == coordinator.house.transition_up_occupancy_s, (
+        f"lux drop while occupied used {got}s; expected transition_up_occupancy_s "
+        f"({coordinator.house.transition_up_occupancy_s}s)"
     )
 
 
