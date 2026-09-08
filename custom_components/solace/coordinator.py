@@ -773,11 +773,12 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         elif was_off:
             if solution.source == "ambience":
                 transition = house.transition_up_ambience_s
-            elif room.fresh_occupancy:
+            elif room.occupied or room.fresh_occupancy:
+                # Occupied room turn-on: acute ramp (e.g. 5s) instead of 300s background glide
                 transition = house.transition_up_occupancy_s
                 is_acute = True
             else:
-                # Room was already occupied; turn-on is driven by falling lux / curve change.
+                # Unoccupied room turn-on driven by automated event / curve change
                 transition = house.transition_automatic_s
         elif solution.source == "diminish" and last_src == "demand":
             transition = house.transition_down_diminish_s
@@ -1109,6 +1110,8 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                 for zone in room_settings.zones
                 for light_id in zone.lights
             }
+            room_state = self.rooms.get(subentry.subentry_id)
+            ambience_open = room_state.ambience_open if room_state is not None else self._gate_open()
             fixture_states: dict[str, FixtureStandbyState] = {}
             for entity_id in subentry.data.get(CONF_LIGHTS, []):
                 light = self.light_settings(entity_id, subentry)
@@ -1118,18 +1121,22 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                 )
                 wake_colour = resolve_colour(clock_hour, dusk, house, light).kelvin
 
+                cutoff = 0 if ambience_open else max(house.min_cutoff, light.clamp_min)
+                l1_level = 0 if 0 < table.l1 < cutoff else table.l1
+                l2_level = 0 if 0 < table.l2 < cutoff else table.l2
+
                 l0 = StandbyTarget(
                     level=0,
                     kelvin=None,
                     transition_s=house.transition_down_off_s,
                 )
                 l1 = StandbyTarget(
-                    level=table.l1,
+                    level=l1_level,
                     kelvin=table.target_kelvin,
                     transition_s=house.transition_up_occupancy_s,
                 )
                 l2 = StandbyTarget(
-                    level=table.l2,
+                    level=l2_level,
                     kelvin=table.target_kelvin,
                     transition_s=house.transition_down_diminish_s,
                 )
