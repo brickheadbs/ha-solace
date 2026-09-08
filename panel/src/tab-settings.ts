@@ -1414,10 +1414,10 @@ export class SolTabSettings extends LitElement {
             <!-- Up Group -->
             <div class="trans-grp">
               <div class="grp-lbl">Up</div>
-              <div class="trans-row" title="* → L1 • Motion / enter: snappy illumination into primary level">
-                <div class="trans-lbl">Occupancy</div>
+              <div class="trans-row" title="Enter → L1 • Motion / enter: snappy illumination into primary level (New Occupied)">
+                <div class="trans-lbl">New Occupancy</div>
                 <div class="trans-dots"></div>
-                <div class="trans-path">* → L1</div>
+                <div class="trans-path">Enter → L1</div>
                 <input
                   type="number"
                   step="0.5"
@@ -1426,6 +1426,21 @@ export class SolTabSettings extends LitElement {
                   .value="${String(house.transition_up_occupancy_s ?? house.transition_turn_on_l1_s ?? 2.0)}"
                   @change="${(e: Event) => {
                     setHouse(this.hass, { transition_up_occupancy_s: parseFloat((e.target as HTMLInputElement).value) });
+                  }}"
+                />
+              </div>
+              <div class="trans-row" title="Dwell 0 → L1 • Already in room: gentle rise when lights turn on due to lux drop or storm (Old Occupied off to on)">
+                <div class="trans-lbl">Occupied Turn-On</div>
+                <div class="trans-dots"></div>
+                <div class="trans-path">Dwell: 0 → L1</div>
+                <input
+                  type="number"
+                  step="0.5"
+                  class="num-input"
+                  style="width: 62px;"
+                  .value="${String(house.transition_up_occupied_on_s ?? 5.0)}"
+                  @change="${(e: Event) => {
+                    setHouse(this.hass, { transition_up_occupied_on_s: parseFloat((e.target as HTMLInputElement).value) });
                   }}"
                 />
               </div>

@@ -302,6 +302,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         fields["colour_trim_kelvin"] = int(fields.get("colour_trim_kelvin", 0))
         fields["colour_step_mired"] = int(fields.get("colour_step_mired", 5))
         fields["transition_up_occupancy_s"] = float(fields.get("transition_up_occupancy_s", fields.get("transition_turn_on_l1_s", 2.0)))
+        fields["transition_up_occupied_on_s"] = float(fields.get("transition_up_occupied_on_s", 5.0))
         fields["transition_up_ambience_s"] = float(fields.get("transition_up_ambience_s", fields.get("transition_wake_l3_s", 10.0)))
         fields["transition_down_diminish_s"] = float(fields.get("transition_down_diminish_s", fields.get("transition_diminish_l2_s", 5.0)))
         fields["transition_down_ambience_s"] = float(fields.get("transition_down_ambience_s", fields.get("transition_clear_to_l3_s", 5.0)))
@@ -773,9 +774,13 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         elif was_off:
             if solution.source == "ambience":
                 transition = house.transition_up_ambience_s
-            elif room.occupied or room.fresh_occupancy:
-                # Occupied room turn-on: acute ramp (e.g. 5s) instead of 300s background glide
+            elif room.fresh_occupancy:
+                # Fresh occupancy: snappy enter ramp (New Occupied)
                 transition = house.transition_up_occupancy_s
+                is_acute = True
+            elif room.occupied:
+                # Old occupied off to on: user already in room when lights turn on (lux drop, storm, evening)
+                transition = house.transition_up_occupied_on_s
                 is_acute = True
             else:
                 # Unoccupied room turn-on driven by automated event / curve change
