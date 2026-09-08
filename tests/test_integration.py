@@ -691,9 +691,9 @@ async def test_occupied_room_turning_on_due_to_falling_lux_uses_occupancy_transi
     turn_ons = [c for c in calls if c["service"] == "turn_on"]
     assert turn_ons, "Solace never wrote to the light on lux drop"
     got = turn_ons[-1]["service_data"]["transition"]
-    assert got == coordinator.house.transition_up_occupancy_s, (
-        f"lux drop while occupied used {got}s; expected transition_up_occupancy_s "
-        f"({coordinator.house.transition_up_occupancy_s}s)"
+    assert got == coordinator.house.transition_up_occupied_on_s, (
+        f"lux drop while occupied used {got}s; expected transition_up_occupied_on_s "
+        f"({coordinator.house.transition_up_occupied_on_s}s)"
     )
 
 
