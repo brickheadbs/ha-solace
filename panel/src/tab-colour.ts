@@ -22,20 +22,22 @@ import { tokens } from "./tokens";
 import "./ui";
 
 const HELP: Record<string, string> = {
-  day_kelvin: "The colour held through the day, until civil dusk starts the glide down.",
-  night_kelvin: "The colour held after the glide, until the morning release.",
+  day_kelvin:
+    "Daytime target colour temperature in Kelvin (2000K–9000K, default ~4000K). Held throughout daylight hours until civil dusk triggers the evening circadian glide.",
+  night_kelvin:
+    "Nighttime resting colour temperature in Kelvin (2000K–9000K, default ~2200K). Warm, non-disruptive amber held through the night to protect melatonin until morning release.",
   colour_glide_minutes:
-    "How long the glide from day to night colour takes, starting at civil dusk. The glide is interpolated in mireds, which is what makes it look even.",
+    "Duration in minutes for the dusk circadian transition from day colour to night colour. Interpolated linearly in mired space (10^6 / K) to produce an optically uniform perceptual shift.",
   colour_trim_kelvin:
-    "A live trim added to whatever the curve says, at any time of day. Use it to nudge the whole house warmer or cooler without touching the curve.",
+    "Real-time global colour temperature offset in Kelvin (±1000K). Dynamically shifts all active fixtures warmer (-) or cooler (+) without mutating baseline curve endpoints.",
   colour_step_mired:
-    "Step size for bulbs that cannot glide colour while their brightness is fading — they skip steps while one is running, so they are walked in bigger, less frequent moves. Smaller is not better here: a finer walk would fall behind the curve rather than track it.",
+    "Stepped bulb resolution in mireds. Used for legacy Zigbee fixtures that reject colour updates during active brightness fades. Dispatches larger, discrete mired jumps to avoid packet congestion and Zigbee buffer exhaustion.",
   colour_step_mired_smooth:
-    "Step size for bulbs that can glide colour during a brightness fade. They never skip a step, so they can be walked finely and look continuous. This is the setting that makes the good bulbs look good.",
+    "Smooth bulb resolution in mireds. Used for advanced fixtures supporting simultaneous colour and brightness transitions. Allows tight, imperceptible incremental steps for seamless colour tracking.",
   colour_catch_up_steps:
-    "How far a single move may reach when a bulb has fallen behind the curve. Safe at any size — a bigger jump over the same short fade is further from the failure threshold, not closer — so this is about how large a visible colour jump you will accept.",
+    "Maximum allowed jump multiplier when a fixture has fallen behind the circadian curve (e.g. after being powered off at a wall switch). Bounded jump prevents jarring instant color flips while rapidly restoring curve alignment.",
   colour_step_transition_s:
-    "The fade applied to each individual colour step. This is the number the hardware limit is computed from, never the gap between steps.",
+    "Hardware transition duration in seconds applied to each incremental colour step command sent over Zigbee. Tunes the physical ramp speed between colour coordinates.",
 };
 
 const FAMILY_NAMES: Record<string, string> = {

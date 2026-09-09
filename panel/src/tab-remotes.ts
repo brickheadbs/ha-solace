@@ -219,6 +219,7 @@ export class TabRemotes extends LitElement {
               <div class="remote-header">
                 <ha-icon icon="mdi:remote"></ha-icon>
                 <span class="remote-title">${remote.name}</span>
+                <sol-help text="Hardware Zigbee remote controllers (IKEA Styrbar). Maps physical button presses and long holds to Solace room actions, preset cycles, manual latches, or sleep toggles. Managed natively through Solace coordinator event dispatch."></sol-help>
                 <span class="remote-room-tag">${remote.room_name || "Unassigned"}</span>
               </div>
               <div class="entity-sub">${remote.action_entity || "sensor.*_action"}</div>
