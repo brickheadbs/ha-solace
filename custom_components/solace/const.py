@@ -110,7 +110,7 @@ HOUSE_SETTINGS: tuple[Setting, ...] = (
     # Transitions Matrix (8 Dedicated Speeds)
     # UP
     Setting("transition_up_occupancy_s", "Occupancy", 0, 60, 0.1, 2, "s", "mdi:motion-sensor"),
-    Setting("transition_up_occupied_on_s", "Occupied turn-on", 0, 60, 0.1, 5, "s", "mdi:account-clock"),
+    Setting("transition_up_occupied_on_s", "Threshold", 0, 60, 0.1, 5, "s", "mdi:chart-bell-curve"),
     Setting("transition_up_ambience_s", "Ambience", 0, 60, 0.1, 10, "s", "mdi:weather-sunset-down"),
     # DOWN
     Setting("transition_down_diminish_s", "Diminish", 0, 60, 0.1, 5, "s", "mdi:timer-outline"),
