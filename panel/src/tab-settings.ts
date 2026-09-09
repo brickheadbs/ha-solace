@@ -1414,10 +1414,13 @@ export class SolTabSettings extends LitElement {
             <!-- Up Group -->
             <div class="trans-grp">
               <div class="grp-lbl">Up</div>
-              <div class="trans-row" title="Enter → L1 • Motion / enter: snappy illumination into primary level (New Occupied)">
-                <div class="trans-lbl">New Occupancy</div>
+              <div class="trans-row" title="Clear → L1 • Motion arrival: snappy illumination directly to primary curve level (L1)">
+                <div class="trans-lbl">
+                  Occupancy
+                  <sol-help text="Motion arrival: Triggered when a room transitions from clear to occupied. Snappy hardware ramp directly into the current circadian curve level (L1), ensuring instant visibility upon walking into the room."></sol-help>
+                </div>
                 <div class="trans-dots"></div>
-                <div class="trans-path">Enter → L1</div>
+                <div class="trans-path">Clear → L1</div>
                 <input
                   type="number"
                   step="0.5"
@@ -1429,10 +1432,13 @@ export class SolTabSettings extends LitElement {
                   }}"
                 />
               </div>
-              <div class="trans-row" title="Dwell 0 → L1 • Already in room: gentle rise when lights turn on due to lux drop or storm (Old Occupied off to on)">
-                <div class="trans-lbl">Occupied Turn-On</div>
+              <div class="trans-row" title="0% → 1%+ • Environmental threshold: gentle rise to L1 while room is already occupied">
+                <div class="trans-lbl">
+                  Threshold
+                  <sol-help text="Occupied threshold turn-on: Triggered while a room is already occupied and light demand crosses above zero due to falling outdoor daylight, an approaching storm, or dusk. A smooth, gentle rise to avoid startling occupants already seated in the room."></sol-help>
+                </div>
                 <div class="trans-dots"></div>
-                <div class="trans-path">Dwell: 0 → L1</div>
+                <div class="trans-path">0% → 1%+</div>
                 <input
                   type="number"
                   step="0.5"
@@ -1444,8 +1450,11 @@ export class SolTabSettings extends LitElement {
                   }}"
                 />
               </div>
-              <div class="trans-row" title="Off → L3 • Dusk gate opens empty room: gentle wake to ambience floor">
-                <div class="trans-lbl">Ambience</div>
+              <div class="trans-row" title="Off → L3 • Dusk gate opens empty room: gentle wake to resting ambience floor (L3)">
+                <div class="trans-lbl">
+                  Ambience
+                  <sol-help text="Ambience floor wake: Triggered when the dusk gate opens in an unoccupied room. Gently illuminates fixtures from dark to their resting background glow (L3) so the home feels warm and lived-in without requiring motion."></sol-help>
+                </div>
                 <div class="trans-dots"></div>
                 <div class="trans-path">Off → L3</div>
                 <input
@@ -1464,8 +1473,11 @@ export class SolTabSettings extends LitElement {
             <!-- Down Group -->
             <div class="trans-grp">
               <div class="grp-lbl">Down</div>
-              <div class="trans-row" title="L1 → L2 • Occupancy timeout: smooth warning transition to diminished level">
-                <div class="trans-lbl">Diminish</div>
+              <div class="trans-row" title="L1 → L2 • Zone clear: smooth warning transition to diminished level (L2)">
+                <div class="trans-lbl">
+                  Diminish
+                  <sol-help text="Occupancy dwell warning: Triggered when presence clears in a zone configured with a diminish offset (e.g. kitchen). Smoothly steps brightness down to the diminished level (L2) as an unobtrusive visual warning that presence has ended."></sol-help>
+                </div>
                 <div class="trans-dots"></div>
                 <div class="trans-path">L1 → L2</div>
                 <input
@@ -1479,8 +1491,11 @@ export class SolTabSettings extends LitElement {
                   }}"
                 />
               </div>
-              <div class="trans-row" title="L2 → L3 • Post-diminish: drop to background ambient glow">
-                <div class="trans-lbl">Ambience</div>
+              <div class="trans-row" title="L2 → L3 • Dwell expires: soft step down to resting ambience floor (L3)">
+                <div class="trans-lbl">
+                  Ambience
+                  <sol-help text="Post-diminish ambient settle: Triggered after the dwell timer expires in an empty room where background ambience is enabled. Softly steps down to the resting floor level (L3)."></sol-help>
+                </div>
                 <div class="trans-dots"></div>
                 <div class="trans-path">L2 → L3</div>
                 <input
@@ -1494,8 +1509,11 @@ export class SolTabSettings extends LitElement {
                   }}"
                 />
               </div>
-              <div class="trans-row" title="* → Off • Room clears, ambient gate closes, or away: graceful shutoff">
-                <div class="trans-lbl">Off</div>
+              <div class="trans-row" title="* → Off • Room clears, dusk gate closes, or sleep mode: graceful shutoff">
+                <div class="trans-lbl">
+                  Off
+                  <sol-help text="Full shutoff: Triggered when an unoccupied room clears all timers, the dusk gate closes at dawn, or sleep mode engages. Graceful fade to dark."></sol-help>
+                </div>
                 <div class="trans-dots"></div>
                 <div class="trans-path">* → Off</div>
                 <input
@@ -1514,8 +1532,11 @@ export class SolTabSettings extends LitElement {
             <!-- Continuous & Special -->
             <div class="trans-grp">
               <div class="grp-lbl">Continuous &amp; special</div>
-              <div class="trans-row" title="Tracking • Steady-state lux / cloud blend / curve tracking tick transition">
-                <div class="trans-lbl">Automatic</div>
+              <div class="trans-row" title="Tracking • Continuous background glide as solar elevation and lux shift">
+                <div class="trans-lbl">
+                  Automatic
+                  <sol-help text="Continuous tracking: Hardware transition applied during steady-state background updates. Glides brightness and colour temperature imperceptibly as daylight changes or clouds pass."></sol-help>
+                </div>
                 <div class="trans-dots"></div>
                 <div class="trans-path">Tracking</div>
                 <input
@@ -1530,7 +1551,10 @@ export class SolTabSettings extends LitElement {
                 />
               </div>
               <div class="trans-row" title="UI Drag • Live slider adjustments and tuning response">
-                <div class="trans-lbl">Manual</div>
+                <div class="trans-lbl">
+                  Manual
+                  <sol-help text="Interactive preview: High-speed hardware transition used while dragging sliders or tuning curves in the Solace panel. Delivers snappy, near-instant visual feedback."></sol-help>
+                </div>
                 <div class="trans-dots"></div>
                 <div class="trans-path">UI Drag</div>
                 <input
