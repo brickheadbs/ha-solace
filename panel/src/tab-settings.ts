@@ -660,6 +660,7 @@ export class SolTabSettings extends LitElement {
           <div class="head">
             <ha-icon icon="mdi:tune" style="color: var(--sol-blue);"></ha-icon>
             <div class="title">Special modes</div>
+            <sol-help text="Targeted room overrides that decouple from circadian curves under specific triggers: Work Mode (manual desk presets with debounce), Sleep Mode (forces dark across daytime naps and summer dawns), Virtual Sunrise (gradual alarm dawn), and Virtual Sunset (bedtime wind-down)."></sol-help>
           </div>
           <div class="bed-grid">
             <div class="modes-row">
@@ -697,6 +698,7 @@ export class SolTabSettings extends LitElement {
                     <div style="display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--sol-text-2); margin-bottom: 4px;">
                       <ha-icon icon="mdi:lamp" style="--mdc-icon-size: 14px; color: var(--sol-amber);"></ha-icon>
                       Desk lamp brightness
+                      <sol-help text="Preset brightness level (0–254) written to light.office_desk_lamp when Work Mode is active and office presence is detected."></sol-help>
                     </div>
                     <div class="input-with-unit">
                       <input
@@ -719,6 +721,7 @@ export class SolTabSettings extends LitElement {
                     <div style="display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--sol-text-2); margin-bottom: 4px;">
                       <ha-icon icon="mdi:lightbulb-outline" style="--mdc-icon-size: 14px; color: var(--sol-amber);"></ha-icon>
                       Backlight brightness
+                      <sol-help text="Preset brightness level (0–254) written to light.office_desk_backlight when Work Mode is active and office presence is detected."></sol-help>
                     </div>
                     <div class="input-with-unit">
                       <input
@@ -741,6 +744,7 @@ export class SolTabSettings extends LitElement {
                     <div style="display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--sol-text-2); margin-bottom: 4px;">
                       <ha-icon icon="mdi:lightbulb" style="--mdc-icon-size: 14px; color: var(--sol-amber);"></ha-icon>
                       Corner brightness
+                      <sol-help text="Preset brightness level (0–254) written to light.office_desk_corner when Work Mode is active and office presence is detected."></sol-help>
                     </div>
                     <div class="input-with-unit">
                       <input
@@ -763,7 +767,7 @@ export class SolTabSettings extends LitElement {
                     <div style="display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--sol-text-2); margin-bottom: 4px;">
                       <ha-icon icon="mdi:timer-sand" style="--mdc-icon-size: 14px; color: var(--sol-amber);"></ha-icon>
                       Occupancy debounce
-                      <sol-help text="Delay before turning office lights off when no presence is detected in work mode."></sol-help>
+                      <sol-help text="Grace period in minutes before turning office work lights off when room occupancy clears. Prevents lights shutting off during brief departures (e.g. grabbing coffee)."></sol-help>
                     </div>
                     <div class="input-with-unit">
                       <input
@@ -790,7 +794,7 @@ export class SolTabSettings extends LitElement {
                 <div class="bed-head">
                   <ha-icon icon="mdi:weather-night" style="color: var(--sol-amber);"></ha-icon>
                   <div class="bed-title">1 · Sleep mode</div>
-                  <sol-help text="Forces bedroom lights to dark even during a 04:30 summer sunrise or daytime nap. Triggered by Phone DND, Watch Bedtime, or manual sleep switch. Unlatches automatically when Virtual Sunrise begins or upon dawn outdoor daylight."></sol-help>
+                  <sol-help text="Forces bedroom lights dark (0) across 04:30 summer dawns and daytime naps. Triggered by Phone DND, Watch Bedtime, or manual switch. Automatically unlatches when Virtual Sunrise begins or when outdoor daylight crosses the dawn release threshold."></sol-help>
                   <div class="spacer"></div>
                   <div class="badge ${sleepActive ? "badge-amber" : "badge-dim"}">
                     ${sleepActive ? "Asleep (Night active)" : "Awake (Standby)"}
@@ -823,7 +827,7 @@ export class SolTabSettings extends LitElement {
                     <div style="display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--sol-text-2); margin-bottom: 4px;">
                       <ha-icon icon="mdi:weather-sunset-up" style="--mdc-icon-size: 14px; color: var(--sol-amber);"></ha-icon>
                       Release lux (dawn unlatch)
-                      <sol-help text="Outdoor light level at which sleep mode automatically unlatches so daytime lighting takes over seamlessly."></sol-help>
+                      <sol-help text="Outdoor illuminance in lux at which Sleep Mode automatically unlatches at dawn, allowing normal daytime circadian tracking to resume seamlessly."></sol-help>
                     </div>
                     <div class="input-with-unit">
                       <input
@@ -848,7 +852,7 @@ export class SolTabSettings extends LitElement {
               <div class="bed-head">
                 <ha-icon icon="mdi:weather-sunset-up" style="color: var(--sol-amber);"></ha-icon>
                 <div class="bed-title">2 · Virtual sunrise curve</div>
-                <sol-help text="Gradual morning fade up before alarm. Output is dynamically clamped to Master Demand so electric lights never exceed natural ambient daylight needs."></sol-help>
+                <sol-help text="Gradual artificial dawn simulated in the bedroom ahead of next scheduled alarm. Evaluated along the custom spline curve over the configured fade duration. Output is dynamically clamped by Master Demand so electric lights never illuminate brighter than natural daylight."></sol-help>
                 <div class="spacer"></div>
                 <button class="btn-reset" @click="${() => this.resetSunrise()}">Reset</button>
                 <button
@@ -866,6 +870,7 @@ export class SolTabSettings extends LitElement {
               <div class="curve-ctrl-bar">
                 <div class="curve-metric">
                   <span>Fade duration:</span>
+                  <sol-help text="Total ramp duration in minutes over which bedroom lights fade up along the sunrise spline curve before alarm time."></sol-help>
                   <div class="input-with-unit">
                     <input
                       type="number"
@@ -1048,7 +1053,7 @@ export class SolTabSettings extends LitElement {
               <div class="bed-head">
                 <ha-icon icon="mdi:weather-sunset-down" style="color: var(--sol-amber);"></ha-icon>
                 <div class="bed-title">3 · Virtual sunset curve</div>
-                <sol-help text="Fades down toward dark before bedtime. Dynamically clamped to Master Demand so it fades naturally into the evening background."></sol-help>
+                <sol-help text="Gradual evening bedtime wind-down simulated in the bedroom. Triggers after the configured Window Start hour once continuous bedroom occupancy exceeds the Dwell time. Smoothly fades brightness down along the custom spline curve over Fade Duration to prepare for sleep."></sol-help>
                 <div class="spacer"></div>
                 <button class="btn-reset" @click="${() => this.resetSunset()}">Reset</button>
                 <button
@@ -1066,6 +1071,7 @@ export class SolTabSettings extends LitElement {
               <div class="curve-ctrl-bar">
                 <div class="curve-metric">
                   <span>Window start:</span>
+                  <sol-help text="Earliest hour of the evening (24h decimal, e.g. 22.0 = 22:00) when bedtime wind-down evaluation becomes active."></sol-help>
                   <div class="input-with-unit">
                     <input
                       type="number"
@@ -1083,6 +1089,7 @@ export class SolTabSettings extends LitElement {
                 </div>
                 <div class="curve-metric">
                   <span>Bedroom dwell:</span>
+                  <sol-help text="Continuous occupancy duration in minutes required in the bedroom after the window start hour before the wind-down fade begins."></sol-help>
                   <div class="input-with-unit">
                     <input
                       type="number"
@@ -1099,6 +1106,7 @@ export class SolTabSettings extends LitElement {
                 </div>
                 <div class="curve-metric">
                   <span>Fade duration:</span>
+                  <sol-help text="Total duration in minutes over which bedroom lights fade down along the sunset spline curve into dark."></sol-help>
                   <div class="input-with-unit">
                     <input
                       type="number"
@@ -1286,7 +1294,7 @@ export class SolTabSettings extends LitElement {
             <ha-icon icon="mdi:theme-light-dark" style="color: var(--sol-blue);"></ha-icon>
             <div class="title">Ambience gate</div>
             <sol-help
-              text="The dark/bright threshold that arms the L3 ambience floor. Hysteretic: it opens when outdoor lux falls to the start value and does not close again until lux rises past the stop value, so dusk cannot chatter it. While the gate is open, per-light Cut Offs are DISARMED — that is what stops a low evening curve from cutting a fixture to nothing."
+              text="Hysteretic daylight threshold that arms the L3 ambience floor. Opens when outdoor lux drops to the start value and holds until lux rises above the stop value, preventing dusk chatter. While the gate is open, per-light Cut Offs are disarmed so low evening curve demand does not cut resting ambient glow."
             ></sol-help>
             <div class="spacer"></div>
             <div class="badge ${gateOpen ? "badge-amber" : "badge-dim"}">
@@ -1299,7 +1307,7 @@ export class SolTabSettings extends LitElement {
               <div style="display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--sol-text-2); margin-bottom: 4px;">
                 <ha-icon icon="mdi:weather-sunset-down" style="--mdc-icon-size: 14px; color: var(--sol-amber);"></ha-icon>
                 Start lux (gate opens)
-                <sol-help text="Outdoor lux at or below which the gate opens: ambience arms and Cut Offs disarm. Must be lower than the stop value."></sol-help>
+                <sol-help text="Outdoor illuminance in lux at or below which the gate opens: arms resting ambience (L3) and disarms low-end cutoffs. Must be lower than stop lux."></sol-help>
               </div>
               <div class="input-with-unit">
                 <input
@@ -1322,7 +1330,7 @@ export class SolTabSettings extends LitElement {
               <div style="display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--sol-text-2); margin-bottom: 4px;">
                 <ha-icon icon="mdi:weather-sunset-up" style="--mdc-icon-size: 14px; color: var(--sol-amber);"></ha-icon>
                 Stop lux (gate closes)
-                <sol-help text="Outdoor lux at or above which the gate closes again at dawn. The span between start and stop is the hysteresis band that keeps dusk from flickering the gate."></sol-help>
+                <sol-help text="Outdoor illuminance in lux at or above which the gate closes at dawn: disarms resting ambience and re-arms daytime cutoffs. Span between start and stop creates the anti-flicker hysteresis band."></sol-help>
               </div>
               <div class="input-with-unit">
                 <input
@@ -1345,7 +1353,7 @@ export class SolTabSettings extends LitElement {
               <div style="display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--sol-text-2); margin-bottom: 4px;">
                 <ha-icon icon="mdi:timer-sand" style="--mdc-icon-size: 14px; color: var(--sol-text-3);"></ha-icon>
                 Debounce falling
-                <sol-help text="How long lux must stay below the start value before the gate actually opens. 0 disables the delay."></sol-help>
+                <sol-help text="How long outdoor lux must continuously remain below the start threshold before the gate opens. Prevents temporary shadows or dark clouds from opening the gate prematurely. 0 disables."></sol-help>
               </div>
               <div class="input-with-unit">
                 <input
@@ -1369,7 +1377,7 @@ export class SolTabSettings extends LitElement {
               <div style="display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--sol-text-2); margin-bottom: 4px;">
                 <ha-icon icon="mdi:timer-sand" style="--mdc-icon-size: 14px; color: var(--sol-text-3);"></ha-icon>
                 Debounce rising
-                <sol-help text="How long lux must stay above the stop value before the gate closes. 0 disables the delay."></sol-help>
+                <sol-help text="How long outdoor lux must continuously remain above the stop threshold before the gate closes. Prevents momentary sun breaks or bright headlights from closing the gate prematurely. 0 disables."></sol-help>
               </div>
               <div class="input-with-unit">
                 <input
@@ -1406,6 +1414,7 @@ export class SolTabSettings extends LitElement {
           <div class="head">
             <ha-icon icon="mdi:speedometer" style="color: var(--sol-blue);"></ha-icon>
             <div class="title">Transitions Matrix</div>
+            <sol-help text="Dedicated hardware transition speeds in seconds. Segregates fast occupancy arrival from smooth environmental threshold rises, gentle ambient wakes, warning diminish steps, and background tracking glides."></sol-help>
             <div class="spacer"></div>
             <div style="font-size: 11px; color: var(--sol-text-4);">seconds</div>
           </div>

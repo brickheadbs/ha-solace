@@ -18,27 +18,27 @@ import "./ui";
 
 const HELP = {
   houseBias:
-    "Shifts every room at once, in stops. One stop is a doubling of light. Rooms keep their own offsets, so this moves the whole house without flattening the differences between rooms.",
+    "House-wide baseline shift in photographic stops (±4 EV). One stop doubles (+1 EV) or halves (-1 EV) the baseline master demand calculated from the circadian curves. Rooms add their own offsets to this, preserving relative inter-room balance.",
   roomBias:
-    "This room's offset from the house, in stops. Added to the house bias, never multiplied by it.",
+    "Room-specific offset added to the house bias, in photographic stops (±4 EV). Additive arithmetic: Effective Bias = House Bias + Room Bias. Moves all fixtures in the room together without altering adjacent rooms.",
   zoneBias:
-    "A layer between the room and its individual lights. Use it when part of a room wants a different level from the rest.",
+    "Sub-zone offset within a room, in photographic stops (±4 EV). Applied on top of Room Bias for fixtures assigned to this specific zone (e.g. kitchen island prep area vs dining table).",
   ambience:
-    "A resting glow floor for this room while you are awake and it is dark outside. Replaces off — never lowers a light that is already active. 0 means this room follows the house-wide setting.",
+    "Resting background floor (L3) for this room while awake and dusk gate is open. Replaces off (0) with a warm ambient level (0–254). Clamped floor: never lowers a light already active at L1/L2. Setting 0 follows the global house setting.",
   diminish:
-    "Kitchen behaviour. When the near sensor reads clear the lights reduce by this much and stay there — they never switch off from diminish alone. 0 means no effect.",
+    "Occupancy dwell step-down (L2). When a zone sensor clears while the main room is still occupied, brightness reduces by this photographic stop offset and holds. Prevents harsh shutoffs during stationary tasks. 0 disables.",
   perLight:
-    "Per-light offsets, in stops, added on top of the house, room and zone biases. Cut is a cutoff: demand below it turns the light off entirely. Max is a clamp: the light never exceeds it.",
-  cut: "A cutoff, not a floor. If the computed level falls below this, the light goes off rather than sitting at a useless glow.",
-  max: "A hard clamp applied last, after everything else. The light never exceeds it — this is what makes a glare cap a rule rather than a suggestion.",
+    "Per-fixture bias adjustment in photographic stops (±4 EV), applied after House, Room, and Zone biases. Combined demand = Curve Demand × 2^(House + Room + Zone + Fixture Bias).",
+  cut: "Hard low-end threshold cutoff (0–254). If computed demand falls below this value, the fixture switches fully off (0) rather than emitting an unwanted faint glow. Disarmed when the Ambience Gate is open.",
+  max: "Hard upper ceiling clamp (0–254). Written brightness will never exceed this ceiling under any curve, bias, or boost condition. Enforces glare limits and hardware maximums.",
   manual:
-    "Manual hands this room to you and stops Solace writing to it. A touch on a physical switch does the same for a while; this switch holds until you turn it off.",
+    "Manual override latch. Hands full control of this room to manual HA switch/entity commands and disables Solace writes until unlatched. Physical switch interactions also latch manual mode temporarily.",
   zone:
-    "A part of this area with its own bias — the office end of a living room, the sink end of a kitchen. Same four walls, so it shares the area's presence and its dials; the zone bias is an offset on top.",
+    "Sub-area grouping within a room sharing presence but requiring distinct light levels (e.g. kitchen sink vs table). Carries its own zone bias offset and independent diminish behavior.",
   zoneDiminish:
-    "When this zone's own sensor reads clear, its lights reduce by this much and stay there. They never switch off from diminish alone. 0 means no effect.",
+    "Zone-specific diminish offset. When this zone's presence sensor clears, lights drop to L2 by this amount while parent room remains occupied. 0 disables.",
   nightOff:
-    "When you are asleep this room goes fully dark instead of dropping to the night level. Once you are up it rejoins the house at the night level, so the room you are standing in is never the dark one.",
+    "Sleep state policy. When house sleep mode is active, this room is forced completely dark (0) instead of dropping to the night resting level (L3). Unlatches automatically when awake.",
 };
 
 @customElement("sol-tab-lighting")
@@ -510,7 +510,7 @@ export class SolTabLighting extends LitElement {
         <div class="name">
           <ha-icon icon="mdi:camera-metering-spot" style="color: var(--sol-blue);"></ha-icon>
           <span>Master mood &amp; energy trim</span>
-          <sol-help text="One dial for the whole house in photographic stops — doubles or halves the baseline level settled on by the curves."></sol-help>
+          <sol-help text="Global master bias dial in photographic stops (±4 EV). Multiplies baseline curve demand across all rooms by 2^EV (one stop doubles or halves output). Preserves relative inter-room balance."></sol-help>
         </div>
         <div style="flex: 1;"></div>
         <div style="display: flex; background: var(--sol-control); border-radius: 14px; padding: 2px; gap: 2px;">

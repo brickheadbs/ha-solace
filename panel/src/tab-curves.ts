@@ -598,12 +598,12 @@ export class SolTabCurves extends LitElement {
 
   private getCardHelp(key: CurveKey): string {
     if (key === "lux") {
-      return "Indoor demand against measured outdoor light. Use Clear Sun vs Overcast toggle to shape each curve. Demand smoothly transitions to the Overcast curve above the configured cloudiness threshold. Drag a node to adjust · click the line to add one · double-click to remove.";
+      return "Transfer function mapping outdoor illuminance (lux) to indoor baseline demand (0–254). The dual-curve architecture blends between Clear Sun and Overcast based on local cloud coverage forecast. Above the Overcast blend threshold, demand smoothly crossfades toward the Overcast curve. Drag nodes to reshape; click the curve to add a node; double-click a node to delete.";
     }
     if (key === "bright") {
-      return "Master brightness level through the day across the 24-hour cycle. Drag a node to adjust level across the day · click to add · double-click to remove.";
+      return "Time-of-day master brightness baseline across the 24-hour cycle. Sets the diurnal circadian demand from dawn to dusk and into night. Room and zone EV biases apply on top of this baseline. Drag nodes to reshape; click the curve to add a node; double-click a node to delete.";
     }
-    return "Colour temperature in Derims (100d candle to 433d daylight). Drag a node to shape circadian colour across the day.";
+    return "Circadian colour temperature curve in Derims (100d = warm 2300K candle amber; 433d = crisp 5000K daylight). Evaluates diurnal colour across 24 hours to drive melatonin suppression and sleep-wake alignment. Drag nodes to reshape; click the curve to add a node; double-click a node to delete.";
   }
 
   private renderCard(key: CurveKey) {
@@ -687,7 +687,7 @@ export class SolTabCurves extends LitElement {
       <div class="boost-row">
         <ha-icon icon="mdi:weather-partly-cloudy" style="color: var(--sol-cyan);"></ha-icon>
         <div style="font-size: 12.5px; color: var(--sol-text-2);">Overcast blend threshold</div>
-        <sol-help text="Cloudiness percentage required before the Overcast curve begins crossfading in. Above this threshold, demand smoothly transitions to the Overcast curve as cloud cover reaches 100%."></sol-help>
+        <sol-help text="Cloudiness percentage required before the Overcast curve begins crossfading in. When cloud cover is between this threshold and 100%, Solace dynamically interpolates demand between Clear Sun and Overcast curves, anticipating overcast gloom before indoor illuminance drops."></sol-help>
         <div style="font-size: 12px; color: var(--sol-text-3); margin-left: 4px;">Trigger:</div>
         <input
           type="range"
