@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field, replace
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry, ConfigSubentry
@@ -32,7 +32,7 @@ from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
-from .colour import resolve_colour
+from .colour import kelvin_to_mired, resolve_colour
 from .const import (
     CONF_ALARM_ENTITY,
     CONF_AWAY_ENTITY,
@@ -71,7 +71,7 @@ from .engine import (
     solve,
     solve_master,
 )
-from .fade import FadeProfile, fade_profile
+from .fade import FadeProfile, dynamic_colour_transition_s, fade_profile
 from .filter import AsymmetricFilter
 from .horizon import (
     InteractivePreviewAutomaton,
@@ -233,6 +233,10 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         self._startup_time = hass.loop.time()
         self._lux_warned = False
         self._night_latched = False
+        self._active_sunrise_start: datetime | None = None
+        self._active_sunrise_end: datetime | None = None
+        self._active_sunset_started_at: float | None = None
+        self._active_sunset_duration_s: float | None = None
         self._gate_override: bool | None = None
         self._unsubscribes: list[Any] = []
         self._last_presence: dict[str, float] = {}
@@ -781,7 +785,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
             elif room.occupied:
                 # Old occupied off to on: user already in room when lights turn on (lux drop, storm, evening)
                 transition = house.transition_up_occupied_on_s
-                is_acute = True
+                is_acute = False
             else:
                 # Unoccupied room turn-on driven by automated event / curve change
                 transition = house.transition_automatic_s
@@ -804,6 +808,24 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         if not is_acute and self.writer.ramp_tracker.should_suppress_chronic_write(entity_id, loop_now):
             _LOGGER.debug("%s: suppressing chronic background write (RampLock active)", entity_id)
             return
+
+        # Smart in-flight hardware glide protection:
+        # If this fixture is already in the middle of a continuous tracking glide, check if the
+        # new solution level is within the dead zone of the in-flight target. If so, leave the
+        # in-flight glide alone to avoid resetting hardware timers, zigbee chatter, or jarring jumps.
+        if not is_acute:
+            in_flight = self.writer.get_in_flight_brightness(entity_id)
+            if in_flight is not None:
+                _start_time, _duration, _start_lvl, flight_target = in_flight
+                if abs(solution.level - flight_target) < house.dead_zone:
+                    _LOGGER.debug(
+                        "%s: in-flight glide toward %d is within dead zone (%d) of new target %d — suppressing write",
+                        entity_id,
+                        flight_target,
+                        house.dead_zone,
+                        solution.level,
+                    )
+                    return
 
         # An OFF bulb rejects a colour command — it wakes at its old colour. So colour
         # has to ride in the same turn-on, and only then.
@@ -841,14 +863,27 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                 if state is None or state.state != STATE_ON:
                     continue  # an off bulb rejects colour; it gets it on wake instead
                 light = self.light_settings(entity_id, subentry)
+                current_k = state.attributes.get("color_temp_kelvin")
+                if current_k is None:
+                    continue
                 target = resolve_colour(target_hour, dusk, house, light)
+                current_m = kelvin_to_mired(current_k)
+                target_m = kelvin_to_mired(target.kelvin)
+                delta_m = abs(target_m - current_m)
+                step_trans_s = dynamic_colour_transition_s(
+                    delta_m,
+                    family=light.family,
+                    r_crit=house.colour_rate_floor,
+                    safety=house.colour_rate_safety,
+                    max_duration_s=min(60.0, float(house.colour_heartbeat_s)),
+                )
                 await self.writer.async_step_colour(
                     entity_id,
-                    state.attributes.get("color_temp_kelvin"),
+                    current_k,
                     target.kelvin,
                     light,
                     profile=self.fade_profile_for(light.family),
-                    transition_s=transition_s,
+                    transition_s=step_trans_s,
                 )
                 room.last_written_kelvin[entity_id] = target.kelvin
 
@@ -913,9 +948,24 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         return self._is_on(entity_id, default=False)
 
     def _sunrise_progress(self, house: HouseSettings) -> float | None:
-        """0.0 to 1.0 progress through pre-alarm virtual sunrise fade."""
+        """0.0 to 1.0 progress through pre-alarm virtual sunrise fade with state prediction timeline anchoring."""
         if not house.sunrise_fade_enabled:
+            self._active_sunrise_start = None
+            self._active_sunrise_end = None
             return None
+
+        now = dt_util.utcnow()
+
+        # If sunrise is already anchored, continue the timeline even if alarm dismisses / changes during toilet trips
+        if self._active_sunrise_start is not None and self._active_sunrise_end is not None:
+            if now <= self._active_sunrise_end:
+                total = (self._active_sunrise_end - self._active_sunrise_start).total_seconds()
+                elapsed = (now - self._active_sunrise_start).total_seconds()
+                return max(0.0, min(1.0, elapsed / total if total > 0 else 1.0))
+            # Completed naturally
+            self._active_sunrise_start = None
+            self._active_sunrise_end = None
+
         entity_id = self.config_entry.options.get(
             CONF_ALARM_ENTITY
         ) or self.config_entry.data.get(CONF_ALARM_ENTITY)
@@ -927,35 +977,52 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         alarm = dt_util.parse_datetime(state.state)
         if alarm is None:
             return None
-        now = dt_util.utcnow()
+
         fade_window = timedelta(minutes=house.sunrise_fade_minutes)
         start = alarm - fade_window
         if start <= now <= alarm:
+            self._active_sunrise_start = start
+            self._active_sunrise_end = alarm
             total = fade_window.total_seconds()
             elapsed = (now - start).total_seconds()
             return max(0.0, min(1.0, elapsed / total if total > 0 else 1.0))
         return None
 
     def _sunset_progress(self, clock_hour: float, house: HouseSettings) -> float | None:
-        """0.0 to 1.0 progress through bedtime virtual sunset fade.
+        """0.0 to 1.0 progress through bedtime virtual sunset fade with state prediction timeline anchoring.
 
         Trigger conditions:
-        1. Inside the evening bedtime window: starts at bedtime_dwell_hour (e.g. 22:00) until hardcoded 04:00.
+        1. Inside the evening bedtime window: starts at bedtime_dwell_hour (e.g. 22:00) until morning_release_hour.
         2. Not away on holiday.
         3. Bedroom occupancy > sunset_dwell_minutes (e.g. 5 min continuous occupancy).
         4. Not already asleep or night latched.
         """
         if not house.sunset_fade_enabled or self._away() or self._asleep() or self._night_active():
+            self._active_sunset_started_at = None
+            self._active_sunset_duration_s = None
             return None
 
-        # Time window: start hour (e.g. 22.0) to hardcoded 04:00
+        # Time window: start hour to morning release hour
         start_h = house.bedtime_dwell_hour
-        end_h = 4.0
+        end_h = house.morning_release_hour
         in_window = (clock_hour >= start_h or clock_hour < end_h) if start_h > end_h else (start_h <= clock_hour < end_h)
         if not in_window:
+            self._active_sunset_started_at = None
+            self._active_sunset_duration_s = None
             return None
 
         now_ts = dt_util.utcnow().timestamp()
+
+        # If sunset is already anchored, maintain predictable progression even if occupant leaves for toilet/water
+        if self._active_sunset_started_at is not None and self._active_sunset_duration_s is not None:
+            elapsed = now_ts - self._active_sunset_started_at
+            if elapsed < self._active_sunset_duration_s:
+                return max(0.0, min(1.0, elapsed / self._active_sunset_duration_s))
+            # Completed naturally
+            self._active_sunset_started_at = None
+            self._active_sunset_duration_s = None
+            return 1.0
+
         bedroom_room: RoomState | None = None
         for subentry in self._subentries():
             if subentry.title.lower() == "bedroom" or subentry.data.get("night_off") or subentry.data.get("sunset_enabled"):
@@ -974,8 +1041,10 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         if fade_dur_min <= 0:
             return 1.0
 
-        elapsed_fade_min = dwell_min - req_dwell_min
-        return max(0.0, min(1.0, elapsed_fade_min / fade_dur_min))
+        # Anchor timeline: starts now, lasts sunset_fade_minutes
+        self._active_sunset_started_at = now_ts
+        self._active_sunset_duration_s = fade_dur_min * 60.0
+        return 0.0
 
     def _bedtime_dwell_active(self, clock_hour: float, house: HouseSettings) -> bool:
         """Is bedtime wind-down active in bedroom?"""

@@ -264,3 +264,30 @@ def test_every_profile_explains_itself():
         profile = fade_profile(family, **PROFILE_KWARGS)
         assert len(profile.reason) > 40
         assert str(profile.step_mired) in profile.reason
+
+
+def test_dynamic_colour_transition_s():
+    from custom_components.solace.fade import (
+        DEFAULT_STEP_TRANSITION_S,
+        dynamic_colour_transition_s,
+    )
+
+    # IKEA TRADFRI always stays at DEFAULT_STEP_TRANSITION_S (4s) to minimise collision windows
+    assert (
+        dynamic_colour_transition_s(50.0, family=Family.IKEA)
+        == DEFAULT_STEP_TRANSITION_S
+    )
+
+    # Zero delta returns default
+    assert dynamic_colour_transition_s(0.0) == DEFAULT_STEP_TRANSITION_S
+
+    # Aqara RGB with large delta glides smoothly up to max_duration_s (e.g. 60s)
+    t_large = dynamic_colour_transition_s(20.0, family=Family.AQARA_RGB, max_duration_s=60.0)
+    assert t_large > DEFAULT_STEP_TRANSITION_S
+    # Guaranteed rate >= r_crit * safety
+    assert (20.0 / t_large) >= (0.156 * 1.5 - 0.001)
+
+    # Small delta produces safe duration
+    t_small = dynamic_colour_transition_s(2.0, family=Family.AQARA_RGB)
+    assert t_small >= DEFAULT_STEP_TRANSITION_S
+    assert (2.0 / t_small) >= (0.156 * 1.5 - 0.001)

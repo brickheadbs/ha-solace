@@ -109,16 +109,16 @@ HOUSE_SETTINGS: tuple[Setting, ...] = (
     Setting("dead_zone", "Dead zone", 0, 50, 1, 8, None, "mdi:circle-off-outline"),
     # Transitions Matrix (8 Dedicated Speeds)
     # UP
-    Setting("transition_up_occupancy_s", "Occupancy", 0, 60, 0.1, 2, "s", "mdi:motion-sensor"),
-    Setting("transition_up_occupied_on_s", "Threshold", 0, 60, 0.1, 5, "s", "mdi:chart-bell-curve"),
-    Setting("transition_up_ambience_s", "Ambience", 0, 60, 0.1, 10, "s", "mdi:weather-sunset-down"),
+    Setting("transition_up_occupancy_s", "Occupancy", 0, 300, 0.1, 2, "s", "mdi:motion-sensor"),
+    Setting("transition_up_occupied_on_s", "Threshold", 0, 1200, 0.5, 300, "s", "mdi:chart-bell-curve"),
+    Setting("transition_up_ambience_s", "Ambience", 0, 300, 0.1, 10, "s", "mdi:weather-sunset-down"),
     # DOWN
-    Setting("transition_down_diminish_s", "Diminish", 0, 60, 0.1, 5, "s", "mdi:timer-outline"),
-    Setting("transition_down_ambience_s", "Ambience", 0, 60, 0.1, 5, "s", "mdi:lightbulb-night-outline"),
-    Setting("transition_down_off_s", "Off", 0, 60, 0.1, 4, "s", "mdi:power"),
+    Setting("transition_down_diminish_s", "Diminish", 0, 300, 0.1, 5, "s", "mdi:timer-outline"),
+    Setting("transition_down_ambience_s", "Ambience", 0, 300, 0.1, 5, "s", "mdi:lightbulb-night-outline"),
+    Setting("transition_down_off_s", "Off", 0, 300, 0.1, 4, "s", "mdi:power"),
     # CONTINUOUS & SPECIAL
-    Setting("transition_automatic_s", "Automatic", 0, 120, 0.5, 15, "s", "mdi:auto-fix"),
-    Setting("transition_manual_s", "Manual", 0, 5, 0.05, 0.5, "s", "mdi:gesture-swipe"),
+    Setting("transition_automatic_s", "Automatic", 0, 1200, 0.5, 15, "s", "mdi:auto-fix"),
+    Setting("transition_manual_s", "Manual", 0, 10, 0.05, 0.5, "s", "mdi:gesture-swipe"),
     # Colour
     Setting("day_kelvin", "Day colour", 2000, 9000, 10, 4000, "K", "mdi:white-balance-sunny"),
     Setting("night_kelvin", "Night colour", 2000, 9000, 10, 2200, "K", "mdi:weather-night"),

@@ -210,7 +210,7 @@ class HouseSettings:
 
     # -- The 8 Transitions Matrix -------------------------------------------------
     transition_up_occupancy_s: float = 2.0
-    transition_up_occupied_on_s: float = 5.0
+    transition_up_occupied_on_s: float = 300.0
     transition_up_ambience_s: float = 10.0
     transition_down_diminish_s: float = 5.0
     transition_down_ambience_s: float = 5.0

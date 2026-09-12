@@ -77,6 +77,7 @@ __all__ = [
     "plan_brightness",
     "fade_profile",
     "may_run_concurrently",
+    "dynamic_colour_transition_s",
 ]
 
 R_CRIT_COLOUR_MIRED_PER_S = 0.156
@@ -140,6 +141,30 @@ def min_safe_step_mired(
     smoothness here. Traffic and deferral are (see ``fade_profile``).
     """
     return max(1, ceil(r_crit * safety * max(step_transition_s, 0.0)))
+
+
+def dynamic_colour_transition_s(
+    delta_mired: float,
+    family: Family | None = None,
+    *,
+    r_crit: float = R_CRIT_COLOUR_MIRED_PER_S,
+    safety: float = R_CRIT_SAFETY,
+    max_duration_s: float = 60.0,
+) -> float:
+    """Calculate a smooth hardware colour transition duration that guarantees R >= R_crit * safety.
+
+    R = delta / T >= R_safe => T <= delta / R_safe.
+    Allows Aqara and compatible fixtures to glide smoothly (up to 60s) rather than jump in 4s.
+    On IKEA TRADFRI, keeps transitions at DEFAULT_STEP_TRANSITION_S (4s) to minimise collision windows.
+    """
+    delta = abs(delta_mired)
+    if delta <= 0:
+        return DEFAULT_STEP_TRANSITION_S
+    if family == Family.IKEA:
+        return DEFAULT_STEP_TRANSITION_S
+    r_safe = max(r_crit * safety, 0.01)
+    t_max = delta / r_safe
+    return float(max(DEFAULT_STEP_TRANSITION_S, min(max_duration_s, t_max)))
 
 
 @dataclass(frozen=True, slots=True)

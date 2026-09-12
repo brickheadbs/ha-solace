@@ -25,7 +25,12 @@ from homeassistant.util import ulid as ulid_util
 
 from .colour import kelvin_to_mired, mired_to_kelvin
 from .const import CONTEXT_PREFIX
-from .fade import FadeProfile, colour_transition_is_safe, may_run_concurrently
+from .fade import (
+    DEFAULT_STEP_TRANSITION_S,
+    FadeProfile,
+    colour_transition_is_safe,
+    may_run_concurrently,
+)
 from .models import Family, LightSettings
 from .standby import RampKind, RampTracker
 
@@ -72,6 +77,8 @@ class LightWriter:
     _context_ids: set[str] = field(default_factory=set)
     _busy_until: dict[str, float] = field(default_factory=dict)
     """entity_id → monotonic timestamp when its in-flight brightness fade ends."""
+    _in_flight_brightness: dict[str, tuple[float, float, int, int]] = field(default_factory=dict)
+    """entity_id → (start_time, duration_s, start_level, target_level)."""
     _colour_busy_until: dict[str, float] = field(default_factory=dict)
     """entity_id → monotonic timestamp when its in-flight colour step ends."""
     ramp_tracker: RampTracker = field(default_factory=RampTracker)
@@ -127,6 +134,7 @@ class LightWriter:
         for eid in entities:
             self._busy_until.pop(eid, None)
             self._colour_busy_until.pop(eid, None)
+            self._in_flight_brightness.pop(eid, None)
             if is_acute:
                 self.ramp_tracker.acquire_lock(
                     eid,
@@ -193,6 +201,13 @@ class LightWriter:
 
         for eid in target_entities:
             self._busy_until[eid] = loop_now + max(transition_s, 0.0)
+            start_lvl = self.current_estimated_level(eid)
+            self._in_flight_brightness[eid] = (
+                loop_now,
+                max(transition_s, 0.0),
+                start_lvl if start_lvl is not None else 0,
+                int(level),
+            )
             if is_acute:
                 self.ramp_tracker.acquire_fast_path_lease(
                     eid,
@@ -234,7 +249,11 @@ class LightWriter:
         actual_transition = (
             transition_s
             if transition_s is not None
-            else (profile.step_transition_s if profile is not None else 600.0)
+            else (
+                profile.step_transition_s
+                if profile is not None
+                else DEFAULT_STEP_TRANSITION_S
+            )
         )
 
         await self.hass.services.async_call(
@@ -252,6 +271,42 @@ class LightWriter:
         self._colour_busy_until[entity_id] = loop_now + max(actual_transition, 0.0)
         return kelvin
 
+    def get_in_flight_brightness(
+        self, entity_id: str
+    ) -> tuple[float, float, int, int] | None:
+        """Return (start_time, duration_s, start_level, target_level) if brightness fade is in flight."""
+        flight = self._in_flight_brightness.get(entity_id)
+        if flight is None:
+            return None
+        start_time, duration_s, _start_lvl, _target_lvl = flight
+        now = self.hass.loop.time()
+        if now >= start_time + duration_s:
+            self._in_flight_brightness.pop(entity_id, None)
+            return None
+        return flight
+
+    def current_estimated_level(
+        self, entity_id: str, default: int | None = None
+    ) -> int | None:
+        """Estimate current hardware brightness, accounting for in-flight transitions."""
+        flight = self.get_in_flight_brightness(entity_id)
+        if flight is not None:
+            start_time, duration_s, start_lvl, target_lvl = flight
+            if duration_s <= 0.0:
+                return target_lvl
+            now = self.hass.loop.time()
+            progress = min(1.0, max(0.0, (now - start_time) / duration_s))
+            return int(round(start_lvl + (target_lvl - start_lvl) * progress))
+
+        st = self.hass.states.get(entity_id)
+        if st is not None:
+            if st.state != "on":
+                return 0
+            lvl = st.attributes.get(ATTR_BRIGHTNESS)
+            if lvl is not None:
+                return int(lvl)
+        return default
+
     def is_colour_busy(self, entity_id: str) -> bool:
         """Returns True if a colour step transition is actively in flight on the bulb."""
         until = self._colour_busy_until.get(entity_id)
@@ -263,4 +318,10 @@ class LightWriter:
 
     def _is_busy(self, entity_id: str) -> bool:
         until = self._busy_until.get(entity_id)
-        return until is not None and self.hass.loop.time() < until
+        if until is None:
+            return False
+        if self.hass.loop.time() >= until:
+            self._busy_until.pop(entity_id, None)
+            self._in_flight_brightness.pop(entity_id, None)
+            return False
+        return True

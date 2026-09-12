@@ -137,3 +137,42 @@ async def test_an_unknown_current_colour_writes_nothing(hass, sent):
     writer = LightWriter(hass)
     assert await _step(hass, writer, SMOOTH, None, 4000) is None
     assert sent == []
+
+
+async def test_in_flight_brightness_tracking_and_estimation(hass):
+    """Estimated level reflects in-flight hardware transition progress."""
+    writer = LightWriter(hass)
+    t0 = hass.loop.time()
+    await writer.async_set_brightness(ENTITY, 200, 100.0)
+    await hass.async_block_till_done()
+
+    flight = writer.get_in_flight_brightness(ENTITY)
+    assert flight is not None
+    assert flight[1] == 100.0
+    assert flight[2] == 0  # started from 0
+    assert flight[3] == 200
+
+    # At t0, estimated level is 0
+    assert writer.current_estimated_level(ENTITY) == 0
+
+    # Halfway through (50s elapsed)
+    hass.loop.time = lambda: t0 + 50.0
+    assert writer.current_estimated_level(ENTITY) == 100
+
+    # At completion (100s elapsed)
+    hass.loop.time = lambda: t0 + 100.0
+    assert writer.get_in_flight_brightness(ENTITY) is None
+    # Reset loop time
+    hass.loop.time = lambda: t0
+
+
+async def test_turn_off_clears_in_flight_brightness(hass):
+    """Turning off clears active in-flight brightness tracking."""
+    writer = LightWriter(hass)
+    await writer.async_set_brightness(ENTITY, 200, 100.0)
+    await hass.async_block_till_done()
+    assert writer.get_in_flight_brightness(ENTITY) is not None
+
+    await writer.async_turn_off(ENTITY, 4.0)
+    await hass.async_block_till_done()
+    assert writer.get_in_flight_brightness(ENTITY) is None

@@ -819,3 +819,140 @@ async def test_startup_hold_prevents_turning_off_lights_before_first_live_lux(
     # Verify no turn_off service call was dispatched while startup hold was active
     turn_offs = [c for c in calls if c.get("service") == "turn_off"]
     assert not turn_offs, f"Expected no turn_off during startup hold, got {turn_offs}"
+
+
+async def test_sunrise_state_prediction_anchoring_survives_alarm_dismissal(
+    hass: HomeAssistant, entry
+) -> None:
+    """Virtual sunrise anchors timeline at start and does not cancel to Day mode when alarm dismisses."""
+    from datetime import timedelta
+    from homeassistant.util import dt as dt_util
+    from custom_components.solace.const import CONF_ALARM_ENTITY
+
+    now = dt_util.utcnow()
+    alarm = now + timedelta(minutes=20)  # Inside 30 min fade window
+    hass.states.async_set("sensor.next_alarm", alarm.isoformat())
+    hass.config_entries.async_update_entry(
+        entry, options={**entry.options, CONF_ALARM_ENTITY: "sensor.next_alarm"}
+    )
+    assert await _setup(hass, entry)
+    coordinator = entry.runtime_data.coordinator
+
+    progress1 = coordinator._sunrise_progress(coordinator.house)
+    assert progress1 is not None
+    assert 0.0 < progress1 < 1.0
+    assert coordinator._active_sunrise_start is not None
+
+    # User wakes, alarm sensor clears/dismisses to tomorrow
+    tomorrow_alarm = now + timedelta(days=1)
+    hass.states.async_set("sensor.next_alarm", tomorrow_alarm.isoformat())
+
+    # State prediction must keep sunrise active along anchored timeline
+    progress2 = coordinator._sunrise_progress(coordinator.house)
+    assert progress2 is not None
+    assert progress2 >= progress1
+
+
+async def test_sunset_state_prediction_survives_toilet_trip(
+    hass: HomeAssistant, entry, world
+) -> None:
+    """Virtual sunset anchors timeline and does not abort when bedroom clears during toilet trip."""
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+    from homeassistant.config_entries import ConfigSubentryData
+    from homeassistant.util import dt as dt_util
+    from custom_components.solace.const import CONF_DND_ENTITY, CONF_LUX_SENSOR, DOMAIN, SUBENTRY_TYPE_ROOM
+    from .conftest import DND
+
+    bedroom_entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Solace",
+        unique_id="solace_bedroom_test",
+        data={CONF_LUX_SENSOR: LUX, CONF_DND_ENTITY: DND},
+        options={CONF_LUX_SENSOR: LUX, CONF_DND_ENTITY: DND},
+        subentries_data=[
+            ConfigSubentryData(
+                subentry_type=SUBENTRY_TYPE_ROOM,
+                title="Bedroom",
+                unique_id=None,
+                data={
+                    "lights": [LIGHT],
+                    "night_off": True,
+                },
+            )
+        ],
+    )
+    bedroom_entry.add_to_hass(hass)
+    world(occupied=True)
+    assert await _setup(hass, bedroom_entry)
+    coordinator = bedroom_entry.runtime_data.coordinator
+
+    subentry = next(iter(coordinator._subentries()))
+    bedroom = coordinator.rooms[subentry.subentry_id]
+    now_ts = dt_util.utcnow().timestamp()
+    # Dwell past 5 minutes
+    bedroom.occupied = True
+    bedroom.occupied_since = now_ts - 400.0
+
+    # Trigger sunset in evening window
+    progress1 = coordinator._sunset_progress(23.0, coordinator.house)
+    assert progress1 is not None
+    assert coordinator._active_sunset_started_at is not None
+
+    # Step out to toilet: bedroom clears
+    bedroom.occupied = False
+    bedroom.occupied_since = None
+
+    # Sunset must continue along predicted timeline
+    progress2 = coordinator._sunset_progress(23.0, coordinator.house)
+    assert progress2 is not None
+    assert progress2 >= progress1
+
+
+async def test_smart_in_flight_glide_protection(
+    hass: HomeAssistant, entry, world
+) -> None:
+    """Writes within dead zone of an in-flight glide are suppressed to avoid resetting hardware timers."""
+    from unittest.mock import patch
+    from custom_components.solace.models import Mode, Solution
+
+    world(occupied=True, light_on=True)
+    assert await _setup(hass, entry)
+    coordinator = entry.runtime_data.coordinator
+
+    # Set an in-flight brightness transition toward 200
+    subentry = next(iter(coordinator.config_entry.subentries.values()))
+    entity_id = subentry.data["lights"][0]
+
+    await coordinator.writer.async_set_brightness(entity_id, 200, 300.0)
+    assert coordinator.writer.get_in_flight_brightness(entity_id) is not None
+
+    calls: list[dict] = []
+    hass.bus.async_listen(
+        "call_service",
+        lambda e: calls.append(e.data) if e.data.get("domain") == "light" else None,
+    )
+
+    room = coordinator.rooms[subentry.subentry_id]
+    settings = coordinator.room_settings(subentry)
+
+    # Mock solve to return level 204 (within dead zone 8 of 200)
+    with patch("custom_components.solace.coordinator.solve") as mock_solve:
+        mock_solve.return_value = Solution(
+            level=204,
+            should_write=True,
+            mode=Mode.NORMAL,
+            ambience_open=True,
+            demand=0.5,
+            stops=0.0,
+            fraction=0.5,
+            source="demand",
+        )
+        await coordinator._async_apply_light(
+            entity_id, subentry, coordinator.house, settings, room,
+            lux=10.0, dnd=False, clock_hour=14.0, occupied=True, near_clear=False,
+            manual=False, asleep=False, away=False,
+            sunrise_progress=None, sunset_progress=None, bedtime_dwell_active=False,
+        )
+
+    turn_ons = [c for c in calls if c.get("service") == "turn_on"]
+    assert len(turn_ons) == 0, f"Expected write to be suppressed, but got {turn_ons}"

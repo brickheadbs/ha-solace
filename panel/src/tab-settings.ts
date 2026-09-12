@@ -1441,31 +1441,31 @@ export class SolTabSettings extends LitElement {
                   }}"
                 />
               </div>
-              <div class="trans-row" title="0% → 1%+ • Environmental threshold: gentle rise to L1 while room is already occupied">
+              <div class="trans-row" title="Occupied L0 → UP L* • Occupied turn-on: gentle rise to L1 while room is already occupied">
                 <div class="trans-lbl">
-                  Threshold
-                  <sol-help text="Occupied threshold turn-on: Triggered while a room is already occupied and light demand crosses above zero due to falling outdoor daylight, an approaching storm, or dusk. A smooth, gentle rise to avoid startling occupants already seated in the room."></sol-help>
+                  Occupied Turn-On
+                  <sol-help text="Occupied threshold turn-on: Triggered while a room is already occupied and light demand crosses above zero due to falling outdoor daylight, an approaching storm, or dusk. A smooth, gentle rise (default 300s) to avoid startling occupants already seated in the room."></sol-help>
                 </div>
                 <div class="trans-dots"></div>
-                <div class="trans-path">0% → 1%+</div>
+                <div class="trans-path">Occupied L0 → UP L*</div>
                 <input
                   type="number"
                   step="0.5"
                   class="num-input"
                   style="width: 62px;"
-                  .value="${String(house.transition_up_occupied_on_s ?? 5.0)}"
+                  .value="${String(house.transition_up_occupied_on_s ?? 300.0)}"
                   @change="${(e: Event) => {
                     setHouse(this.hass, { transition_up_occupied_on_s: parseFloat((e.target as HTMLInputElement).value) });
                   }}"
                 />
               </div>
-              <div class="trans-row" title="Off → L3 • Dusk gate opens empty room: gentle wake to resting ambience floor (L3)">
+              <div class="trans-row" title="Clear → L3 • Dusk gate opens empty room: gentle wake to resting ambience floor (L3)">
                 <div class="trans-lbl">
-                  Ambience
+                  Ambience Wake
                   <sol-help text="Ambience floor wake: Triggered when the dusk gate opens in an unoccupied room. Gently illuminates fixtures from dark to their resting background glow (L3) so the home feels warm and lived-in without requiring motion."></sol-help>
                 </div>
                 <div class="trans-dots"></div>
-                <div class="trans-path">Off → L3</div>
+                <div class="trans-path">Clear → L3</div>
                 <input
                   type="number"
                   step="0.5"
@@ -1502,7 +1502,7 @@ export class SolTabSettings extends LitElement {
               </div>
               <div class="trans-row" title="L2 → L3 • Dwell expires: soft step down to resting ambience floor (L3)">
                 <div class="trans-lbl">
-                  Ambience
+                  Ambience Settle
                   <sol-help text="Post-diminish ambient settle: Triggered after the dwell timer expires in an empty room where background ambience is enabled. Softly steps down to the resting floor level (L3)."></sol-help>
                 </div>
                 <div class="trans-dots"></div>
@@ -1518,13 +1518,13 @@ export class SolTabSettings extends LitElement {
                   }}"
                 />
               </div>
-              <div class="trans-row" title="* → Off • Room clears, dusk gate closes, or sleep mode: graceful shutoff">
+              <div class="trans-row" title="Occupied L* → Down L0 • Room clears, daylight increases, or sleep mode: graceful shutoff">
                 <div class="trans-lbl">
-                  Off
-                  <sol-help text="Full shutoff: Triggered when an unoccupied room clears all timers, the dusk gate closes at dawn, or sleep mode engages. Graceful fade to dark."></sol-help>
+                  Environmental / Off
+                  <sol-help text="Full shutoff: Triggered when an unoccupied room clears all timers, daylight increases above demand while occupied, or sleep mode engages. Graceful fade to dark (L0)."></sol-help>
                 </div>
                 <div class="trans-dots"></div>
-                <div class="trans-path">* → Off</div>
+                <div class="trans-path">Occupied L* → Down L0</div>
                 <input
                   type="number"
                   step="0.5"
@@ -1541,13 +1541,13 @@ export class SolTabSettings extends LitElement {
             <!-- Continuous & Special -->
             <div class="trans-grp">
               <div class="grp-lbl">Continuous &amp; special</div>
-              <div class="trans-row" title="Tracking • Continuous background glide as solar elevation and lux shift">
+              <div class="trans-row" title="Update L1 • Continuous background glide as solar elevation and lux shift">
                 <div class="trans-lbl">
-                  Automatic
+                  Continuous Tracking
                   <sol-help text="Continuous tracking: Hardware transition applied during steady-state background updates. Glides brightness and colour temperature imperceptibly as daylight changes or clouds pass."></sol-help>
                 </div>
                 <div class="trans-dots"></div>
-                <div class="trans-path">Tracking</div>
+                <div class="trans-path">Update L1</div>
                 <input
                   type="number"
                   step="0.5"
@@ -1576,6 +1576,15 @@ export class SolTabSettings extends LitElement {
                     setHouse(this.hass, { transition_manual_s: parseFloat((e.target as HTMLInputElement).value) });
                   }}"
                 />
+              </div>
+              <div class="trans-row" title="Special → L1S • Special modes (bedroom morning sunrise &amp; bedtime sunset ramps)">
+                <div class="trans-lbl">
+                  Special Mode
+                  <sol-help text="Special Mode (L1S): While in special mode (bedroom virtual sunrise and bedtime wind-down sunset), values work smoothly along predicted timelines without cancelling on toilet trips, using L1S in that room instead of L1."></sol-help>
+                </div>
+                <div class="trans-dots"></div>
+                <div class="trans-path">Special → L1S</div>
+                <div style="font-size: 11px; color: var(--sol-blue); font-weight: 500; padding: 4px 8px; background: rgba(59, 130, 246, 0.1); border-radius: 4px;">Predictive</div>
               </div>
             </div>
           </div>
