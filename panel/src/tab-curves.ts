@@ -11,7 +11,7 @@ import { customElement } from "./custom-element";
 import type { BrightnessPoint, ColourPoint, Hass, LuxPoint, Snapshot } from "./api";
 import { setBrightnessTimeline, setColourTimeline, setHouse, setLuxCurve, setLuxCloudyCurve } from "./api";
 import { derimToKelvin, formatDerimWithKelvin, kelvinToDerim } from "./derim";
-import { MonotoneSpline } from "./spline";
+import { DisplaySpline, MonotoneSpline } from "./spline";
 import { tokens } from "./tokens";
 import "./ui";
 
@@ -851,6 +851,16 @@ export class SolTabCurves extends LitElement {
 
     const nodes = this.getNodes(key);
     const spline = this.getSpline(key);
+    // Rendering only: MonotoneSpline clamps tangents to zero at local
+    // extrema (e.g. a midday brightness peak), which is correct for the
+    // engine's evaluation but draws a flat "shoulder" on screen. Draw the
+    // line with an unclamped Catmull-Rom-style spline instead; everything
+    // else (hit-testing, the live pulse, the hover readout) still reads
+    // from `spline` above, so edited values and the backend contract are
+    // unaffected.
+    // `key` is narrowed to "bright" | "colour" here (the "lux" branch
+    // returns above), and both of those timelines are periodic (24h).
+    const renderSpline = new DisplaySpline(nodes, true);
 
     // Generate curve path
     const N = 240;
@@ -858,7 +868,7 @@ export class SolTabCurves extends LitElement {
     for (let i = 0; i <= N; i++) {
       const px = X0 + (X1 - X0) * (i / N);
       const vx = this.px2x(key, px);
-      const vy = spline.evaluate(vx);
+      const vy = renderSpline.evaluate(vx);
       const py = Math.max(Y0, Math.min(Y1, this.yp(key, vy)));
       d += (i === 0 ? "M" : " L") + px.toFixed(1) + " " + py.toFixed(1);
     }
