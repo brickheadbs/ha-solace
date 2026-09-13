@@ -70,6 +70,7 @@ from .engine import (
     demand,
     solve,
     solve_master,
+    past_dead_zone,
 )
 from .fade import FadeProfile, dynamic_colour_transition_s, fade_profile
 from .filter import AsymmetricFilter
@@ -716,6 +717,12 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         )
 
         # Work Mode overrides the 3 office zone lights with manual work brightness when occupied (with debounce).
+        # ⚠️ Work Mode sets the LEVEL. It does not decide whether to write — that is the dead
+        # zone's job, and forcing ``should_write=True`` here bypassed it entirely. Measured
+        # 2026-09-13: the three office fixtures were the only ones in the house re-emitting an
+        # identical ``{state:ON, brightness:100, transition:300}`` every ~5.5 minutes for over
+        # an hour and a half, because the forced write meant the "nothing changed" test never
+        # ran. Every other room was silent. A value provider must never also be a write forcer.
         if self._work_mode() and entity_id in (
             "light.living_office_desk_lamp",
             "light.living_office_e",
@@ -733,9 +740,31 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                 else:
                     work_target = house.work_mode_corner_level
                 work_target = min(254, max(0, int(work_target)))
-                solution = replace(solution, level=work_target, source="work", should_write=True)
+                solution = replace(
+                    solution,
+                    level=work_target,
+                    source="work",
+                    should_write=past_dead_zone(
+                        work_target,
+                        room.last_written.get(entity_id),
+                        house.dead_zone,
+                        source="work",
+                        last_source=room.last_source.get(entity_id),
+                    ),
+                )
             else:
-                solution = replace(solution, level=0, source="off", should_write=True)
+                solution = replace(
+                    solution,
+                    level=0,
+                    source="off",
+                    should_write=past_dead_zone(
+                        0,
+                        room.last_written.get(entity_id),
+                        house.dead_zone,
+                        source="off",
+                        last_source=room.last_source.get(entity_id),
+                    ),
+                )
 
         room.solutions[entity_id] = solution
         # ⚠️ Read the PREVIOUS source before overwriting it. Reading it back afterwards made
