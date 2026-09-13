@@ -295,14 +295,15 @@ def compute_state_table(
     ambience_raw = room.ambience_level or house.ambience_level
     l3 = apply_clamp(ambience_raw, light) if ambience_raw > 0 else 0
 
-    # Ls: Housewide Night level (cutoffs disabled, max clamp preserved)
-    ls = apply_clamp(house.night_level, light)
+    # L1S: special-slot level (cutoffs disabled, max clamp preserved). The night
+    # provider is the only binder today; the morning ramp will use the same slot.
+    l1s = apply_clamp(house.night_level, light)
 
     return StateTable(
         l1=l1,
         l2=l2,
         l3=l3,
-        ls=ls,
+        l1s=l1s,
         target_kelvin=master.target_kelvin,
     )
 
@@ -356,7 +357,7 @@ def solve(
     trace.append(("state_l1", state_table.l1))
     trace.append(("state_l2", state_table.l2))
     trace.append(("state_l3", state_table.l3))
-    trace.append(("state_ls", state_table.ls))
+    trace.append(("state_l1s", state_table.l1s))
 
     zone_stops = zone.bias_stops if zone is not None else room.zone_bias_stops
     total_stops = (
@@ -414,7 +415,7 @@ def solve(
     # E. NIGHT MODE
     elif mode is Mode.NIGHT:
         if data.occupied:
-            level = state_table.ls
+            level = state_table.l1s
             source = "night"
             trace.append(("night_override", level))
         else:

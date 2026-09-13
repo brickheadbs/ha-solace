@@ -949,7 +949,7 @@ def test_per_light_min_is_a_cutoff_not_a_floor_and_exempt_in_ambience_and_night(
     assert table.l3 == 2
 
     # 2. Night level (3) MUST remain 3 and NOT be forced to 60
-    assert table.ls == house.night_level
+    assert table.l1s == house.night_level
 
     # 3. In daytime, if demand level is below cutoff (e.g. 40 < 60), the light drops to 0.
     #

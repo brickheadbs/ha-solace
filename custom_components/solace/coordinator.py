@@ -1248,13 +1248,13 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                     kelvin=wake_colour,
                     transition_s=house.transition_up_ambience_s,
                 )
-                ls = StandbyTarget(
-                    level=table.ls,
+                l1s = StandbyTarget(
+                    level=table.l1s,
                     kelvin=house.night_kelvin,
                     transition_s=house.transition_up_occupancy_s,
                 )
                 fixture_states[entity_id] = FixtureStandbyState(
-                    l0=l0, l1=l1, l2=l2, l3=l3, ls=ls
+                    l0=l0, l1=l1, l2=l2, l3=l3, l1s=l1s
                 )
             self.standby_cache.update_room(subentry.subentry_id, fixture_states)
 
@@ -1285,7 +1285,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
             room.fresh_occupancy = True
             self._last_presence[subentry.subentry_id] = now_ts
 
-            tier = StateTier.LS_NIGHT if self._night_active() else StateTier.L1_DEMAND
+            tier = StateTier.L1S_SPECIAL if self._night_active() else StateTier.L1_DEMAND
             fixtures = subentry.data.get(CONF_LIGHTS, [])
             groups = self.standby_cache.batch_room_dispatch(subentry.subentry_id, fixtures, tier)
 
@@ -1302,7 +1302,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                     )
                 for eid in entity_ids:
                     room.last_written[eid] = level
-                    room.last_source[eid] = "night" if tier == StateTier.LS_NIGHT else "demand"
+                    room.last_source[eid] = "night" if tier == StateTier.L1S_SPECIAL else "demand"
 
     # ------------------------------------------------------------------ listeners
 

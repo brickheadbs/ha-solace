@@ -157,8 +157,13 @@ class StateTable:
     """Diminished subzone level (relative to L1 in stops)."""
     l3: int
     """Ambience resting floor (fixed level per room)."""
-    ls: int
-    """Housewide Night Mode level."""
+    l1s: int
+    """Special-slot level — the value L1S carries while a special mode is bound.
+
+    Currently supplied by the night provider, which is why this used to be called ``ls``
+    and documented as "housewide night mode". The rename is the point: the slot is not
+    night-specific, and the morning ramp binds to the same slot.
+    """
     target_kelvin: int
     """Target colour temperature."""
 
