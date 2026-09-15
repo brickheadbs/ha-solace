@@ -67,18 +67,29 @@ A transition is a function of `(from_tier, to_tier, occupied)`. This replaces th
 `if/elif` chain on `solution.source` / `last_src`, which already produced one silent bug
 (see the scar comment in `_async_apply`) because every branch was unreachable.
 
-| From → To | Occupied | Setting |
-|---|---|---|
-| L0 → L1/L1S | yes, fresh occupancy | `transition_up_occupancy_s` (10 s) |
-| L0 → L1/L1S | yes, already occupied | `transition_up_occupied_on_s` (300 s) |
-| L0 → L1/L1S | no | `transition_automatic_s` |
-| any → L3 (rising) | — | `transition_up_ambience_s` (60 s) |
-| any → L3 (falling) | — | `transition_down_ambience_s` (10 s) |
-| L1 → L2 | — | `transition_down_diminish_s` (10 s) |
-| L2 → L1 | — | **TBC — Brandon's sheet says "Clear to L1"** |
-| any → L0 | — | `transition_down_off_s` (20 s) |
-| within-tier value update | — | slew-rate derived (below) |
-| L1 ↔ L1S | — | "Update L1" — treat as within-tier update |
+| UI name | From → To | When | Setting |
+|---|---|---|---|
+| Occupancy | Clear (L0 **or L3**) → L1/L1S | room was clear, someone arrives | `transition_up_occupancy_s` (10 s) |
+| Occupied Turn-On | L0 → L1/L1S | room *already* occupied, lights come up | `transition_up_occupied_on_s` (300 s) |
+| Ambience Wake | Clear → L3 | gate opens: dark and awake, room clear | `transition_up_ambience_s` (60 s) |
+| Diminish | L1 → L2 | other side of the room clears | `transition_down_diminish_s` (10 s) |
+| Ambience Settle | L2 → L3 | dwell expires | `transition_down_ambience_s` (10 s) |
+| Environmental / Off | L* → L0 | gate closes, or room empties | `transition_down_off_s` (20 s) |
+| — | L2 → L1 | occupied side returns | **TBC — likely Occupancy** |
+| Update L1 | L1 ↔ L1S, and same → same | value change, not a tier change | slew-rate derived |
+
+⚠️ **Corrected 2026-09-15 from the live panel's own labels.** An earlier draft of this
+table had a single "any → L3" row with a rising/falling flag. That was wrong twice over:
+
+* There are **two distinct L3 entries**, not one with a direction — `Ambience Wake`
+  (Clear → L3, 60 s) and `Ambience Settle` (L2 → L3, 10 s).
+* There is **no L1 → L3 at all**. The path down is L1 → L2 → L3 as the dwell expires.
+
+And **"Clear" is not L0.** With the ambience gate open a clear room rests at L3, not off.
+That is why Brandon's grid row reads L3 → L2, L3 → L1 and L3 → L1S all as 10 — every one
+of those is `Occupancy` firing from the resting state — and why his L3 → L0 = `x` is
+right *as an occupancy path*: leaving ambience for off is driven by the gate closing
+(daylight or asleep), which is the `Environmental / Off` row instead.
 
 ## Slew-rate transitions (replaces fixed `transition_automatic_s` for updates)
 
