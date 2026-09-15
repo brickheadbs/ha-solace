@@ -3,7 +3,7 @@
 PURE MODULE — no ``homeassistant`` imports, ever.
 
 Implements:
-- 5-level pre-computed standby suite (L0_OFF, L1_DEMAND, L2_DIMINISHED, L3_AMBIENCE, LS_NIGHT).
+- 5-slot pre-computed standby suite (L0_OFF, L1_DEMAND, L2_DIMINISHED, L3_AMBIENCE, L1S_SPECIAL).
 - Atomic room state replacement dict-copy guaranteeing 0.00% torn reads across multi-fixture rooms.
 - Parameter grouping for single-service-call batched dispatch (eliminating Zigbee queuing/popcorning).
 - FixtureRamp and RampTracker enforcing RampLock hardware lockout leases to protect acute turn-ons
@@ -29,13 +29,26 @@ __all__ = [
 
 
 class StateTier(str, Enum):
-    """Operational lighting state tiers."""
+    """Operational lighting state tiers.
+
+    ``L1S_SPECIAL`` is a **slot, not a mode.** While a special mode is bound to a room,
+    everything behaves normally but ``L1S`` is used in place of ``L1`` for that room; it
+    unbinds on mode timeout or trigger. The night ramp and the morning ramp are two
+    *providers* that bind to the slot, so a third mode costs nothing and the enum stays
+    five wide. It replaces ``LS_NIGHT``, which was a globally-latched sixth peer tier —
+    the wrong shape, because it made "which mode" and "which tier" the same axis.
+
+    A provider is a pure function of wall-clock time, never of time-since-entering. That
+    is what lets a ramp survive leaving the room: occupancy selects *which tier applies*
+    and the clock supplies *its value*, so returning mid-ramp resumes at f(now) with no
+    ramp state to preserve. Spec: docs/specifications/TIER_STATE_MACHINE.md.
+    """
 
     L0_OFF = "l0_off"
     L1_DEMAND = "l1_demand"
     L2_DIMINISHED = "l2_diminished"
     L3_AMBIENCE = "l3_ambience"
-    LS_NIGHT = "ls_night"
+    L1S_SPECIAL = "l1s"
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,13 +62,35 @@ class StandbyTarget:
 
 @dataclass(frozen=True, slots=True)
 class FixtureStandbyState:
-    """Complete 5-level pre-computed standby suite for a single fixture."""
+    """Complete 5-slot pre-computed standby suite for a single fixture."""
 
     l0: StandbyTarget
     l1: StandbyTarget
     l2: StandbyTarget
     l3: StandbyTarget
-    ls: StandbyTarget
+    l1s: StandbyTarget
+
+    def target_for(self, tier: StateTier) -> StandbyTarget:
+        """The precomputed target for one tier.
+
+        Single source of truth for the mapping. It used to be spelled out as an if/elif
+        chain in both ``get_target`` and ``batch_room_dispatch``, which is two places to
+        forget a tier — and a missed tier there fails as a ``ValueError`` mid-dispatch,
+        after some fixtures in the room have already been written.
+        """
+        try:
+            return getattr(self, _SLOT_FOR_TIER[tier])
+        except KeyError:
+            raise ValueError(f"Unknown tier: {tier}") from None
+
+
+_SLOT_FOR_TIER: dict[StateTier, str] = {
+    StateTier.L0_OFF: "l0",
+    StateTier.L1_DEMAND: "l1",
+    StateTier.L2_DIMINISHED: "l2",
+    StateTier.L3_AMBIENCE: "l3",
+    StateTier.L1S_SPECIAL: "l1s",
+}
 
 
 class StandbyStateCache:
@@ -88,18 +123,7 @@ class StandbyStateCache:
         self, room_id: str, fixture_id: str, tier: StateTier
     ) -> StandbyTarget:
         """O(1) target retrieval for a specific fixture and tier."""
-        state = self._cache[(room_id, fixture_id)]
-        if tier == StateTier.L0_OFF:
-            return state.l0
-        if tier == StateTier.L1_DEMAND:
-            return state.l1
-        if tier == StateTier.L2_DIMINISHED:
-            return state.l2
-        if tier == StateTier.L3_AMBIENCE:
-            return state.l3
-        if tier == StateTier.LS_NIGHT:
-            return state.ls
-        raise ValueError(f"Unknown tier: {tier}")
+        return self._cache[(room_id, fixture_id)].target_for(tier)
 
     def batch_room_dispatch(
         self, room_id: str, fixture_ids: Sequence[str], tier: StateTier
@@ -115,18 +139,7 @@ class StandbyStateCache:
             state = cache_snapshot.get((room_id, f_id))
             if state is None:
                 continue
-            if tier == StateTier.L0_OFF:
-                target = state.l0
-            elif tier == StateTier.L1_DEMAND:
-                target = state.l1
-            elif tier == StateTier.L2_DIMINISHED:
-                target = state.l2
-            elif tier == StateTier.L3_AMBIENCE:
-                target = state.l3
-            elif tier == StateTier.LS_NIGHT:
-                target = state.ls
-            else:
-                raise ValueError(f"Unknown tier: {tier}")
+            target = state.target_for(tier)
             key = (target.level, target.kelvin, target.transition_s)
             groups[key].append(f_id)
         return dict(groups)

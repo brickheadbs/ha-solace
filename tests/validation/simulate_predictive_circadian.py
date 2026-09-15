@@ -55,7 +55,7 @@ class StateTier(str, Enum):
     L1_DEMAND = "l1_demand"
     L2_DIMINISHED = "l2_diminished"
     L3_AMBIENCE = "l3_ambience"
-    LS_NIGHT = "ls_night"
+    L1S_SPECIAL = "l1s"
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,7 +75,7 @@ class FixtureStandbyState:
     l1: StandbyTarget
     l2: StandbyTarget
     l3: StandbyTarget
-    ls: StandbyTarget
+    l1s: StandbyTarget
 
 
 class StandbyStateCache:
@@ -115,8 +115,8 @@ class StandbyStateCache:
             return state.l2
         if tier == StateTier.L3_AMBIENCE:
             return state.l3
-        if tier == StateTier.LS_NIGHT:
-            return state.ls
+        if tier == StateTier.L1S_SPECIAL:
+            return state.l1s
         raise ValueError(f"Unknown tier: {tier}")
 
     def batch_room_dispatch(
@@ -141,8 +141,8 @@ class StandbyStateCache:
                 target = state.l2
             elif tier == StateTier.L3_AMBIENCE:
                 target = state.l3
-            elif tier == StateTier.LS_NIGHT:
-                target = state.ls
+            elif tier == StateTier.L1S_SPECIAL:
+                target = state.l1s
             else:
                 raise ValueError(f"Unknown tier: {tier}")
             key = (target.level, target.kelvin, target.transition_s)
@@ -694,21 +694,21 @@ def test_standby_cache_and_batching() -> None:
         l1=StandbyTarget(level=180, kelvin=3000, transition_s=2.0),
         l2=StandbyTarget(level=90, kelvin=3000, transition_s=5.0),
         l3=StandbyTarget(level=40, kelvin=2400, transition_s=10.0),
-        ls=StandbyTarget(level=15, kelvin=2200, transition_s=2.0),
+        l1s=StandbyTarget(level=15, kelvin=2200, transition_s=2.0),
     )
     f2_state = FixtureStandbyState(
         l0=StandbyTarget(level=0, kelvin=None, transition_s=3.0),
         l1=StandbyTarget(level=180, kelvin=3000, transition_s=2.0),
         l2=StandbyTarget(level=90, kelvin=3000, transition_s=5.0),
         l3=StandbyTarget(level=40, kelvin=2400, transition_s=10.0),
-        ls=StandbyTarget(level=15, kelvin=2200, transition_s=2.0),
+        l1s=StandbyTarget(level=15, kelvin=2200, transition_s=2.0),
     )
     f3_state = FixtureStandbyState(
         l0=StandbyTarget(level=0, kelvin=None, transition_s=3.0),
         l1=StandbyTarget(level=120, kelvin=3000, transition_s=2.0),  # Clamped to 120
         l2=StandbyTarget(level=60, kelvin=3000, transition_s=5.0),
         l3=StandbyTarget(level=40, kelvin=2400, transition_s=10.0),
-        ls=StandbyTarget(level=15, kelvin=2200, transition_s=2.0),
+        l1s=StandbyTarget(level=15, kelvin=2200, transition_s=2.0),
     )
 
     cache.set_fixture("kitchen", "light.k1", f1_state)
@@ -719,7 +719,7 @@ def test_standby_cache_and_batching() -> None:
     assert cache.get_target("kitchen", "light.k1", StateTier.L1_DEMAND).level == 180
     assert cache.get_target("kitchen", "light.k3", StateTier.L1_DEMAND).level == 120
     assert cache.get_target("kitchen", "light.k1", StateTier.L0_OFF).level == 0
-    assert cache.get_target("kitchen", "light.k1", StateTier.LS_NIGHT).level == 15
+    assert cache.get_target("kitchen", "light.k1", StateTier.L1S_SPECIAL).level == 15
 
     # Verify batched grouping for L1 dispatch: k1 and k2 must be grouped together
     groups_l1 = cache.batch_room_dispatch(
@@ -1038,14 +1038,14 @@ def test_standby_cache_atomic_snapshot_zero_torn_reads() -> None:
         l1=StandbyTarget(100, 2700, 2.0),
         l2=StandbyTarget(50, 2700, 5.0),
         l3=StandbyTarget(30, 2400, 10.0),
-        ls=StandbyTarget(15, 2200, 2.0),
+        l1s=StandbyTarget(15, 2200, 2.0),
     )
     state_b = FixtureStandbyState(
         l0=StandbyTarget(0, None, 3.0),
         l1=StandbyTarget(220, 3200, 2.0),
         l2=StandbyTarget(110, 3200, 5.0),
         l3=StandbyTarget(40, 2400, 10.0),
-        ls=StandbyTarget(15, 2200, 2.0),
+        l1s=StandbyTarget(15, 2200, 2.0),
     )
 
     # Initialize cache with state A

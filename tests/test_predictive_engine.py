@@ -215,7 +215,7 @@ def test_standby_cache_and_batching():
             l1=StandbyTarget(level=180, kelvin=3200, transition_s=10.0),
             l2=StandbyTarget(level=90, kelvin=2700, transition_s=5.0),
             l3=StandbyTarget(level=20, kelvin=2200, transition_s=5.0),
-            ls=StandbyTarget(level=5, kelvin=2000, transition_s=5.0),
+            l1s=StandbyTarget(level=5, kelvin=2000, transition_s=5.0),
         ),
     )
     cache.set_fixture(
@@ -226,7 +226,7 @@ def test_standby_cache_and_batching():
             l1=StandbyTarget(level=180, kelvin=3200, transition_s=10.0),
             l2=StandbyTarget(level=90, kelvin=2700, transition_s=5.0),
             l3=StandbyTarget(level=20, kelvin=2200, transition_s=5.0),
-            ls=StandbyTarget(level=5, kelvin=2000, transition_s=5.0),
+            l1s=StandbyTarget(level=5, kelvin=2000, transition_s=5.0),
         ),
     )
 

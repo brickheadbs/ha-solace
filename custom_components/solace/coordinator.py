@@ -70,6 +70,7 @@ from .engine import (
     demand,
     solve,
     solve_master,
+    past_dead_zone,
 )
 from .fade import FadeProfile, dynamic_colour_transition_s, fade_profile
 from .filter import AsymmetricFilter
@@ -716,6 +717,12 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         )
 
         # Work Mode overrides the 3 office zone lights with manual work brightness when occupied (with debounce).
+        # ⚠️ Work Mode sets the LEVEL. It does not decide whether to write — that is the dead
+        # zone's job, and forcing ``should_write=True`` here bypassed it entirely. Measured
+        # 2026-09-13: the three office fixtures were the only ones in the house re-emitting an
+        # identical ``{state:ON, brightness:100, transition:300}`` every ~5.5 minutes for over
+        # an hour and a half, because the forced write meant the "nothing changed" test never
+        # ran. Every other room was silent. A value provider must never also be a write forcer.
         if self._work_mode() and entity_id in (
             "light.living_office_desk_lamp",
             "light.living_office_e",
@@ -733,9 +740,31 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                 else:
                     work_target = house.work_mode_corner_level
                 work_target = min(254, max(0, int(work_target)))
-                solution = replace(solution, level=work_target, source="work", should_write=True)
+                solution = replace(
+                    solution,
+                    level=work_target,
+                    source="work",
+                    should_write=past_dead_zone(
+                        work_target,
+                        room.last_written.get(entity_id),
+                        house.dead_zone,
+                        source="work",
+                        last_source=room.last_source.get(entity_id),
+                    ),
+                )
             else:
-                solution = replace(solution, level=0, source="off", should_write=True)
+                solution = replace(
+                    solution,
+                    level=0,
+                    source="off",
+                    should_write=past_dead_zone(
+                        0,
+                        room.last_written.get(entity_id),
+                        house.dead_zone,
+                        source="off",
+                        last_source=room.last_source.get(entity_id),
+                    ),
+                )
 
         room.solutions[entity_id] = solution
         # ⚠️ Read the PREVIOUS source before overwriting it. Reading it back afterwards made
@@ -1219,13 +1248,13 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                     kelvin=wake_colour,
                     transition_s=house.transition_up_ambience_s,
                 )
-                ls = StandbyTarget(
-                    level=table.ls,
+                l1s = StandbyTarget(
+                    level=table.l1s,
                     kelvin=house.night_kelvin,
                     transition_s=house.transition_up_occupancy_s,
                 )
                 fixture_states[entity_id] = FixtureStandbyState(
-                    l0=l0, l1=l1, l2=l2, l3=l3, ls=ls
+                    l0=l0, l1=l1, l2=l2, l3=l3, l1s=l1s
                 )
             self.standby_cache.update_room(subentry.subentry_id, fixture_states)
 
@@ -1256,7 +1285,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
             room.fresh_occupancy = True
             self._last_presence[subentry.subentry_id] = now_ts
 
-            tier = StateTier.LS_NIGHT if self._night_active() else StateTier.L1_DEMAND
+            tier = StateTier.L1S_SPECIAL if self._night_active() else StateTier.L1_DEMAND
             fixtures = subentry.data.get(CONF_LIGHTS, [])
             groups = self.standby_cache.batch_room_dispatch(subentry.subentry_id, fixtures, tier)
 
@@ -1273,7 +1302,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                     )
                 for eid in entity_ids:
                     room.last_written[eid] = level
-                    room.last_source[eid] = "night" if tier == StateTier.LS_NIGHT else "demand"
+                    room.last_source[eid] = "night" if tier == StateTier.L1S_SPECIAL else "demand"
 
     # ------------------------------------------------------------------ listeners
 

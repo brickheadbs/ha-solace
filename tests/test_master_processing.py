@@ -121,7 +121,7 @@ def test_state_table_precomputation(house, kitchen, normal_light):
     # L3 is fixed kitchen ambience level
     assert state.l3 == 15
     # Ls is housewide night level
-    assert state.ls == 3
+    assert state.l1s == 3
     assert state.target_kelvin > 2000
 
 
@@ -139,7 +139,7 @@ def test_hardware_clamps_enforced_in_state_table(house, kitchen, ceiling_light):
     assert state.l1 == 12  # clamped from 254 down to 12
     assert state.l2 <= 12
     assert state.l3 <= 12
-    assert state.ls <= 12
+    assert state.l1s <= 12
 
 
 def test_bedroom_sleep_mode_forced_off_across_all_modes(house, bedroom, normal_light):

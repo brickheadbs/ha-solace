@@ -175,9 +175,15 @@ class LightWriter:
                 st = self.hass.states.get(eid)
                 if st is not None:
                     f = infer_family(st)
-            if f is not None and not may_run_concurrently(f) and self.is_colour_busy(eid):
-                _LOGGER.debug("%s: deferring brightness write, colour step in flight", eid)
-                continue
+            # ⚠️ Brightness NEVER yields. This used to defer the brightness write whenever a
+            # colour step was in flight on a non-concurrent family, which made the two
+            # channels race and let colour win — the exact inversion of what the hardware
+            # demands. The 2026-08-12 measurement is that a concurrent colour step *freezes
+            # the brightness fade* (Entry Ceiling stalled at 84 for the full 600 s window
+            # while a same-family control tracked exactly), so brightness is the channel that
+            # must be protected. Brandon, 2026-09-13: "I would rather the color be incorrect
+            # than the bulb transition incorrect." Colour yields to brightness in
+            # ``async_step_colour``; nothing yields to colour.
             target_entities.append(eid)
 
         if not target_entities:
@@ -234,8 +240,12 @@ class LightWriter:
         if current_kelvin is None:
             return None
 
-        # A colour step FREEZES an in-flight brightness fade on IKEA if sent concurrently.
-        if profile is not None and not profile.concurrent and self._is_busy(entity_id):
+        # A colour step FREEZES an in-flight brightness fade on IKEA if sent concurrently,
+        # and on every family it would have to carry a brightness to stay safe (see below) —
+        # which would truncate the fade it rode in on. So colour yields universally now, not
+        # just on the non-concurrent families. Under the tier model brightness writes are
+        # rare and short, so a deferred colour step simply lands on the next tick.
+        if self._is_busy(entity_id):
             _LOGGER.debug("%s: deferring colour step, brightness fade in flight", entity_id)
             return None
 
@@ -256,11 +266,33 @@ class LightWriter:
             )
         )
 
+        # ⚠️ **A colour-only write must still carry a brightness.** ``light.turn_on`` always
+        # asserts state, so a payload without brightness reaches z2m as
+        # ``{"state":"ON","color_temp":X}``, which z2m sends as a bare genOnOff ``On``. The
+        # bulb then honours its OWN ``OnLevel``/``OnTransitionTime`` and jumps there,
+        # ignoring every transition Solace has ever computed. Reproduced 2026-09-13 on
+        # ``Kitchen Diner East``: off at level 4 → 76 → 152 in four seconds. ``on_level`` is
+        # 152 on the desk and diner bulbs, 206 on Kitchen Sink West, 3 on the office corners,
+        # so the same fault reads as a hard blink on some fixtures and a collapse to near-dark
+        # on others. Carrying the level makes z2m send ``moveToLevel`` instead, and the bulb
+        # never reaches its OnLevel path.
+        #
+        # The level we send is the VERIFIED current one. If we cannot establish it we skip the
+        # step rather than guess — a wrong level here is a visible jump, and a missed colour
+        # step costs nothing but one heartbeat.
+        current_level = self.current_estimated_level(entity_id)
+        if not current_level:
+            _LOGGER.debug(
+                "%s: skipping colour step, no established brightness to carry", entity_id
+            )
+            return None
+
         await self.hass.services.async_call(
             LIGHT_DOMAIN,
             SERVICE_TURN_ON,
             {
                 ATTR_ENTITY_ID: entity_id,
+                ATTR_BRIGHTNESS: int(current_level),
                 ATTR_COLOR_TEMP_KELVIN: kelvin,
                 ATTR_TRANSITION: actual_transition,
             },

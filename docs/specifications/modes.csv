@@ -1,0 +1,6 @@
+Description,Category,Demand,Notes,Transition types
+Ambient,L3,precalculated,Demand is precalculated every 5 minutes triggered by the update of the lux sensor,Clear to L3
+Diminished,L2,precalculated,"Kitchen only, oposite side",Clear to L1
+On,L1,precalculated,normal on state,Occupied L0 to UP occupied L*
+Off,L0,precalculated,normal off state,Occupied L* to Down occupied L0
+Special,L1S,precalculated,"While in special mode (bedroom morning and night ramps), until a change to the mode (time out or trigger) the values will work as normal but L1S will be used in that room instead of L1",Update L1
