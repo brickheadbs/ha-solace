@@ -381,13 +381,7 @@ def solve(
         source = "away"
         trace.append(("away", True))
 
-    # B. BEDROOM SLEEP OVERRIDE: Forced OFF across ALL modes in bedroom
-    elif room.night_off and data.asleep:
-        level = 0
-        source = "sleep"
-        trace.append(("bedroom_sleep_forced_off", True))
-
-    # C. VIRTUAL SUNRISE
+    # B. VIRTUAL SUNRISE: Artificial dawn goes on TOP of sleep mode to gently wake
     elif mode is Mode.SUNRISE:
         if room.sunrise_enabled or room.night_off:
             progress_pct = max(0.0, min(100.0, (data.sunrise_progress or 0.0) * 100.0))
@@ -401,6 +395,12 @@ def solve(
             level = 0 if data.asleep else min(house.night_level, state_table.l1)
             source = "sunrise"
             trace.append(("sunrise_other_room", level))
+
+    # C. BEDROOM SLEEP OVERRIDE: Forced OFF across normal modes in bedroom
+    elif room.night_off and data.asleep:
+        level = 0
+        source = "sleep"
+        trace.append(("bedroom_sleep_forced_off", True))
 
     # D. VIRTUAL SUNSET
     elif mode is Mode.SUNSET:

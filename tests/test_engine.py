@@ -818,6 +818,28 @@ def test_virtual_sunrise_fades_bedroom_lights(house, light):
     assert full.level >= mid.level
 
 
+def test_virtual_sunrise_fades_bedroom_lights_when_asleep(house, light):
+    """Virtual sunrise goes on top of sleep mode to gently wake while asleep."""
+    bedroom = RoomSettings(name="Bedroom", night_off=True)
+    # When asleep without sunrise -> forced 0 by bedroom sleep override
+    normal_sleep = solve(house, bedroom, light, _input(lux=1.0, asleep=True))
+    assert normal_sleep.level == 0
+    assert normal_sleep.source == "sleep"
+
+    # When asleep during virtual sunrise -> ramps up bedroom lights
+    mid = solve(house, bedroom, light, _input(lux=1.0, sunrise_progress=0.5, asleep=True))
+    assert mid.mode is Mode.SUNRISE
+    assert mid.level > 0
+    assert mid.source == "sunrise"
+
+    # Non-bedroom room stays dark while asleep during virtual sunrise
+    kitchen = RoomSettings(name="Kitchen", night_off=False, sunrise_enabled=False)
+    kitchen_got = solve(house, kitchen, light, _input(lux=1.0, sunrise_progress=0.5, asleep=True))
+    assert kitchen_got.mode is Mode.SUNRISE
+    assert kitchen_got.level == 0
+    assert kitchen_got.source == "sunrise"
+
+
 def test_bedtime_dwell_caps_level_in_bedroom_late_evening(house, light):
     """Bedtime dwell caps bedroom level to bedtime_dwell_level when occupied."""
     bedroom = RoomSettings(name="Bedroom", night_off=True, bedtime_dwell_enabled=True)
