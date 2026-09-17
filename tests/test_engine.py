@@ -950,6 +950,38 @@ def test_virtual_sunset_custom_spline_curve_and_demand_clamping(light):
     )
     assert got_mid.level == 60
 
+
+def test_virtual_sunset_only_applies_to_bedroom(light):
+    """Virtual sunset fade affects bedroom only; other rooms evaluate normal/night mode."""
+    custom_curve = (
+        SplinePoint(0.0, 180.0),
+        SplinePoint(100.0, 2.0),
+    )
+    house_curve = HouseSettings(sunset_curve=custom_curve)
+    bedroom = RoomSettings(name="Bedroom", night_off=True)
+    kitchen = RoomSettings(name="Kitchen", night_off=False, sunset_enabled=False)
+
+    # Bedroom obeys virtual sunset curve
+    bed_sol = solve(house_curve, bedroom, light, _input(lux=0.0, sunset_progress=0.5, occupied=True))
+    assert bed_sol.mode is Mode.SUNSET
+    assert bed_sol.source == "sunset"
+
+    # Bedroom holds at lowest level when progress is 1.0
+    bed_end = solve(house_curve, bedroom, light, _input(lux=0.0, sunset_progress=1.0, occupied=True))
+    assert bed_end.mode is Mode.SUNSET
+    assert bed_end.level == 2
+    assert bed_end.source == "sunset"
+
+    # Kitchen does not obey virtual sunset curve even if sunset_progress is passed
+    kitch_occ = solve(house_curve, kitchen, light, _input(lux=0.0, sunset_progress=0.5, occupied=True))
+    assert kitch_occ.source != "sunset"
+    assert kitch_occ.level > 2  # Active at demand/L1
+
+    kitch_unocc = solve(house_curve, kitchen, light, _input(lux=0.0, sunset_progress=0.5, occupied=False))
+    assert kitch_unocc.source != "sunset"
+    assert kitch_unocc.level == 0
+
+
 def test_per_light_min_is_a_cutoff_not_a_floor_and_exempt_in_ambience_and_night(house, room):
     """Section 6.2 & UI Help Text: Min is a cutoff, not a floor.
     - During daytime demand tracking, level below cutoff drops to 0.

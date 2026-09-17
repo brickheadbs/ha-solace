@@ -619,6 +619,13 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                 for zone in settings.zones
                 for light_id in zone.lights
             }
+            is_sunset_room = (
+                settings.sunset_enabled
+                or settings.night_off
+                or subentry.title.lower() == "bedroom"
+                or settings.name.lower() == "bedroom"
+            )
+            effective_sunset = sunset_progress if is_sunset_room else None
             for entity_id in subentry.data.get(CONF_LIGHTS, []):
                 zone = zone_for.get(entity_id)
                 if zone is not None and zone.zone_id in zone_presence:
@@ -630,7 +637,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                 try:
                     await self._async_apply_light(
                         entity_id, subentry, house, settings, room, lux, dnd, clock_hour,
-                        occupied, near_clear, manual, asleep, away, sunrise_progress, sunset_progress, bedtime_dwell_active, zone,
+                        occupied, near_clear, manual, asleep, away, sunrise_progress, effective_sunset, bedtime_dwell_active, zone,
                         filtered_demand=filtered_demand,
                     )
                 except Exception:  # noqa: BLE001
@@ -640,7 +647,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                 room.last_mode = Mode.AWAY
             elif sunrise_progress is not None:
                 room.last_mode = Mode.SUNRISE
-            elif sunset_progress is not None and not asleep:
+            elif effective_sunset is not None and not asleep:
                 room.last_mode = Mode.SUNSET
             elif self._night_active():
                 room.last_mode = Mode.NIGHT
@@ -1047,9 +1054,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
             elapsed = now_ts - self._active_sunset_started_at
             if elapsed < self._active_sunset_duration_s:
                 return max(0.0, min(1.0, elapsed / self._active_sunset_duration_s))
-            # Completed naturally
-            self._active_sunset_started_at = None
-            self._active_sunset_duration_s = None
+            # Completed fade: hold at lowest level (1.0) until sleep mode triggers, away, or window ends
             return 1.0
 
         bedroom_room: RoomState | None = None

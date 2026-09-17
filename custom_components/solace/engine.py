@@ -402,15 +402,24 @@ def solve(
         source = "sleep"
         trace.append(("bedroom_sleep_forced_off", True))
 
-    # D. VIRTUAL SUNSET
+    # D. VIRTUAL SUNSET: Bedtime fade (bedroom only)
     elif mode is Mode.SUNSET:
-        progress_pct = max(0.0, min(100.0, (data.sunset_progress or 0.0) * 100.0))
-        sunset_spline = MonotoneCubicSpline(house.sunset_curve)
-        curve_raw = sunset_spline(progress_pct)
-        target_level = min(int(round(curve_raw)), state_table.l1)
-        level = apply_clamp(max(0, target_level), light)
-        source = "sunset"
-        trace.append(("virtual_sunset", level))
+        if room.sunset_enabled or room.night_off or room.name.lower() == "bedroom":
+            progress_pct = max(0.0, min(100.0, (data.sunset_progress or 0.0) * 100.0))
+            sunset_spline = MonotoneCubicSpline(house.sunset_curve)
+            curve_raw = sunset_spline(progress_pct)
+            target_level = min(int(round(curve_raw)), state_table.l1)
+            level = apply_clamp(max(0, target_level), light)
+            source = "sunset"
+            trace.append(("virtual_sunset", level))
+        else:
+            if data.occupied:
+                level = state_table.l1s if data.night_active else state_table.l1
+                source = "night" if data.night_active else "demand"
+            else:
+                level = state_table.l3 if (house.ambience_ignores_occupancy and ambience_open and not data.asleep) else 0
+                source = "ambience" if level > 0 else "off"
+            trace.append(("sunset_other_room", level))
 
     # E. NIGHT MODE
     elif mode is Mode.NIGHT:

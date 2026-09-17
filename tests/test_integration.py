@@ -908,6 +908,151 @@ async def test_sunset_state_prediction_survives_toilet_trip(
     assert progress2 >= progress1
 
 
+async def test_sunset_holds_at_lowest_level_until_sleep_mode(
+    hass: HomeAssistant, world, freezer
+) -> None:
+    """Virtual sunset holds at 1.0 (lowest level) when fade completes, until sleep mode triggers."""
+    freezer.move_to("2026-08-13 23:00:00+00:00")
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+    from homeassistant.config_entries import ConfigSubentryData
+    from homeassistant.util import dt as dt_util
+    from custom_components.solace.const import CONF_DND_ENTITY, CONF_LUX_SENSOR, CONF_SLEEP_TOGGLE, DOMAIN, SUBENTRY_TYPE_ROOM
+    from .conftest import DND
+
+    bedroom_entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Solace",
+        unique_id="solace_bedroom_hold_test",
+        data={CONF_LUX_SENSOR: LUX, CONF_DND_ENTITY: DND, CONF_SLEEP_TOGGLE: "input_boolean.solace_sleep"},
+        options={CONF_LUX_SENSOR: LUX, CONF_DND_ENTITY: DND, CONF_SLEEP_TOGGLE: "input_boolean.solace_sleep", "sunset_fade_minutes": 30.0},
+        subentries_data=[
+            ConfigSubentryData(
+                subentry_type=SUBENTRY_TYPE_ROOM,
+                title="Bedroom",
+                unique_id=None,
+                data={
+                    "lights": [LIGHT],
+                    "night_off": True,
+                },
+            )
+        ],
+    )
+    bedroom_entry.add_to_hass(hass)
+    world(occupied=True, lux=0.0)
+    assert await _setup(hass, bedroom_entry)
+    coordinator = bedroom_entry.runtime_data.coordinator
+
+    subentry = next(iter(coordinator._subentries()))
+    bedroom = coordinator.rooms[subentry.subentry_id]
+    now_ts = dt_util.utcnow().timestamp()
+    bedroom.occupied = True
+    bedroom.occupied_since = now_ts - 400.0
+
+    # Sunset starts
+    p_start = coordinator._sunset_progress(23.0, coordinator.house)
+    assert p_start == 0.0
+
+    # Advance time past the 30-minute fade duration (e.g. 35 minutes)
+    coordinator._active_sunset_started_at = now_ts - (35.0 * 60.0)
+
+    # Must hold at 1.0, not reset
+    p_hold1 = coordinator._sunset_progress(23.0, coordinator.house)
+    assert p_hold1 == 1.0
+
+    # Advance further (e.g. 50 minutes)
+    coordinator._active_sunset_started_at = now_ts - (50.0 * 60.0)
+    p_hold2 = coordinator._sunset_progress(23.0, coordinator.house)
+    assert p_hold2 == 1.0
+    assert coordinator._active_sunset_started_at is not None
+
+    # Now sleep mode triggers
+    hass.states.async_set(coordinator.config_entry.options.get("sleep_toggle_entity", "input_boolean.solace_sleep"), "on")
+    assert coordinator._asleep() is True
+
+    # Sunset cleanly clears
+    p_asleep = coordinator._sunset_progress(23.0, coordinator.house)
+    assert p_asleep is None
+    assert coordinator._active_sunset_started_at is None
+
+
+async def test_sunset_bedroom_only_does_not_affect_kitchen(
+    hass: HomeAssistant, world, freezer
+) -> None:
+    """Virtual sunset fade applies only to bedroom; kitchen remains in normal mode."""
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+    from homeassistant.config_entries import ConfigSubentryData
+    from homeassistant.util import dt as dt_util
+    from custom_components.solace.const import CONF_DND_ENTITY, CONF_LUX_SENSOR, DOMAIN, SUBENTRY_TYPE_ROOM
+    from custom_components.solace.models import Mode
+    from .conftest import DND
+
+    KITCHEN_LIGHT = "light.kitchen_above_fridge"
+    hass.states.async_set(
+        KITCHEN_LIGHT,
+        "on",
+        {
+            "brightness": 120,
+            "color_temp_kelvin": 4000,
+            "min_color_temp_kelvin": 2702,
+            "max_color_temp_kelvin": 6535,
+            "supported_color_modes": ["color_temp"],
+        },
+    )
+
+    house_entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Solace",
+        unique_id="solace_multi_room_sunset_test",
+        data={CONF_LUX_SENSOR: LUX, CONF_DND_ENTITY: DND},
+        options={CONF_LUX_SENSOR: LUX, CONF_DND_ENTITY: DND, "sunset_fade_minutes": 30.0},
+        subentries_data=[
+            ConfigSubentryData(
+                subentry_type=SUBENTRY_TYPE_ROOM,
+                title="Kitchen",
+                unique_id=None,
+                data={
+                    "lights": [KITCHEN_LIGHT],
+                    "night_off": False,
+                    "sunset_enabled": False,
+                },
+            ),
+            ConfigSubentryData(
+                subentry_type=SUBENTRY_TYPE_ROOM,
+                title="Bedroom",
+                unique_id=None,
+                data={
+                    "lights": [LIGHT],
+                    "night_off": True,
+                    "sunset_enabled": False,
+                },
+            ),
+        ],
+    )
+    house_entry.add_to_hass(hass)
+    world(occupied=True)
+    assert await _setup(hass, house_entry)
+    coordinator = house_entry.runtime_data.coordinator
+
+    subentries = list(coordinator._subentries())
+    kitchen_subentry = next(s for s in subentries if s.title == "Kitchen")
+    bedroom_subentry = next(s for s in subentries if s.title == "Bedroom")
+
+    freezer.move_to("2026-08-13 23:00:00+00:00")
+    now_ts = dt_util.utcnow().timestamp()
+    bedroom_room = coordinator.rooms[bedroom_subentry.subentry_id]
+    bedroom_room.occupied = True
+    bedroom_room.occupied_since = now_ts - 400.0
+
+    # Run coordinator cycle at 23:00 (inside evening bedtime window)
+    await coordinator._async_update_data()
+
+    # Bedroom must be in Mode.SUNSET
+    assert coordinator.rooms[bedroom_subentry.subentry_id].last_mode is Mode.SUNSET
+
+    # Kitchen must NOT be in Mode.SUNSET (must be Mode.NORMAL)
+    assert coordinator.rooms[kitchen_subentry.subentry_id].last_mode is Mode.NORMAL
+
+
 async def test_smart_in_flight_glide_protection(
     hass: HomeAssistant, entry, world
 ) -> None:
