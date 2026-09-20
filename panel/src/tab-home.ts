@@ -28,7 +28,7 @@ const BAND_H = 96;
 const SPARK_ANCHOR = 0.66;
 
 const LUX = "sensor.entry_exterior_illuminance";
-const INSIDE_TEMP = "sensor.kitchen_kitchen_thermostat_temperature";
+const INSIDE_TEMP = "sensor.indoor_temperature_average";
 const OUTSIDE_TEMP = "sensor.entry_exterior_temperature";
 const HOT_WATER_TEMP = "sensor.hot_water_temperature_temperature";
 const FRIDGE_TEMP = "sensor.refrigerator_temperature_temperature";
@@ -36,6 +36,20 @@ const FRIDGE_TEMP = "sensor.refrigerator_temperature_temperature";
 const WEATHER = "weather.forecast_home";
 const HEAT_LINK = "water_heater.kitchen_kitchen_heat_link";
 const THERMOSTAT = "climate.kitchen_kitchen_thermostat";
+
+const KITCHEN_TEMP = "sensor.kitchen_kitchen_thermostat_temperature";
+const DINING_TEMP = "sensor.dining_temperature_temperature";
+const OFFICE_TEMP = "sensor.office_temperature_temperature";
+const BEDROOM_TEMP = "sensor.bedroom_temperature_temperature";
+const ENTRY_TEMP = "sensor.entry_temperature_temperature";
+
+const ROOM_SENSORS: { name: string; id: string }[] = [
+  { name: "Kitchen", id: KITCHEN_TEMP },
+  { name: "Dining", id: DINING_TEMP },
+  { name: "Office", id: OFFICE_TEMP },
+  { name: "Bed", id: BEDROOM_TEMP },
+  { name: "Entry", id: ENTRY_TEMP },
+];
 
 const TRACKED = [LUX, INSIDE_TEMP, OUTSIDE_TEMP, HOT_WATER_TEMP, FRIDGE_TEMP];
 
@@ -1385,6 +1399,14 @@ export class SolTabHome extends LitElement {
     const target = climate?.attributes?.temperature ?? null;
     const humidity = climate?.attributes?.current_humidity;
 
+    const rooms = ROOM_SENSORS.map(r => ({
+      ...r,
+      temp: parseFloat(this.hass.states[r.id]?.state ?? ""),
+    }));
+    const valid = rooms.filter(r => !isNaN(r.temp));
+    const warmest = valid.length ? [...valid].sort((a, b) => b.temp - a.temp)[0] : null;
+    const coolest = valid.length ? [...valid].sort((a, b) => a.temp - b.temp)[0] : null;
+
     const spark = this.spark(INSIDE_TEMP, { minSpan: 1.5 });
 
     return html`
@@ -1392,6 +1414,16 @@ export class SolTabHome extends LitElement {
         <div class="c-head">
           <ha-icon icon="mdi:home-thermometer" style="color: #ef5350;"></ha-icon>
           <span class="c-title">Inside</span>
+          ${warmest && coolest
+            ? html`
+                <span
+                  style="font-size: 11px; color: var(--sol-text-4); margin-left: 6px;"
+                  title="Warmest: ${warmest.name} (${warmest.temp.toFixed(1)}°C) · Coolest: ${coolest.name} (${coolest.temp.toFixed(1)}°C)"
+                >
+                  ${warmest.name} ${warmest.temp.toFixed(1)}° / ${coolest.name} ${coolest.temp.toFixed(1)}°
+                </span>
+              `
+            : nothing}
           <span class="grow"></span>
           <span class="c-status">${action === "heating" ? "heating" : "idle"}</span>
         </div>
@@ -1400,6 +1432,21 @@ export class SolTabHome extends LitElement {
           <div class="c-main">
             <div class="big-val">
               ${isNaN(currentTemp) ? "—" : currentTemp.toFixed(1)}<span class="unit">°</span>
+            </div>
+            <div
+              class="room-list"
+              style="display: flex; flex-wrap: wrap; gap: 2px 8px; margin-top: 6px; font-size: 11px; color: var(--sol-text-3); text-shadow: 0 0 4px var(--sol-card), 0 0 8px var(--sol-card);"
+            >
+              ${rooms.map(
+                r => html`
+                  <span>
+                    <span style="color: var(--sol-faint);">${r.name}</span>
+                    <span style="color: var(--sol-text-2); font-variant-numeric: tabular-nums;">
+                      ${isNaN(r.temp) ? "—" : `${r.temp.toFixed(1)}°`}
+                    </span>
+                  </span>
+                `
+              )}
             </div>
           </div>
 
@@ -1667,6 +1714,14 @@ export class SolTabHome extends LitElement {
                 ${this.renderHwNumber("Ready margin", "input_number.hw_ready_margin", num_("input_number.hw_ready_margin", 10), "min")}
                 ${this.renderHwNumber("Max runtime", "input_number.hw_max_runtime", num_("input_number.hw_max_runtime", 90), "min")}
                 ${this.renderHwNumber("Learned heat rate", "input_number.hw_heat_rate", learnedRate, "°C/min")}
+                ${observed !== null
+                  ? html`
+                      <div class="hw-row">
+                        <span class="hw-k">Observed rate</span>
+                        <span class="hw-v">${observed.toFixed(2)} °C/min</span>
+                      </div>
+                    `
+                  : nothing}
               </div>
             `
           : nothing}
