@@ -38,14 +38,14 @@ const HEAT_LINK = "water_heater.kitchen_kitchen_heat_link";
 const THERMOSTAT = "climate.kitchen_kitchen_thermostat";
 
 const KITCHEN_TEMP = "sensor.kitchen_kitchen_thermostat_temperature";
-const DINING_TEMP = "sensor.dining_temperature_temperature";
+const BATH_TEMP = "sensor.bathroom_temperature_temperature";
 const OFFICE_TEMP = "sensor.office_temperature_temperature";
 const BEDROOM_TEMP = "sensor.bedroom_temperature_temperature";
 const ENTRY_TEMP = "sensor.entry_temperature_temperature";
 
 const ROOM_SENSORS: { name: string; id: string }[] = [
   { name: "Kitchen", id: KITCHEN_TEMP },
-  { name: "Dining", id: DINING_TEMP },
+  { name: "Bath", id: BATH_TEMP },
   { name: "Office", id: OFFICE_TEMP },
   { name: "Bed", id: BEDROOM_TEMP },
   { name: "Entry", id: ENTRY_TEMP },
