@@ -1101,3 +1101,137 @@ async def test_smart_in_flight_glide_protection(
 
     turn_ons = [c for c in calls if c.get("service") == "turn_on"]
     assert len(turn_ons) == 0, f"Expected write to be suppressed, but got {turn_ons}"
+
+
+async def test_ambient_lights_transition_to_off_when_bedroom_drops_below_kitchen_ambient(
+    hass: HomeAssistant, world, freezer
+) -> None:
+    """Ambient lights across the house transition to off when bedroom fade drops below kitchen ambient level."""
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+    from homeassistant.config_entries import ConfigSubentryData
+    from homeassistant.util import dt as dt_util
+    from custom_components.solace.const import CONF_DND_ENTITY, CONF_LUX_SENSOR, DOMAIN, SUBENTRY_TYPE_ROOM
+    from custom_components.solace.models import Mode
+    from .conftest import DND
+
+    KITCHEN_LIGHT = "light.kitchen_counter"
+    BEDROOM_LIGHT = "light.bedroom_ceiling"
+    KITCHEN_PRESENCE = "binary_sensor.kitchen_presence"
+    BEDROOM_PRESENCE = "binary_sensor.bedroom_presence"
+
+    hass.states.async_set(KITCHEN_PRESENCE, "off")
+    hass.states.async_set(BEDROOM_PRESENCE, "on")
+
+    for light_id in (KITCHEN_LIGHT, BEDROOM_LIGHT):
+        hass.states.async_set(
+            light_id,
+            "on",
+            {
+                "brightness": 120,
+                "color_temp_kelvin": 4000,
+                "min_color_temp_kelvin": 2702,
+                "max_color_temp_kelvin": 6535,
+                "supported_color_modes": ["color_temp"],
+            },
+        )
+
+    house_entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Solace",
+        unique_id="solace_ambient_bedroom_fade_test",
+        data={CONF_LUX_SENSOR: LUX, CONF_DND_ENTITY: DND},
+        options={
+            CONF_LUX_SENSOR: LUX,
+            CONF_DND_ENTITY: DND,
+            "sunset_fade_minutes": 20.0,
+            "ambience_level": 51,
+            "ambience_ignores_occupancy": True,
+        },
+        subentries_data=[
+            ConfigSubentryData(
+                subentry_type=SUBENTRY_TYPE_ROOM,
+                title="Kitchen",
+                unique_id=None,
+                data={
+                    "lights": [KITCHEN_LIGHT],
+                    "presence": [KITCHEN_PRESENCE],
+                    "night_off": False,
+                    "sunset_enabled": False,
+                    "ambience_level": 51,
+                },
+            ),
+            ConfigSubentryData(
+                subentry_type=SUBENTRY_TYPE_ROOM,
+                title="Bedroom",
+                unique_id=None,
+                data={
+                    "lights": [BEDROOM_LIGHT],
+                    "presence": [BEDROOM_PRESENCE],
+                    "night_off": True,
+                    "sunset_enabled": True,
+                },
+            ),
+        ],
+    )
+    house_entry.add_to_hass(hass)
+    world(occupied=False)
+    assert await _setup(hass, house_entry)
+    coordinator = house_entry.runtime_data.coordinator
+
+    subentries = list(coordinator._subentries())
+    kitchen_subentry = next(s for s in subentries if "kitchen" in s.title.lower())
+    bedroom_subentry = next(s for s in subentries if "bedroom" in s.title.lower())
+
+    kitchen_room = coordinator.rooms[kitchen_subentry.subentry_id]
+    bedroom_room = coordinator.rooms[bedroom_subentry.subentry_id]
+
+    freezer.move_to("2026-08-13 23:00:00+00:00")
+    now_ts = dt_util.utcnow().timestamp()
+
+    # Dark outside (0 lux) so ambience gate is armed
+    coordinator._last_good_lux = 0.0
+    coordinator._first_lux_reported = True
+
+    # Bedroom occupied for > 5 min to trigger virtual sunset
+    bedroom_room.occupied = True
+    bedroom_room.occupied_since = now_ts - 400.0
+
+    # Kitchen is unoccupied (resting ambience)
+    kitchen_room.occupied = False
+
+    # 1. At start of sunset fade (progress 0.0), bedroom level is 161 (min of curve 180 and demand L1 161) > kitchen ambient 51
+    await coordinator._async_update_data()
+    assert coordinator.rooms[bedroom_subentry.subentry_id].last_mode is Mode.SUNSET
+    assert coordinator.rooms[bedroom_subentry.subentry_id].solutions[BEDROOM_LIGHT].level == 161
+    # Kitchen ambient gate remains open, kitchen resting at ambience level 51
+    assert kitchen_room.ambience_open is True
+    assert coordinator.rooms[kitchen_subentry.subentry_id].solutions[KITCHEN_LIGHT].level == 51
+
+    # 2. Advance time so bedroom level drops below kitchen ambient level (51)
+    # Sunset duration is 20 min (1200s). At 15 min (900s), progress is 0.75 (level ~35 < 51)
+    freezer.move_to("2026-08-13 23:15:00+00:00")
+    await coordinator._async_update_data()
+
+    # Bedroom is at low fade level (~35) and holding (never 0 before bedtime)
+    assert coordinator.rooms[bedroom_subentry.subentry_id].last_mode is Mode.SUNSET
+    bedroom_level = coordinator.rooms[bedroom_subentry.subentry_id].solutions[BEDROOM_LIGHT].level
+    assert 0 < bedroom_level < 51
+
+    # Kitchen ambient gate must be forced closed (suppressed by bedroom fade), kitchen turns OFF
+    assert kitchen_room.ambience_open is False
+    assert coordinator.rooms[kitchen_subentry.subentry_id].solutions[KITCHEN_LIGHT].level == 0
+
+    # 3. Advance to end of fade (progress 1.0) before bedtime mode:
+    # Bedroom holds at low level (15), NOT turning off
+    freezer.move_to("2026-08-13 23:25:00+00:00")
+    await coordinator._async_update_data()
+    assert coordinator.rooms[bedroom_subentry.subentry_id].solutions[BEDROOM_LIGHT].level == 15
+    assert coordinator.rooms[kitchen_subentry.subentry_id].solutions[KITCHEN_LIGHT].level == 0
+
+    # 4. Bedtime mode triggers (DND / Pixel Watch bedtime / phone DND)
+    hass.states.async_set(DND, "on")
+    await coordinator._async_update_data()
+    assert coordinator._asleep() is True
+    # Bedroom lights now turn completely OFF
+    assert coordinator.rooms[bedroom_subentry.subentry_id].solutions[BEDROOM_LIGHT].level == 0
+

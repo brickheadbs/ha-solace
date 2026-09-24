@@ -100,6 +100,7 @@ from .models import (
 )
 from .remotes import RemoteDispatcher
 from .solar import ClearSkySolarModel
+from .spline import MonotoneCubicSpline
 from .writer import LightWriter, infer_family
 
 _LOGGER = logging.getLogger(__name__)
@@ -591,6 +592,39 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         # Update continuous 4-level (+ Ls) Standby State Cache
         self._update_standby_cache(house, clock_hour, filtered_demand, lux, cloud_coverage)
 
+        # Check if bedroom level has dropped below kitchen ambient light levels during bedroom fade
+        kitchen_subentry = next(
+            (s for s in self._subentries() if "kitchen" in s.title.lower()),
+            None,
+        )
+        kitchen_ambient_level = house.ambience_level
+        if kitchen_subentry is not None:
+            k_settings = self.room_settings(kitchen_subentry)
+            kitchen_ambient_level = k_settings.ambience_level or house.ambience_level
+
+        bedroom_subentry = next(
+            (s for s in self._subentries() if "bedroom" in s.title.lower() or s.data.get("night_off")),
+            None,
+        )
+        ambient_suppressed_by_bedroom = False
+        if sunset_progress is not None and bedroom_subentry is not None:
+            b_settings = self.room_settings(bedroom_subentry)
+            if (
+                b_settings.sunset_enabled
+                or b_settings.night_off
+                or "bedroom" in bedroom_subentry.title.lower()
+                or "bedroom" in b_settings.name.lower()
+            ):
+                progress_pct = max(0.0, min(100.0, sunset_progress * 100.0))
+                sunset_spline = MonotoneCubicSpline(house.sunset_curve)
+                curve_raw = sunset_spline(progress_pct)
+                low_level = house.bedtime_dwell_level if (house.bedtime_dwell_enabled or b_settings.bedtime_dwell_enabled) else 15
+                if house.sunset_curve and house.sunset_curve[-1].y > 0:
+                    low_level = int(house.sunset_curve[-1].y)
+                bedroom_fade_level = max(low_level, int(round(curve_raw)))
+                if bedroom_fade_level < kitchen_ambient_level:
+                    ambient_suppressed_by_bedroom = True
+
         for subentry in self._subentries():
             room = self.rooms[subentry.subentry_id]
             settings = self.room_settings(subentry)
@@ -605,9 +639,13 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                 room.ambience_open = self._gate_override
             else:
                 raw_gate = ambience_threshold(lux, room.ambience_open, house)
-                room.ambience_open, room.ambience_pending_since = debounce_ambience(
+                lux_gate, room.ambience_pending_since = debounce_ambience(
                     raw_gate, room.ambience_open, loop_now, room.ambience_pending_since, house
                 )
+                if ambient_suppressed_by_bedroom:
+                    room.ambience_open = False
+                else:
+                    room.ambience_open = lux_gate
 
             manual = room.is_manual(settings.manual_hold_minutes, now.timestamp())
             if not manual and room.manual_touched and not room.manual_switch:

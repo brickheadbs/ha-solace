@@ -1035,4 +1035,34 @@ def test_per_light_min_is_a_cutoff_not_a_floor_and_exempt_in_ambience_and_night(
     assert dark.level == table_low_demand.l1
 
 
+def test_virtual_sunset_holds_at_low_level_until_bedtime_mode(light):
+    """Virtual sunset fade holds at low level (not 0) until bedtime mode activates."""
+    custom_curve = (
+        SplinePoint(0.0, 180.0),
+        SplinePoint(50.0, 60.0),
+        SplinePoint(100.0, 0.0),  # legacy curve ending at 0
+    )
+    house = HouseSettings(sunset_curve=custom_curve, bedtime_dwell_level=15)
+    bedroom = RoomSettings(name="Bedroom", night_off=True, sunset_enabled=True)
+
+    # During fade (progress 0.5)
+    got_mid = solve(house, bedroom, light, _input(lux=0.0, sunset_progress=0.5, occupied=True))
+    assert got_mid.mode is Mode.SUNSET
+    assert got_mid.level == 60
+
+    # At completion of fade (progress 1.0) before bedtime mode:
+    # Must hold at bedtime_dwell_level (15), NOT drop to 0
+    got_hold = solve(house, bedroom, light, _input(lux=0.0, sunset_progress=1.0, occupied=True))
+    assert got_hold.mode is Mode.SUNSET
+    assert got_hold.level == 15
+    assert got_hold.source == "sunset"
+
+    # When bedtime mode triggers (asleep = True):
+    # Bedroom lights turn OFF
+    got_sleep = solve(house, bedroom, light, _input(lux=0.0, sunset_progress=1.0, occupied=True, asleep=True))
+    assert got_sleep.level == 0
+    assert got_sleep.source == "sleep"
+
+
+
 

@@ -408,7 +408,11 @@ def solve(
             progress_pct = max(0.0, min(100.0, (data.sunset_progress or 0.0) * 100.0))
             sunset_spline = MonotoneCubicSpline(house.sunset_curve)
             curve_raw = sunset_spline(progress_pct)
+            low_level = house.bedtime_dwell_level if (house.bedtime_dwell_enabled or room.bedtime_dwell_enabled) else 15
+            if house.sunset_curve and house.sunset_curve[-1].y > 0:
+                low_level = int(house.sunset_curve[-1].y)
             target_level = min(int(round(curve_raw)), state_table.l1)
+            target_level = max(low_level, target_level)
             level = apply_clamp(max(0, target_level), light)
             source = "sunset"
             trace.append(("virtual_sunset", level))
@@ -468,7 +472,7 @@ def solve(
                 trace.append(("unoccupied", True))
 
     # 6. Bedtime Dwell Cap
-    if data.bedtime_dwell_active and (room.bedtime_dwell_enabled or room.night_off):
+    if mode not in (Mode.SUNSET, Mode.SUNRISE) and data.bedtime_dwell_active and (room.bedtime_dwell_enabled or room.night_off):
         if level > house.bedtime_dwell_level:
             level = house.bedtime_dwell_level
             source = "bedtime_dwell"
