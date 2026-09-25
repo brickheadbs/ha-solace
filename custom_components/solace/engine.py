@@ -383,7 +383,7 @@ def solve(
 
     # B. VIRTUAL SUNRISE: Artificial dawn goes on TOP of sleep mode to gently wake
     elif mode is Mode.SUNRISE:
-        if room.sunrise_enabled or room.night_off:
+        if room.sunrise_enabled or room.night_off or "bedroom" in room.name.lower():
             progress_pct = max(0.0, min(100.0, (data.sunrise_progress or 0.0) * 100.0))
             sunrise_spline = MonotoneCubicSpline(house.sunrise_curve)
             curve_raw = sunrise_spline(progress_pct)
@@ -397,14 +397,14 @@ def solve(
             trace.append(("sunrise_other_room", level))
 
     # C. BEDROOM SLEEP OVERRIDE: Forced OFF across normal modes in bedroom
-    elif room.night_off and data.asleep:
+    elif (room.night_off or "bedroom" in room.name.lower()) and data.asleep:
         level = 0
         source = "sleep"
         trace.append(("bedroom_sleep_forced_off", True))
 
     # D. VIRTUAL SUNSET: Bedtime fade (bedroom only)
     elif mode is Mode.SUNSET:
-        if room.sunset_enabled or room.night_off or room.name.lower() == "bedroom":
+        if room.sunset_enabled or room.night_off or "bedroom" in room.name.lower():
             progress_pct = max(0.0, min(100.0, (data.sunset_progress or 0.0) * 100.0))
             sunset_spline = MonotoneCubicSpline(house.sunset_curve)
             curve_raw = sunset_spline(progress_pct)
@@ -470,7 +470,7 @@ def solve(
                 trace.append(("unoccupied", True))
 
     # 6. Bedtime Dwell Cap
-    if mode not in (Mode.SUNSET, Mode.SUNRISE) and data.bedtime_dwell_active and (room.bedtime_dwell_enabled or room.night_off):
+    if mode not in (Mode.SUNSET, Mode.SUNRISE) and data.bedtime_dwell_active and (room.bedtime_dwell_enabled or room.night_off or "bedroom" in room.name.lower()):
         if level > house.bedtime_dwell_level:
             level = house.bedtime_dwell_level
             source = "bedtime_dwell"

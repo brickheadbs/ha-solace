@@ -1106,7 +1106,7 @@ export class SolTabSettings extends LitElement {
                 </div>
                 <div class="curve-metric">
                   <span>Fade duration:</span>
-                  <sol-help text="Total duration in minutes over which bedroom lights fade down along the sunset spline curve into dark."></sol-help>
+                  <sol-help text="Total duration in minutes over which bedroom lights fade down along the sunset spline curve to the wind-down hold level before sleep mode starts."></sol-help>
                   <div class="input-with-unit">
                     <input
                       type="number"

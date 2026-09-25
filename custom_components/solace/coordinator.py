@@ -658,8 +658,8 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
             is_sunset_room = (
                 settings.sunset_enabled
                 or settings.night_off
-                or subentry.title.lower() == "bedroom"
-                or settings.name.lower() == "bedroom"
+                or "bedroom" in subentry.title.lower()
+                or "bedroom" in settings.name.lower()
             )
             effective_sunset = sunset_progress if is_sunset_room else None
             for entity_id in subentry.data.get(CONF_LIGHTS, []):
@@ -1095,7 +1095,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
 
         bedroom_room: RoomState | None = None
         for subentry in self._subentries():
-            if subentry.title.lower() == "bedroom" or subentry.data.get("night_off") or subentry.data.get("sunset_enabled"):
+            if "bedroom" in subentry.title.lower() or subentry.data.get("night_off") or subentry.data.get("sunset_enabled"):
                 bedroom_room = self.rooms.get(subentry.subentry_id)
                 break
 
