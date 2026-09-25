@@ -1222,10 +1222,10 @@ async def test_ambient_lights_transition_to_off_when_bedroom_drops_below_kitchen
     assert coordinator.rooms[kitchen_subentry.subentry_id].solutions[KITCHEN_LIGHT].level == 0
 
     # 3. Advance to end of fade (progress 1.0) before bedtime mode:
-    # Bedroom holds at low level (15), NOT turning off
+    # Bedroom holds at lowest light-on level (1), NOT turning off
     freezer.move_to("2026-08-13 23:25:00+00:00")
     await coordinator._async_update_data()
-    assert coordinator.rooms[bedroom_subentry.subentry_id].solutions[BEDROOM_LIGHT].level == 15
+    assert coordinator.rooms[bedroom_subentry.subentry_id].solutions[BEDROOM_LIGHT].level == 1
     assert coordinator.rooms[kitchen_subentry.subentry_id].solutions[KITCHEN_LIGHT].level == 0
 
     # 4. Bedtime mode triggers (DND / Pixel Watch bedtime / phone DND)

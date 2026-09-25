@@ -28,7 +28,7 @@ const DEF_SUNSET: NodeDef[] = [
   { x: 0, y: 180 },
   { x: 30, y: 120 },
   { x: 70, y: 40 },
-  { x: 100, y: 15 },
+  { x: 100, y: 1 },
 ];
 
 const X0 = 48;

@@ -127,7 +127,7 @@ DEFAULT_SUNSET_CURVE: tuple[SplinePoint, ...] = (
     SplinePoint(0.0, 180.0),
     SplinePoint(30.0, 120.0),
     SplinePoint(70.0, 40.0),
-    SplinePoint(100.0, 15.0),
+    SplinePoint(100.0, 1.0),
 )
 
 

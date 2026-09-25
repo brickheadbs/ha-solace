@@ -1051,10 +1051,10 @@ def test_virtual_sunset_holds_at_low_level_until_bedtime_mode(light):
     assert got_mid.level == 60
 
     # At completion of fade (progress 1.0) before bedtime mode:
-    # Must hold at bedtime_dwell_level (15), NOT drop to 0
+    # Must hold at lowest light-on level (1), NOT drop to 0
     got_hold = solve(house, bedroom, light, _input(lux=0.0, sunset_progress=1.0, occupied=True))
     assert got_hold.mode is Mode.SUNSET
-    assert got_hold.level == 15
+    assert got_hold.level == 1
     assert got_hold.source == "sunset"
 
     # When bedtime mode triggers (asleep = True):

@@ -618,9 +618,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                 progress_pct = max(0.0, min(100.0, sunset_progress * 100.0))
                 sunset_spline = MonotoneCubicSpline(house.sunset_curve)
                 curve_raw = sunset_spline(progress_pct)
-                low_level = house.bedtime_dwell_level if (house.bedtime_dwell_enabled or b_settings.bedtime_dwell_enabled) else 15
-                if house.sunset_curve and house.sunset_curve[-1].y > 0:
-                    low_level = int(house.sunset_curve[-1].y)
+                low_level = int(house.sunset_curve[-1].y) if (house.sunset_curve and house.sunset_curve[-1].y > 0) else 1
                 bedroom_fade_level = max(low_level, int(round(curve_raw)))
                 if bedroom_fade_level < kitchen_ambient_level:
                     ambient_suppressed_by_bedroom = True
