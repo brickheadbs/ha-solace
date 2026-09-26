@@ -44,7 +44,7 @@ def multi_room_entry(hass: HomeAssistant) -> MockConfigEntry:
                     "button_down": "nudge_bias_down",
                     "hold_up": "turn_on",
                     "hold_down": "turn_off",
-                    "button_left": "toggle_manual",
+                    "button_left": "resume_auto",
                     "button_right": "toggle_sleep",
                 }
             ],
@@ -77,7 +77,7 @@ def multi_room_entry(hass: HomeAssistant) -> MockConfigEntry:
 
 
 async def test_remotes_event_handling_and_turn_on(hass: HomeAssistant, multi_room_entry: MockConfigEntry) -> None:
-    """Test that event.* entities trigger button actions and turn_on works."""
+    """Test that event.* entities trigger button actions, resume_auto, and turn_on works."""
     assert await hass.config_entries.async_setup(multi_room_entry.entry_id)
     await hass.async_block_till_done()
 
@@ -101,17 +101,42 @@ async def test_remotes_event_handling_and_turn_on(hass: HomeAssistant, multi_roo
     assert room.manual_touched is True
     assert room.manual_level == 0
 
+    # Simulate button_left (resume_auto / Auto Override) via event entity
+    hass.states.async_set(
+        "event.living_office_control_action",
+        "2026-09-26T16:00:02.000+00:00",
+        {"event_type": "arrow_left_click"},
+    )
+    await hass.async_block_till_done()
+
+    # Room should be completely returned to auto
+    assert room.manual_switch is False
+    assert room.manual_touched is False
+    assert room.manual_level is None
+    assert room.manual_since is None
+
+    # Simulate hold_down (turn_off) again
+    hass.states.async_set(
+        "event.living_office_control_action",
+        "2026-09-26T16:00:04.000+00:00",
+        {"event_type": "brightness_move_down"},
+    )
+    await hass.async_block_till_done()
+    assert room.manual_level == 0
+
     # Simulate hold_up (turn_on) via event entity
     hass.states.async_set(
         "event.living_office_control_action",
-        "2026-09-26T16:00:05.000+00:00",
+        "2026-09-26T16:00:06.000+00:00",
         {"event_type": "brightness_move_up"},
     )
     await hass.async_block_till_done()
 
-    # Room manual off cleared
+    # Room manual off cleared, returned to auto and occupied
     assert room.manual_switch is False
-    assert room.manual_level != 0
+    assert room.manual_touched is False
+    assert room.manual_level is None
+    assert room.occupied is True
 
     # Simulate button_up (nudge_bias_up)
     old_bias = float(living_subentry.data.get("bias_stops", 0.0))

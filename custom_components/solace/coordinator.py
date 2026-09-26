@@ -125,6 +125,8 @@ class RoomState:
     The explicit has-been-touched flag is what makes the age meaningful."""
     manual_since: float | None = None
     """UTC timestamp of the last human touch. Persisted alongside the flag."""
+    manual_level: int | None = None
+    """Explicit manual brightness level override if set."""
     solutions: dict[str, Solution] = field(default_factory=dict)
     last_written: dict[str, int] = field(default_factory=dict)
     last_written_kelvin: dict[str, int] = field(default_factory=dict)
@@ -437,6 +439,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                 manual_switch=bool(saved.get("manual_switch", False)),
                 manual_touched=bool(saved.get("manual_touched", False)),
                 manual_since=saved.get("manual_since"),
+                manual_level=saved.get("manual_level"),
                 ambience_open=bool(saved.get("ambience_open", False)),
             )
 
@@ -517,6 +520,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                 "manual_switch": room.manual_switch,
                 "manual_touched": room.manual_touched,
                 "manual_since": room.manual_since,
+                "manual_level": room.manual_level,
                 # Hysteretic state: without it a restart resets to "bright", and a
                 # restart at dusk with lux between the two thresholds (50-80) leaves the
                 # glow suppressed until lux falls all the way past the *falling* edge.

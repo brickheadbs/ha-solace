@@ -29,11 +29,11 @@ DEFAULT_REMOTES: list[dict[str, Any]] = [
         "button_off": "turn_off",
         "button_up": "nudge_bias_up",
         "button_down": "nudge_bias_down",
-        "button_left": "toggle_manual",
+        "button_left": "resume_auto",
         "button_right": "toggle_sleep",
         "hold_up": "nudge_bias_up",
         "hold_down": "nudge_bias_down",
-        "hold_left": "none",
+        "hold_left": "resume_auto",
         "hold_right": "leaving_5_min",
     },
     {
@@ -45,11 +45,11 @@ DEFAULT_REMOTES: list[dict[str, Any]] = [
         "button_off": "turn_off",
         "button_up": "nudge_bias_up",
         "button_down": "nudge_bias_down",
-        "button_left": "toggle_manual",
+        "button_left": "resume_auto",
         "button_right": "toggle_sleep",
         "hold_up": "nudge_bias_up",
         "hold_down": "nudge_bias_down",
-        "hold_left": "none",
+        "hold_left": "resume_auto",
         "hold_right": "leaving_5_min",
     },
     {
@@ -61,11 +61,11 @@ DEFAULT_REMOTES: list[dict[str, Any]] = [
         "button_off": "turn_off",
         "button_up": "nudge_bias_up",
         "button_down": "nudge_bias_down",
-        "button_left": "toggle_manual",
+        "button_left": "resume_auto",
         "button_right": "toggle_sleep",
         "hold_up": "nudge_bias_up",
         "hold_down": "nudge_bias_down",
-        "hold_left": "none",
+        "hold_left": "resume_auto",
         "hold_right": "leaving_5_min",
     },
     {
@@ -77,11 +77,11 @@ DEFAULT_REMOTES: list[dict[str, Any]] = [
         "button_off": "nudge_bias_down",
         "button_up": "nudge_bias_up",
         "button_down": "nudge_bias_down",
-        "button_left": "toggle_manual",
+        "button_left": "resume_auto",
         "button_right": "toggle_sleep",
         "hold_up": "turn_on",
         "hold_down": "turn_off",
-        "hold_left": "none",
+        "hold_left": "resume_auto",
         "hold_right": "leaving_5_min",
     },
 ]
@@ -223,6 +223,29 @@ class RemoteDispatcher:
                         room.manual_switch = True
                         room.manual_level = next_level
                     _LOGGER.info("Solace Remote: Preset cycle -> %s for %s", next_level, subentry.title)
+            if room and room.manual_switch and room.manual_level:
+                for entity_id in subentry.data.get("lights", []):
+                    await self.coordinator.writer.async_set_brightness(
+                        entity_id,
+                        room.manual_level,
+                        self.coordinator.house.transition_setting_s,
+                    )
+            await self.coordinator.async_persist()
+            await self.coordinator.async_request_refresh()
+
+        elif action_name in ("resume_auto", "auto") and subentry:
+            if room:
+                room.manual_switch = False
+                room.manual_touched = False
+                room.manual_level = None
+                room.manual_since = None
+                room.occupied = True
+                room.occupied_since = self.hass.loop.time()
+                self.coordinator._last_presence[subentry.subentry_id] = self.hass.loop.time()
+                for entity_id in subentry.data.get("lights", []):
+                    room.last_written[entity_id] = 0
+                    room.last_source[entity_id] = "auto"
+                _LOGGER.info("Solace Remote: Auto Override — resumed Auto for %s", subentry.title)
             await self.coordinator.async_persist()
             await self.coordinator.async_request_refresh()
 
@@ -250,22 +273,36 @@ class RemoteDispatcher:
                 room.manual_touched = False
                 room.manual_level = None
                 room.manual_since = None
-                if not room.occupied:
-                    demand_level = int(round((self.coordinator.demand or 1.0) * 254))
-                    room.manual_level = max(50, min(254, demand_level))
-                    room.manual_touched = True
-                    room.manual_since = self.hass.loop.time()
-                _LOGGER.info("Solace Remote: Turn on for %s (level=%s)", subentry.title, room.manual_level)
+                room.occupied = True
+                room.occupied_since = self.hass.loop.time()
+                self.coordinator._last_presence[subentry.subentry_id] = self.hass.loop.time()
+                for entity_id in subentry.data.get("lights", []):
+                    room.last_written[entity_id] = 0
+                    room.last_source[entity_id] = "turn_on"
+                _LOGGER.info("Solace Remote: Turn on (Auto) for %s", subentry.title)
             await self.coordinator.async_persist()
             await self.coordinator.async_request_refresh()
+            # If auto calculated <= 0 (e.g. night mode or extreme daylight), ensure lights physically turn on
+            for entity_id in subentry.data.get("lights", []):
+                sol = room.solutions.get(entity_id) if room else None
+                if not sol or sol.level <= 0:
+                    await self.coordinator.writer.async_set_brightness(
+                        entity_id,
+                        127,
+                        getattr(self.coordinator.house, "transition_up_occupancy_s", 2.0),
+                    )
+                    if room:
+                        room.last_written[entity_id] = 127
 
         elif action_name == "turn_off" and subentry:
             if room:
                 room.manual_touched = True
                 room.manual_level = 0
                 room.manual_since = self.hass.loop.time()
-                if "living" in subentry.title.lower() and getattr(self.coordinator, "_living_guest_mode", lambda: False)():
-                    room.manual_switch = True
+                room.manual_switch = False
+                for entity_id in subentry.data.get("lights", []):
+                    room.last_written[entity_id] = 0
+                    room.last_source[entity_id] = "off"
             for entity_id in subentry.data.get("lights", []):
                 await self.coordinator.writer.async_turn_off(
                     entity_id, getattr(self.coordinator.house, "transition_down_off_s", 4.0)
@@ -277,6 +314,16 @@ class RemoteDispatcher:
             delta = 0.5 if action_name == "nudge_bias_up" else -0.5
             current_bias = float(subentry.data.get("bias_stops", 0.0))
             new_bias = round(max(-4.0, min(4.0, current_bias + delta)), 2)
+            if action_name == "nudge_bias_up" and room and room.manual_level == 0:
+                room.manual_level = None
+                room.manual_touched = False
+                room.manual_switch = False
+                room.manual_since = None
+                room.occupied = True
+                room.occupied_since = self.hass.loop.time()
+                self.coordinator._last_presence[subentry.subentry_id] = self.hass.loop.time()
+                for entity_id in subentry.data.get("lights", []):
+                    room.last_written[entity_id] = 0
             _LOGGER.info("Solace Remote: Nudged bias for %s from %s to %s stops", subentry.title, current_bias, new_bias)
             self.hass.config_entries.async_update_subentry(
                 self.coordinator.config_entry,

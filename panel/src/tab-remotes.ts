@@ -14,6 +14,7 @@ import { tokens } from "./tokens";
 import "./ui";
 
 const ACTION_OPTIONS = [
+  { value: "resume_auto", label: "Auto Override (Resume Solace Auto)" },
   { value: "cycle_preset_levels", label: "Toggle Preset Loop (Auto → 50% → 80% → 100%)" },
   { value: "toggle_auto_manual", label: "Toggle Auto / Manual" },
   { value: "turn_on", label: "Turn On Room Lights" },
