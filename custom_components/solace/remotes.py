@@ -73,14 +73,14 @@ DEFAULT_REMOTES: list[dict[str, Any]] = [
         "name": "Living Office Control",
         "room_name": "Living",
         "action_entity": "event.living_office_control_action",
-        "button_on": "nudge_bias_up",
-        "button_off": "nudge_bias_down",
-        "button_up": "nudge_bias_up",
-        "button_down": "nudge_bias_down",
+        "button_on": "resume_auto",
+        "button_off": "turn_off",
+        "button_up": "resume_auto",
+        "button_down": "turn_off",
         "button_left": "resume_auto",
         "button_right": "toggle_sleep",
-        "hold_up": "turn_on",
-        "hold_down": "turn_off",
+        "hold_up": "nudge_bias_up",
+        "hold_down": "nudge_bias_down",
         "hold_left": "resume_auto",
         "hold_right": "leaving_5_min",
     },
@@ -299,7 +299,7 @@ class RemoteDispatcher:
                 room.manual_touched = True
                 room.manual_level = 0
                 room.manual_since = self.hass.loop.time()
-                room.manual_switch = False
+                room.manual_switch = True
                 for entity_id in subentry.data.get("lights", []):
                     room.last_written[entity_id] = 0
                     room.last_source[entity_id] = "off"
