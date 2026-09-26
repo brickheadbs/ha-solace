@@ -1003,11 +1003,11 @@ async def ws_merge_areas(hass: HomeAssistant, connection, msg: dict[str, Any]) -
                 vol.Optional("button_off", default="turn_off"): cv.string,
                 vol.Optional("button_up", default="nudge_bias_up"): cv.string,
                 vol.Optional("button_down", default="nudge_bias_down"): cv.string,
-                vol.Optional("button_left", default="toggle_manual"): cv.string,
+                vol.Optional("button_left", default="resume_auto"): cv.string,
                 vol.Optional("button_right", default="toggle_sleep"): cv.string,
                 vol.Optional("hold_up", default="nudge_bias_up"): cv.string,
                 vol.Optional("hold_down", default="nudge_bias_down"): cv.string,
-                vol.Optional("hold_left", default="none"): cv.string,
+                vol.Optional("hold_left", default="resume_auto"): cv.string,
                 vol.Optional("hold_right", default="leaving_5_min"): cv.string,
             }
         ],
