@@ -24,7 +24,7 @@ DEFAULT_REMOTES: list[dict[str, Any]] = [
         "remote_id": "entry_control",
         "name": "Entry Control",
         "room_name": "Entry",
-        "action_entity": "sensor.entry_control_action",
+        "action_entity": "event.entry_control_action",
         "button_on": "cycle_preset_levels",
         "button_off": "turn_off",
         "button_up": "nudge_bias_up",
@@ -40,7 +40,7 @@ DEFAULT_REMOTES: list[dict[str, Any]] = [
         "remote_id": "kitchen_control",
         "name": "Kitchen Control",
         "room_name": "Kitchen",
-        "action_entity": "sensor.kitchen_control_action",
+        "action_entity": "event.kitchen_control_action",
         "button_on": "cycle_preset_levels",
         "button_off": "turn_off",
         "button_up": "nudge_bias_up",
@@ -56,7 +56,7 @@ DEFAULT_REMOTES: list[dict[str, Any]] = [
         "remote_id": "bedroom_control",
         "name": "Bedroom Control",
         "room_name": "Bedroom",
-        "action_entity": "sensor.bedroom_control_action",
+        "action_entity": "event.bedroom_control_action",
         "button_on": "cycle_preset_levels",
         "button_off": "turn_off",
         "button_up": "nudge_bias_up",
@@ -72,15 +72,15 @@ DEFAULT_REMOTES: list[dict[str, Any]] = [
         "remote_id": "living_office_control",
         "name": "Living Office Control",
         "room_name": "Living",
-        "action_entity": "sensor.living_office_control_action",
-        "button_on": "cycle_preset_levels",
-        "button_off": "turn_off",
+        "action_entity": "event.living_office_control_action",
+        "button_on": "nudge_bias_up",
+        "button_off": "nudge_bias_down",
         "button_up": "nudge_bias_up",
         "button_down": "nudge_bias_down",
         "button_left": "toggle_manual",
         "button_right": "toggle_sleep",
-        "hold_up": "nudge_bias_up",
-        "hold_down": "nudge_bias_down",
+        "hold_up": "turn_on",
+        "hold_down": "turn_off",
         "hold_left": "none",
         "hold_right": "leaving_5_min",
     },
@@ -106,7 +106,15 @@ class RemoteDispatcher:
     def async_register(self) -> None:
         """Subscribe to action sensors for all configured remotes."""
         remotes = self.get_configured_remotes()
-        entities = [r["action_entity"] for r in remotes if r.get("action_entity")]
+        entities: set[str] = set()
+        for r in remotes:
+            entity = r.get("action_entity")
+            if entity:
+                entities.add(entity)
+                if entity.startswith("event."):
+                    entities.add("sensor." + entity[6:])
+                elif entity.startswith("sensor."):
+                    entities.add("event." + entity[7:])
         if not entities:
             return
 
@@ -115,13 +123,13 @@ class RemoteDispatcher:
             new_state = event.data.get("new_state")
             if new_state is None:
                 return
-            action = new_state.state
+            entity_id = event.data.get("entity_id")
+            action = new_state.attributes.get("event_type") or new_state.state
             if not action or action in ("unknown", "unavailable", "", "None"):
                 return
-            entity_id = event.data.get("entity_id")
             self.hass.async_create_task(self._async_handle_action(entity_id, action))
 
-        self._unsub = async_track_state_change_event(self.hass, entities, _on_action)
+        self._unsub = async_track_state_change_event(self.hass, list(entities), _on_action)
 
     @callback
     def async_unregister(self) -> None:
@@ -133,7 +141,16 @@ class RemoteDispatcher:
     async def _async_handle_action(self, entity_id: str, action: str) -> None:
         """Route button action from sensor to appropriate handler."""
         remotes = self.get_configured_remotes()
-        remote = next((r for r in remotes if r.get("action_entity") == entity_id), None)
+        remote = next(
+            (
+                r
+                for r in remotes
+                if r.get("action_entity") == entity_id
+                or (entity_id.startswith("event.") and r.get("action_entity") == "sensor." + entity_id[6:])
+                or (entity_id.startswith("sensor.") and r.get("action_entity") == "event." + entity_id[7:])
+            ),
+            None,
+        )
         if remote is None:
             return
 
@@ -227,14 +244,31 @@ class RemoteDispatcher:
             await self.coordinator.async_persist()
             await self.coordinator.async_request_refresh()
 
+        elif action_name == "turn_on" and subentry:
+            if room:
+                room.manual_switch = False
+                room.manual_touched = False
+                room.manual_level = None
+                room.manual_since = None
+                if not room.occupied:
+                    demand_level = int(round((self.coordinator.demand or 1.0) * 254))
+                    room.manual_level = max(50, min(254, demand_level))
+                    room.manual_touched = True
+                    room.manual_since = self.hass.loop.time()
+                _LOGGER.info("Solace Remote: Turn on for %s (level=%s)", subentry.title, room.manual_level)
+            await self.coordinator.async_persist()
+            await self.coordinator.async_request_refresh()
+
         elif action_name == "turn_off" and subentry:
             if room:
                 room.manual_touched = True
                 room.manual_level = 0
                 room.manual_since = self.hass.loop.time()
+                if "living" in subentry.title.lower() and getattr(self.coordinator, "_living_guest_mode", lambda: False)():
+                    room.manual_switch = True
             for entity_id in subentry.data.get("lights", []):
                 await self.coordinator.writer.async_turn_off(
-                    entity_id, self.coordinator.house.transition_off_s
+                    entity_id, getattr(self.coordinator.house, "transition_down_off_s", 4.0)
                 )
             await self.coordinator.async_persist()
             await self.coordinator.async_request_refresh()

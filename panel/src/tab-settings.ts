@@ -7,7 +7,7 @@ import { LitElement, css, html, nothing, svg } from "lit";
 import { property, state } from "lit/decorators.js";
 import { customElement } from "./custom-element";
 import type { Hass, Snapshot } from "./api";
-import { setHouse, setRoom, setSunriseCurve, setSunsetCurve, toggleSleep, toggleWorkMode } from "./api";
+import { setHouse, setRoom, setSunriseCurve, setSunsetCurve, toggleSleep, toggleWorkMode, toggleGuestMode } from "./api";
 import { MonotoneSpline } from "./spline";
 import { tokens } from "./tokens";
 import "./ui";
@@ -630,6 +630,8 @@ export class SolTabSettings extends LitElement {
     const sleepActive = !!world?.asleep;
     const workActive =
       this.hass.states["input_boolean.work_mode"]?.state === "on" || !!world?.work_mode;
+    const guestActive =
+      this.hass.states["input_boolean.living_guest_mode"]?.state === "on" || !!world?.guest_mode;
     const phoneActive = !!world?.phone_dnd;
     const watchActive = !!world?.watch_bedtime;
     const manualActive = !!world?.manual_sleep;
@@ -784,6 +786,49 @@ export class SolTabSettings extends LitElement {
                         }}"
                       />
                       <span class="unit-label">min</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Mode: Guest Mode (Living room) -->
+              <div class="bed-card">
+                <div class="bed-head">
+                  <ha-icon icon="mdi:account-star" style="color: var(--sol-cyan);"></ha-icon>
+                  <div class="bed-title">Guest mode · Living room</div>
+                  <sol-help text="Treats the living room as a guest bedroom. Suppresses motion turn-on during sleep mode so overnight movement does not trigger lights. The guest controls room lights and bias directly using the Living Office Styrbar remote."></sol-help>
+                  <div class="spacer"></div>
+                  <div class="badge ${guestActive ? "badge-blue" : "badge-dim"}">
+                    ${guestActive ? "Guest Staying (Active)" : "Standby (Normal)"}
+                  </div>
+                </div>
+
+                <!-- Triggers Status Bar -->
+                <div class="triggers-bar">
+                  <div class="trigger-item ${guestActive ? "active" : ""}">
+                    <ha-icon icon="mdi:remote"></ha-icon>
+                    <span>Styrbar: <strong>Office Control</strong></span>
+                  </div>
+                  <button
+                    class="manual-sleep-btn ${guestActive ? "active-work" : ""}"
+                    @click="${() => toggleGuestMode(this.hass)}"
+                    title="Toggle living room guest mode helper"
+                  >
+                    <ha-icon icon="mdi:account-star"></ha-icon>
+                    <span>Guest Mode: <strong>${guestActive ? "ON" : "OFF"}</strong></span>
+                  </button>
+                </div>
+
+                <!-- Remote Controls Summary -->
+                <div class="sleep-inputs-grid" style="grid-template-columns: 1fr;">
+                  <div style="font-size: 12px; color: var(--sol-text-2); line-height: 1.6; padding: 4px 2px;">
+                    <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 5px;">
+                      <ha-icon icon="mdi:arrow-up-down" style="--mdc-icon-size: 16px; color: var(--sol-cyan);"></ha-icon>
+                      <span><strong>Up / Down:</strong> Nudge room brightness bias (±0.5 stops)</span>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 6px;">
+                      <ha-icon icon="mdi:gesture-tap-hold" style="--mdc-icon-size: 16px; color: var(--sol-amber);"></ha-icon>
+                      <span><strong>Hold Up / Hold Down:</strong> Turn ON / Turn OFF room lights</span>
                     </div>
                   </div>
                 </div>

@@ -96,6 +96,7 @@ export interface World {
   kelvin: number;
   asleep: boolean;
   work_mode?: boolean;
+  guest_mode?: boolean;
   gate_open?: boolean;
   phone_dnd?: boolean;
   watch_bedtime?: boolean;
@@ -304,6 +305,9 @@ export const toggleSleep = (hass: Hass) =>
 
 export const toggleWorkMode = (hass: Hass) =>
   hass.connection.sendMessagePromise({ type: "solace/toggle_work_mode" });
+
+export const toggleGuestMode = (hass: Hass) =>
+  hass.connection.sendMessagePromise({ type: "solace/toggle_guest_mode" });
 
 export const toggleGate = (hass: Hass) =>
   hass.connection.sendMessagePromise({ type: "solace/toggle_gate" });

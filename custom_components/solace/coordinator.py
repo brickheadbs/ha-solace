@@ -341,7 +341,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
             diminish_stops=float(data.get("diminish_stops", 0.0)),
             diminish_pct=float(data.get("diminish_pct", 40.0 if data.get("diminish_stops", 0.0) <= 0 and "diminish_pct" not in data else data.get("diminish_pct", 0.0))),
             ambience_level=int(data.get("ambience_level", 0)),
-            night_off=bool(data.get("night_off", False)),
+            night_off=bool(data.get("night_off", False)) or ("living" in subentry.title.lower() and self._living_guest_mode()),
             manual_hold_minutes=float(data.get("manual_hold_minutes", 30.0)),
             manual_mode=bool(data.get("manual_mode", False)),
             sunrise_enabled=bool(data.get("sunrise_enabled", False)),
@@ -475,6 +475,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         for extra_sensor in (
             "input_boolean.away_mode",
             "input_boolean.work_mode",
+            "input_boolean.living_guest_mode",
             "input_boolean.ambient_gate",
             "sensor.pixel_8a_do_not_disturb_sensor",
             "binary_sensor.google_pixel_watch_2_bedtime_mode",
@@ -1518,6 +1519,10 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
     def _work_mode(self) -> bool:
         """Is work mode active?"""
         return self._is_on("input_boolean.work_mode", default=False)
+
+    def _living_guest_mode(self) -> bool:
+        """Is living room guest mode active?"""
+        return self._is_on("input_boolean.living_guest_mode", default=False)
 
     def _gate_open(self) -> bool:
         """Is ambient gate open across rooms?"""

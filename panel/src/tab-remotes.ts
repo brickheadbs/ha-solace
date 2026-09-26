@@ -16,6 +16,7 @@ import "./ui";
 const ACTION_OPTIONS = [
   { value: "cycle_preset_levels", label: "Toggle Preset Loop (Auto → 50% → 80% → 100%)" },
   { value: "toggle_auto_manual", label: "Toggle Auto / Manual" },
+  { value: "turn_on", label: "Turn On Room Lights" },
   { value: "turn_off", label: "Turn Off Room Lights" },
   { value: "nudge_bias_up", label: "Nudge Bias Up (+0.5 stops)" },
   { value: "nudge_bias_down", label: "Nudge Bias Down (-0.5 stops)" },
