@@ -835,12 +835,12 @@ async def ws_room_action(hass: HomeAssistant, connection, msg: dict[str, Any]) -
         house = coordinator.house
         for entity_id in subentry.data.get(CONF_LIGHTS, []):
             if level <= 0:
-                await coordinator.writer.async_turn_off(entity_id, house.transition_off_s)
+                await coordinator.writer.async_turn_off(entity_id, house.transition_down_off_s)
             else:
                 # The setting-change transition — this fires while the slider is being
                 # dragged, so a long glide here is unusable.
                 await coordinator.writer.async_set_brightness(
-                    entity_id, int(level), house.transition_setting_s
+                    entity_id, int(level), house.transition_manual_s
                 )
 
     await coordinator.async_persist()

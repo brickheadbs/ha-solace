@@ -154,7 +154,7 @@ class SolaceManualLevel(SolaceRoomEntity, NumberEntity):
         for entity_id in subentry.data.get("lights", []):
             if value <= 0:
                 await self.coordinator.writer.async_turn_off(
-                    entity_id, self.coordinator.house.transition_off_s
+                    entity_id, self.coordinator.house.transition_down_off_s
                 )
             else:
                 await self.coordinator.writer.async_set_brightness(
@@ -162,6 +162,6 @@ class SolaceManualLevel(SolaceRoomEntity, NumberEntity):
                     int(value),
                     # The setting-change transition — this fires while the slider is
                     # being dragged, so a long glide here is unusable.
-                    self.coordinator.house.transition_setting_s,
+                    self.coordinator.house.transition_manual_s,
                 )
         self.async_write_ha_state()
