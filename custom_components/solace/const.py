@@ -13,6 +13,8 @@ from dataclasses import dataclass
 
 from homeassistant.const import Platform
 
+from .models import AQARA_MIN_LEVEL
+
 DOMAIN = "solace"
 
 PLATFORMS: list[Platform] = [

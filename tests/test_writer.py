@@ -225,3 +225,21 @@ async def test_turn_off_clears_in_flight_brightness(hass):
     await writer.async_turn_off(ENTITY, 4.0)
     await hass.async_block_till_done()
     assert writer.get_in_flight_brightness(ENTITY) is None
+
+
+async def test_aqara_minimum_hardware_floor_in_writer(hass, sent):
+    """Writer clamps level 1..2 to AQARA_MIN_LEVEL for Aqara bulbs; allows level 1 for IKEA."""
+    from custom_components.solace.models import AQARA_MIN_LEVEL
+
+    writer = LightWriter(hass)
+    # Aqara bulb commanded to level 1 gets clamped to AQARA_MIN_LEVEL
+    await writer.async_set_brightness(ENTITY, 1, 10.0, family=Family.AQARA_RGB)
+    await hass.async_block_till_done()
+    assert len(sent) == 1
+    assert sent[0]["brightness"] == AQARA_MIN_LEVEL
+
+    # IKEA bulb commanded to level 1 preserves level 1
+    await writer.async_set_brightness("light.ikea_test", 1, 10.0, family=Family.IKEA)
+    await hass.async_block_till_done()
+    assert len(sent) == 2
+    assert sent[1]["brightness"] == 1

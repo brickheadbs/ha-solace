@@ -25,6 +25,7 @@ from custom_components.solace.engine import (
     to_level,
 )
 from custom_components.solace.models import (
+    AQARA_MIN_LEVEL,
     EngineInput,
     Family,
     HouseSettings,
@@ -342,10 +343,15 @@ def test_clamp_never_lifts_an_off_light_off_zero():
 
     Clamping 0 up to clamp_min leaves the room glowing at level 1 instead of off.
     """
-    ceiling = LightSettings(entity_id="light.living_ceiling", clamp_min=1, clamp_max=10)
-    assert apply_clamp(0, ceiling) == 0
-    assert apply_clamp(1, ceiling) == 1
-    assert apply_clamp(200, ceiling) == 10
+    ikea = LightSettings(entity_id="light.living_ceiling", family=Family.IKEA, clamp_min=1, clamp_max=10)
+    assert apply_clamp(0, ikea) == 0
+    assert apply_clamp(1, ikea) == 1
+    assert apply_clamp(200, ikea) == 10
+
+    aqara = LightSettings(entity_id="light.living_ceiling", family=Family.AQARA_RGB, clamp_min=1, clamp_max=10)
+    assert apply_clamp(0, aqara) == 0
+    assert apply_clamp(1, aqara) == AQARA_MIN_LEVEL
+    assert apply_clamp(200, aqara) == 10
 
 
 def test_clamp_survives_every_upstream_stage(house, room):
@@ -966,10 +972,10 @@ def test_virtual_sunset_only_applies_to_bedroom(light):
     assert bed_sol.mode is Mode.SUNSET
     assert bed_sol.source == "sunset"
 
-    # Bedroom holds at lowest level when progress is 1.0
+    # Bedroom holds at lowest level when progress is 1.0 (AQARA_MIN_LEVEL for Aqara)
     bed_end = solve(house_curve, bedroom, light, _input(lux=0.0, sunset_progress=1.0, occupied=True))
     assert bed_end.mode is Mode.SUNSET
-    assert bed_end.level == 2
+    assert bed_end.level == AQARA_MIN_LEVEL
     assert bed_end.source == "sunset"
 
     # Kitchen does not obey virtual sunset curve even if sunset_progress is passed
@@ -989,6 +995,7 @@ def test_per_light_min_is_a_cutoff_not_a_floor_and_exempt_in_ambience_and_night(
     """
     entry_light = LightSettings(
         entity_id="light.entry_ceiling",
+        family=Family.IKEA,
         clamp_min=60,  # 24% cutoff
         clamp_max=100,
     )
@@ -1051,10 +1058,10 @@ def test_virtual_sunset_holds_at_low_level_until_bedtime_mode(light):
     assert got_mid.level == 60
 
     # At completion of fade (progress 1.0) before bedtime mode:
-    # Must hold at lowest light-on level (1), NOT drop to 0
+    # Must hold at lowest light-on level (AQARA_MIN_LEVEL), NOT drop to 0
     got_hold = solve(house, bedroom, light, _input(lux=0.0, sunset_progress=1.0, occupied=True))
     assert got_hold.mode is Mode.SUNSET
-    assert got_hold.level == 1
+    assert got_hold.level == AQARA_MIN_LEVEL
     assert got_hold.source == "sunset"
 
     # When bedtime mode triggers (asleep = True):

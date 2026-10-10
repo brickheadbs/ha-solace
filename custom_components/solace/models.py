@@ -51,7 +51,10 @@ __all__ = [
     "DEFAULT_COLOUR_TIMELINE",
     "DEFAULT_SUNRISE_CURVE",
     "DEFAULT_SUNSET_CURVE",
+    "AQARA_MIN_LEVEL",
 ]
+
+AQARA_MIN_LEVEL: int = 3
 
 
 class Family(str, Enum):
@@ -127,7 +130,7 @@ DEFAULT_SUNSET_CURVE: tuple[SplinePoint, ...] = (
     SplinePoint(0.0, 180.0),
     SplinePoint(30.0, 120.0),
     SplinePoint(70.0, 40.0),
-    SplinePoint(100.0, 1.0),
+    SplinePoint(100.0, float(AQARA_MIN_LEVEL)),
 )
 
 

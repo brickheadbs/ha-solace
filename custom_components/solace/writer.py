@@ -31,7 +31,7 @@ from .fade import (
     colour_transition_is_safe,
     may_run_concurrently,
 )
-from .models import Family, LightSettings
+from .models import AQARA_MIN_LEVEL, Family, LightSettings
 from .standby import RampKind, RampTracker
 
 _LOGGER = logging.getLogger(__name__)
@@ -169,12 +169,15 @@ class LightWriter:
 
         loop_now = self.hass.loop.time()
         target_entities: list[str] = []
+        clamped_level = int(level)
         for eid in entities:
             f = family
             if f is None:
                 st = self.hass.states.get(eid)
                 if st is not None:
                     f = infer_family(st)
+            if clamped_level > 0 and f in (Family.AQARA_RGB, Family.AQARA_CCT):
+                clamped_level = max(AQARA_MIN_LEVEL, clamped_level)
             # ⚠️ Brightness NEVER yields. This used to defer the brightness write whenever a
             # colour step was in flight on a non-concurrent family, which made the two
             # channels race and let colour win — the exact inversion of what the hardware
@@ -191,7 +194,7 @@ class LightWriter:
 
         data: dict[str, Any] = {
             ATTR_ENTITY_ID: target_entities[0] if len(target_entities) == 1 else target_entities,
-            ATTR_BRIGHTNESS: int(level),
+            ATTR_BRIGHTNESS: clamped_level,
             ATTR_TRANSITION: transition_s,
         }
         if wake_kelvin is not None:
@@ -212,12 +215,12 @@ class LightWriter:
                 loop_now,
                 max(transition_s, 0.0),
                 start_lvl if start_lvl is not None else 0,
-                int(level),
+                clamped_level,
             )
             if is_acute:
                 self.ramp_tracker.acquire_fast_path_lease(
                     eid,
-                    target_level=int(level),
+                    target_level=clamped_level,
                     target_kelvin=int(wake_kelvin) if wake_kelvin is not None else None,
                     now=loop_now,
                     duration_s=max(transition_s, 0.0),

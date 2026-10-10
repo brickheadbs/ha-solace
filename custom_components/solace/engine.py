@@ -14,8 +14,10 @@ import math
 from typing import Sequence
 
 from .models import (
+    AQARA_MIN_LEVEL,
     DEFAULT_LUX_CURVE,
     EngineInput,
+    Family,
     HouseSettings,
     LightSettings,
     MasterOutput,
@@ -134,10 +136,13 @@ def to_level(fraction: float) -> int:
 
 
 def apply_clamp(level: int, light: LightSettings) -> int:
-    """Per-light hardware max ceiling clamp, ONLY when level > 0."""
+    """Per-light hardware clamp (ceiling and family minimum floor), ONLY when level > 0."""
     if level <= 0:
         return 0
-    return min(light.clamp_max, level)
+    clamped = min(light.clamp_max, level)
+    if light.family in (Family.AQARA_RGB, Family.AQARA_CCT):
+        clamped = max(AQARA_MIN_LEVEL, clamped)
+    return clamped
 
 
 def apply_cutoff(level: int, cutoff: int) -> int:
@@ -408,7 +413,8 @@ def solve(
             progress_pct = max(0.0, min(100.0, (data.sunset_progress or 0.0) * 100.0))
             sunset_spline = MonotoneCubicSpline(house.sunset_curve)
             curve_raw = sunset_spline(progress_pct)
-            low_level = int(house.sunset_curve[-1].y) if (house.sunset_curve and house.sunset_curve[-1].y > 0) else 1
+            default_floor = AQARA_MIN_LEVEL if light.family in (Family.AQARA_RGB, Family.AQARA_CCT) else 1
+            low_level = int(house.sunset_curve[-1].y) if (house.sunset_curve and house.sunset_curve[-1].y > 0) else default_floor
             target_level = min(int(round(curve_raw)), state_table.l1)
             target_level = max(low_level, target_level)
             level = apply_clamp(max(0, target_level), light)

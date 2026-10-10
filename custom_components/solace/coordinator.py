@@ -82,6 +82,7 @@ from .horizon import (
     WatchdogSupervisor,
 )
 from .models import (
+    AQARA_MIN_LEVEL,
     EngineInput,
     Family,
     FixtureStandbyState,
@@ -138,6 +139,7 @@ class RoomState:
     occupied: bool = False
     occupied_since: float | None = None
     fresh_occupancy: bool = False
+    unoccupied_since: float | None = None
 
     def is_manual(self, hold_minutes: float, now: float) -> bool:
         if self.manual_switch:
@@ -561,8 +563,11 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                     room.fresh_occupancy = True
                 else:
                     room.fresh_occupancy = False
+                room.unoccupied_since = None
                 self._last_presence[subentry.subentry_id] = now.timestamp()
             else:
+                if room.occupied:
+                    room.unoccupied_since = now.timestamp()
                 room.occupied_since = None
                 room.fresh_occupancy = False
             room.occupied = is_occupied
@@ -623,7 +628,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                 progress_pct = max(0.0, min(100.0, sunset_progress * 100.0))
                 sunset_spline = MonotoneCubicSpline(house.sunset_curve)
                 curve_raw = sunset_spline(progress_pct)
-                low_level = int(house.sunset_curve[-1].y) if (house.sunset_curve and house.sunset_curve[-1].y > 0) else 1
+                low_level = int(house.sunset_curve[-1].y) if (house.sunset_curve and house.sunset_curve[-1].y > 0) else AQARA_MIN_LEVEL
                 bedroom_fade_level = max(low_level, int(round(curve_raw)))
                 if bedroom_fade_level < kitchen_ambient_level:
                     ambient_suppressed_by_bedroom = True
@@ -1070,9 +1075,11 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
 
         Trigger conditions:
         1. Inside the evening bedtime window: starts at bedtime_dwell_hour (e.g. 22:00) until morning_release_hour.
-        2. Not away on holiday.
-        3. Bedroom occupancy > sunset_dwell_minutes (e.g. 5 min continuous occupancy).
-        4. Not already asleep or night latched.
+        2. Not away on holiday, asleep, or night latched.
+        3. Bedroom occupancy >= sunset_dwell_minutes (continuous presence).
+        4. Once triggered, duration is invariant (sunset_fade_minutes).
+        5. If occupant leaves bedroom for <= 5 minutes (toilet/drink of water), fade continues.
+        6. If occupant leaves bedroom for > 5 minutes, session clears.
         """
         if not house.sunset_fade_enabled or self._away() or self._asleep() or self._night_active():
             self._active_sunset_started_at = None
@@ -1082,7 +1089,11 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         # Time window: start hour to morning release hour
         start_h = house.bedtime_dwell_hour
         end_h = house.morning_release_hour
-        in_window = (clock_hour >= start_h or clock_hour < end_h) if start_h > end_h else (start_h <= clock_hour < end_h)
+        in_window = (
+            (clock_hour >= start_h or clock_hour < end_h)
+            if start_h > end_h
+            else (start_h <= clock_hour < end_h)
+        )
         if not in_window:
             self._active_sunset_started_at = None
             self._active_sunset_duration_s = None
@@ -1090,20 +1101,42 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
 
         now_ts = dt_util.utcnow().timestamp()
 
-        # If sunset is already anchored, maintain predictable progression even if occupant leaves for toilet/water
-        if self._active_sunset_started_at is not None and self._active_sunset_duration_s is not None:
-            elapsed = now_ts - self._active_sunset_started_at
-            if elapsed < self._active_sunset_duration_s:
-                return max(0.0, min(1.0, elapsed / self._active_sunset_duration_s))
-            # Completed fade: hold at lowest level (1.0) until sleep mode triggers, away, or window ends
-            return 1.0
-
         bedroom_room: RoomState | None = None
         for subentry in self._subentries():
-            if "bedroom" in subentry.title.lower() or subentry.data.get("night_off") or subentry.data.get("sunset_enabled"):
+            if (
+                "bedroom" in subentry.title.lower()
+                or subentry.data.get("night_off")
+                or subentry.data.get("sunset_enabled")
+            ):
                 bedroom_room = self.rooms.get(subentry.subentry_id)
                 break
 
+        # If sunset is already active:
+        if self._active_sunset_started_at is not None:
+            # Check toilet/water grace period (5 min = 300s) if bedroom is currently unoccupied
+            if bedroom_room is None or not bedroom_room.occupied:
+                unoccupied_duration = (
+                    (now_ts - bedroom_room.unoccupied_since)
+                    if (bedroom_room and bedroom_room.unoccupied_since is not None)
+                    else 0.0
+                )
+                if unoccupied_duration >= 300.0:
+                    self._active_sunset_started_at = None
+                    self._active_sunset_duration_s = None
+                    return None
+
+            duration_s = max(1.0, (self._active_sunset_duration_s or (house.sunset_fade_minutes * 60.0)))
+            if house.sunset_fade_minutes > 0:
+                duration_s = house.sunset_fade_minutes * 60.0
+                self._active_sunset_duration_s = duration_s
+
+            elapsed = now_ts - self._active_sunset_started_at
+            if elapsed < duration_s:
+                return max(0.0, min(1.0, elapsed / duration_s))
+            # Completed fade: hold at lowest level (1.0) until sleep mode triggers, away, or window ends
+            return 1.0
+
+        # Sunset not active yet: require occupied bedroom with required continuous dwell
         if not bedroom_room or not bedroom_room.occupied or bedroom_room.occupied_since is None:
             return None
 
@@ -1328,6 +1361,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
 
             room.occupied = True
             room.occupied_since = now_ts
+            room.unoccupied_since = None
             room.fresh_occupancy = True
             self._last_presence[subentry.subentry_id] = now_ts
 

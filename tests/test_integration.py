@@ -13,6 +13,7 @@ from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry, async_fire_time_changed
 
 from custom_components.solace.const import DOMAIN, HOUSE_SETTINGS
+from custom_components.solace.models import AQARA_MIN_LEVEL
 
 from .conftest import LIGHT, LUX
 
@@ -1222,10 +1223,10 @@ async def test_ambient_lights_transition_to_off_when_bedroom_drops_below_kitchen
     assert coordinator.rooms[kitchen_subentry.subentry_id].solutions[KITCHEN_LIGHT].level == 0
 
     # 3. Advance to end of fade (progress 1.0) before bedtime mode:
-    # Bedroom holds at lowest light-on level (1), NOT turning off
+    # Bedroom holds at lowest light-on level (AQARA_MIN_LEVEL), NOT turning off
     freezer.move_to("2026-08-13 23:25:00+00:00")
     await coordinator._async_update_data()
-    assert coordinator.rooms[bedroom_subentry.subentry_id].solutions[BEDROOM_LIGHT].level == 1
+    assert coordinator.rooms[bedroom_subentry.subentry_id].solutions[BEDROOM_LIGHT].level == AQARA_MIN_LEVEL
     assert coordinator.rooms[kitchen_subentry.subentry_id].solutions[KITCHEN_LIGHT].level == 0
 
     # 4. Bedtime mode triggers (DND / Pixel Watch bedtime / phone DND)
@@ -1234,4 +1235,134 @@ async def test_ambient_lights_transition_to_off_when_bedroom_drops_below_kitchen
     assert coordinator._asleep() is True
     # Bedroom lights now turn completely OFF
     assert coordinator.rooms[bedroom_subentry.subentry_id].solutions[BEDROOM_LIGHT].level == 0
+
+
+async def test_sunset_window_trigger_timing_and_abandon_reset(
+    hass: HomeAssistant, world, freezer
+) -> None:
+    """Sunset fade window timing invariants:
+    1. Occupant entered before window (dwell satisfied early) triggers at window start with full duration.
+    2. Occupant entered after window (dwell satisfied late) triggers at entry + dwell with full duration.
+    3. Occupant leaving for <= 5 min preserves fade.
+    4. Occupant leaving for > 5 min resets session so re-entry requires full dwell again.
+    5. Modifying bedtime_dwell_hour dynamically opens/closes window for any hour.
+    """
+    from dataclasses import replace
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+    from homeassistant.config_entries import ConfigSubentryData
+    from homeassistant.util import dt as dt_util
+    from custom_components.solace.const import CONF_DND_ENTITY, CONF_LUX_SENSOR, CONF_SLEEP_TOGGLE, DOMAIN, SUBENTRY_TYPE_ROOM
+
+    freezer.move_to("2026-08-13 21:30:00+00:00")
+    bedroom_entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Solace",
+        unique_id="solace_sunset_timing_test",
+        data={CONF_LUX_SENSOR: LUX, CONF_DND_ENTITY: DND, CONF_SLEEP_TOGGLE: "input_boolean.solace_sleep"},
+        options={
+            CONF_LUX_SENSOR: LUX,
+            CONF_DND_ENTITY: DND,
+            "sunset_fade_enabled": 1,
+            "bedtime_dwell_hour": 22.0,
+            "sunset_dwell_minutes": 10.0,
+            "sunset_fade_minutes": 25.0,
+        },
+        subentries_data=[
+            ConfigSubentryData(
+                subentry_type=SUBENTRY_TYPE_ROOM,
+                title="Bedroom",
+                unique_id=None,
+                data={
+                    "lights": [LIGHT],
+                    "night_off": True,
+                    "sunset_enabled": True,
+                },
+            )
+        ],
+    )
+    bedroom_entry.add_to_hass(hass)
+    world(occupied=True, lux=0.0)
+    assert await _setup(hass, bedroom_entry)
+    coordinator = bedroom_entry.runtime_data.coordinator
+    subentry = next(iter(coordinator._subentries()))
+    bedroom = coordinator.rooms[subentry.subentry_id]
+
+    # Brandon enters bedroom at 21:40
+    freezer.move_to("2026-08-13 21:40:00+00:00")
+    now_ts = dt_util.utcnow().timestamp()
+    bedroom.occupied = True
+    bedroom.occupied_since = now_ts
+    bedroom.unoccupied_since = None
+
+    # At 21:55: 15 min dwell satisfied, but window (22:00) has NOT opened
+    freezer.move_to("2026-08-13 21:55:00+00:00")
+    p_before = coordinator._sunset_progress(21.916, coordinator.house)
+    assert p_before is None
+    assert coordinator._active_sunset_started_at is None
+
+    # At 22:00: Window opens! Dwell is already satisfied. Fade triggers right now.
+    freezer.move_to("2026-08-13 22:00:00+00:00")
+    p_window_open = coordinator._sunset_progress(22.0, coordinator.house)
+    assert p_window_open == 0.0
+    start_ts = coordinator._active_sunset_started_at
+    assert start_ts is not None
+
+    # At 22:12:30 (12.5 min = 50% through 25 min fade)
+    freezer.move_to("2026-08-13 22:12:30+00:00")
+    p_mid = coordinator._sunset_progress(22.208, coordinator.house)
+    assert p_mid == pytest.approx(0.5, abs=0.01)
+
+    # Occupant steps out to toilet for 2 minutes
+    bedroom.occupied = False
+    bedroom.unoccupied_since = dt_util.utcnow().timestamp()
+    freezer.move_to("2026-08-13 22:14:30+00:00")
+    # Within 5-min grace: fade continues
+    p_toilet = coordinator._sunset_progress(22.241, coordinator.house)
+    assert p_toilet is not None
+    assert p_toilet > 0.5
+    # Returns to bedroom
+    bedroom.occupied = True
+    bedroom.unoccupied_since = None
+
+    # Now occupant leaves bedroom and stays downstairs for 8 minutes (> 5 min)
+    bedroom.occupied = False
+    bedroom.unoccupied_since = dt_util.utcnow().timestamp()
+    freezer.move_to("2026-08-13 22:23:00+00:00")  # 8.5 min later
+    p_abandoned = coordinator._sunset_progress(22.383, coordinator.house)
+    assert p_abandoned is None
+    assert coordinator._active_sunset_started_at is None  # Session cleared!
+
+    # Re-enters bedroom at 22:30
+    freezer.move_to("2026-08-13 22:30:00+00:00")
+    now_reentry = dt_util.utcnow().timestamp()
+    bedroom.occupied = True
+    bedroom.occupied_since = now_reentry
+    bedroom.unoccupied_since = None
+
+    # At 22:35 (5 min dwell): must NOT trigger yet (needs 10 min dwell)
+    freezer.move_to("2026-08-13 22:35:00+00:00")
+    p_reentry_5 = coordinator._sunset_progress(22.583, coordinator.house)
+    assert p_reentry_5 is None
+    assert coordinator._active_sunset_started_at is None
+
+    # At 22:40 (10 min dwell): triggers afresh! Full 25-minute fade begins now.
+    freezer.move_to("2026-08-13 22:40:00+00:00")
+    p_reentry_10 = coordinator._sunset_progress(22.666, coordinator.house)
+    assert p_reentry_10 == 0.0
+    assert coordinator._active_sunset_started_at == dt_util.utcnow().timestamp()
+
+    # At 23:05 (25 min later): completes and holds at 1.0 (lowest level)
+    freezer.move_to("2026-08-13 23:05:00+00:00")
+    p_reentry_done = coordinator._sunset_progress(23.083, coordinator.house)
+    assert p_reentry_done == 1.0
+
+    # Dynamic time setting: shift bedtime_dwell_hour to 23.5 (11:30 PM) via config entry options
+    hass.config_entries.async_update_entry(
+        coordinator.config_entry,
+        options={**coordinator.config_entry.options, "bedtime_dwell_hour": 23.5},
+    )
+    # At 23:10, clock_hour 23.166 is outside new window [23.5, 6.5) -> clears session
+    p_shifted = coordinator._sunset_progress(23.166, coordinator.house)
+    assert p_shifted is None
+    assert coordinator._active_sunset_started_at is None
 
