@@ -409,6 +409,14 @@ export const HOUSE_AUTOMATIONS: readonly AutomationStrip[] = [
   },
   {
     group: "Front Door & U200 Lock",
+    name: "Turret Hallway Greeting",
+    entityId: "automation.arrival_portal_2_turret_hallway_greeting",
+    trigger: "Away Mode ON -> OFF, synchronized to U200 unlock / Entry sensor",
+    guard: "Sleep Mode OFF & Phone DND OFF (waits up to 5m if Wi-Fi disarmed outside)",
+    action: "Casts random Portal 2 Sentry Turret clip on Entryway Display (Maya fallback)",
+  },
+  {
+    group: "Front Door & U200 Lock",
     name: "Jammed / Low Battery Alert",
     entityId: "automation.lock_u200_jammed_or_low_battery_alert",
     trigger: "U200 state == jammed OR battery < 15%",
