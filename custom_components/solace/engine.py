@@ -42,6 +42,7 @@ __all__ = [
     "apply_clamp",
     "rate_limit",
     "past_dead_zone",
+    "stairway_eye_adaptation_level",
     "solve_master",
     "compute_state_table",
     "solve",
@@ -206,6 +207,10 @@ def solve_master(
     trace.append(("demand_cloudy", round(demand_cloudy, 4)))
 
     # Cloud blend factor alpha (0.0 = 100% Clear, 1.0 = 100% Overcast)
+    if house.sunny_override_lux > 0 and lux >= house.sunny_override_lux:
+        cloud_coverage = 0.0
+        trace.append(("sunny_override", True))
+
     alpha = 0.0
     if cloud_coverage is not None:
         thresh = max(0.0, min(99.0, house.cloudy_blend_threshold))
@@ -294,6 +299,39 @@ def _biased_l1_raw(
     return raw_int, _clamp01(fraction)
 
 
+def stairway_eye_adaptation_level(
+    lux: float,
+    room: RoomSettings,
+    house: HouseSettings,
+    total_stops: float = 0.0,
+) -> tuple[int, float]:
+    """Compute Stairway-only log2-lux eye-adaptation level and blend factor [0..1].
+
+    Blends from dark_min (`min(occupied_min, occupied_max)`) at or below `stairway_start_lux`
+    up to bright_max (`max(occupied_min, occupied_max)`) at or above `stairway_full_lux`,
+    keeping eyes adapted to outdoor brightness during the day and gentle after dark.
+    """
+    dark_min = max(0, min(MAX_LEVEL, min(room.occupied_min, room.occupied_max)))
+    bright_max = max(0, min(MAX_LEVEL, max(room.occupied_min, room.occupied_max)))
+    start_lx = max(0.1, float(house.stairway_start_lux))
+    full_lx = max(start_lx + 1.0, float(house.stairway_full_lux))
+
+    safe_lux = max(0.0, float(lux))
+    if safe_lux <= start_lx:
+        blend_t = 0.0
+    elif safe_lux >= full_lx:
+        blend_t = 1.0
+    else:
+        blend_t = (math.log2(safe_lux) - math.log2(start_lx)) / (
+            math.log2(full_lx) - math.log2(start_lx)
+        )
+
+    base_lvl = dark_min + blend_t * (bright_max - dark_min)
+    scaled_val = base_lvl * (2.0 ** total_stops)
+    raw_int = int(round(max(0.0, min(float(MAX_LEVEL), scaled_val))))
+    return raw_int, _clamp01(blend_t)
+
+
 def compute_state_table(
     master: MasterOutput,
     house: HouseSettings,
@@ -313,20 +351,29 @@ def compute_state_table(
         + zone_stops
         + light.bias_stops
     )
+    is_stairway = "stair" in room.name.lower()
 
-    # L1: Occupancy active level (Master Target adjusted by Exposure Envelope stops bias)
+    # L1: Occupancy active level (Stairway uses Eye-Adaptation curve; all other rooms use Exposure Envelope)
     #
     # NO CUT OFF HERE. Cut Offs are armed/disarmed by the ambience gate, and that gate is
     # not known at state-table time — it is applied in `solve` step 7, which owns the whole
     # rule. Clamps are always on; Cut Offs are not.
-    raw_l1, _ = _biased_l1_raw(
-        master,
-        house,
-        total_stops,
-        clock_hour,
-        effective_lux=effective_lux,
-        cloud_coverage=cloud_coverage,
-    )
+    if is_stairway:
+        raw_l1, _ = stairway_eye_adaptation_level(
+            effective_lux if effective_lux is not None else 0.0,
+            room,
+            house,
+            total_stops,
+        )
+    else:
+        raw_l1, _ = _biased_l1_raw(
+            master,
+            house,
+            total_stops,
+            clock_hour,
+            effective_lux=effective_lux,
+            cloud_coverage=cloud_coverage,
+        )
     l1 = apply_clamp(raw_l1, light)
 
     # L2: Diminished subzone level (Stops below L1 preferred)
@@ -343,7 +390,6 @@ def compute_state_table(
 
     # L3: Ambience resting floor (cutoffs disabled, max clamp preserved).
     # Stairway is excluded from ambient lighting (occupied-only area).
-    is_stairway = "stair" in room.name.lower()
     ambience_raw = 0 if is_stairway else (room.ambience_level or house.ambience_level)
     l3 = apply_clamp(ambience_raw, light) if ambience_raw > 0 else 0
 
@@ -376,26 +422,36 @@ def solve(
     """Run Master Processing and Post Processing for one light."""
     trace: list[tuple[str, object]] = []
 
+    is_stairway = "stair" in room.name.lower()
     effective_lux = max(0.0, data.lux / (2.0 ** room.threshold_stops))
     if abs(room.threshold_stops) > 1e-9:
         trace.append(("threshold_stops", room.threshold_stops))
         trace.append(("effective_lux", round(effective_lux, 2)))
+
+    sunny_override = house.sunny_override_lux > 0 and data.lux >= house.sunny_override_lux
+    effective_cloud = 0.0 if sunny_override else data.cloud_coverage
+    if sunny_override:
+        trace.append(("sunny_override_raw_lux", True))
 
     # 1. Master Processing
     master = solve_master(
         effective_lux,
         data.clock_hour,
         house,
-        cloud_coverage=data.cloud_coverage,
+        cloud_coverage=effective_cloud,
         demand_override=data.demand_override if abs(room.threshold_stops) <= 1e-9 else None,
     )
     trace.extend(master.trace)
 
     # 2. Ambience Gate
     ambience_open = (
-        data.ambience_resolved
-        if data.ambience_resolved is not None
-        else ambience_threshold(effective_lux, data.ambience_open, house)
+        False
+        if is_stairway
+        else (
+            data.ambience_resolved
+            if data.ambience_resolved is not None
+            else ambience_threshold(effective_lux, data.ambience_open, house)
+        )
     )
     trace.append(("ambience_open", ambience_open))
 
@@ -417,7 +473,7 @@ def solve(
         clock_hour=data.clock_hour,
         zone=zone,
         effective_lux=effective_lux,
-        cloud_coverage=data.cloud_coverage,
+        cloud_coverage=effective_cloud,
     )
     trace.append(("state_l1", state_table.l1))
     trace.append(("state_l2", state_table.l2))
@@ -432,14 +488,26 @@ def solve(
         + zone_stops
         + light.bias_stops
     )
-    raw_l1, effective_fraction = _biased_l1_raw(
-        master,
-        house,
-        total_stops,
-        data.clock_hour,
-        effective_lux=effective_lux,
-        cloud_coverage=data.cloud_coverage,
-    )
+    if is_stairway:
+        raw_l1, eye_blend = stairway_eye_adaptation_level(
+            effective_lux,
+            room,
+            house,
+            total_stops,
+        )
+        effective_fraction = _clamp01(raw_l1 / float(MAX_LEVEL))
+        demand_out = eye_blend
+        trace.append(("stairway_eye_blend", round(eye_blend, 4)))
+    else:
+        raw_l1, effective_fraction = _biased_l1_raw(
+            master,
+            house,
+            total_stops,
+            data.clock_hour,
+            effective_lux=effective_lux,
+            cloud_coverage=effective_cloud,
+        )
+        demand_out = master.demand
     trace.append(("level_raw", raw_l1))
 
     # 5. State Selection
@@ -568,7 +636,9 @@ def solve(
     # test_the_cutoff_drops_out_below_the_threshold_but_zero_is_still_off.
     l3_armed = ambience_open
     ls_armed = mode is Mode.NIGHT
-    if house.min_cutoff >= MAX_LEVEL and source == "demand":
+    if is_stairway:
+        cutoff = 0 if (ls_armed or source in ("night", "sunrise", "sunset")) else light.clamp_min
+    elif house.min_cutoff >= MAX_LEVEL and source == "demand":
         cutoff = MAX_LEVEL
     else:
         cutoff = 0 if (l3_armed or ls_armed or data.bedtime_dwell_active or source in ("ambience", "night", "sunrise", "sunset", "bedtime_dwell")) else max(house.min_cutoff, light.clamp_min)
@@ -578,11 +648,9 @@ def solve(
         trace.append(("below_cutoff", cutoff))
 
     # 7b. Room Occupied Minimum / Maximum Bounds
-    # Rooms without windows (e.g. Stairway) can set an occupied floor and ceiling so the
-    # lights always turn on at >= occupied_min in Normal Mode (even in full daylight),
-    # follow Solace for any value in between, and cap at occupied_max.
-    # Night Mode, Sunrise, and Sunset are exempt from occupied_min so Night Mode stays at
-    # night_level instead of glaring at the daytime hallway floor.
+    # Non-Stairway rooms can set a generic occupied floor and ceiling in Normal Mode.
+    # Stairway already evaluated its log2-lux Eye-Adaptation curve between dark_min and
+    # bright_max in `compute_state_table`, so only non-Normal ceiling safety applies here.
     occ_min = max(0, min(MAX_LEVEL, min(room.occupied_min, room.occupied_max)))
     occ_max = max(0, min(MAX_LEVEL, max(room.occupied_min, room.occupied_max)))
     if (
@@ -591,13 +659,14 @@ def solve(
         and not ((room.night_off or "bedroom" in room.name.lower()) and data.asleep)
         and (occ_min > 0 or occ_max < MAX_LEVEL)
     ):
-        if mode is Mode.NORMAL:
+        if not is_stairway and mode is Mode.NORMAL:
             level = max(occ_min, min(occ_max, level))
             if level > 0 and source in ("off", "demand"):
                 source = "demand"
-        else:
+            trace.append(("occupied_bounds", (occ_min, occ_max, level)))
+        elif mode is not Mode.NORMAL:
             level = min(occ_max, level)
-        trace.append(("occupied_bounds", (occ_min, occ_max, level)))
+            trace.append(("occupied_bounds", (occ_min, occ_max, level)))
 
     # 8. Manual Override
     if data.manual_level is not None:
@@ -634,7 +703,7 @@ def solve(
         should_write=write,
         mode=mode,
         ambience_open=ambience_open,
-        demand=master.demand,
+        demand=demand_out,
         stops=total_stops,
         fraction=effective_fraction,
         source=source,

@@ -29,6 +29,14 @@ const HELP = {
     "Minimum brightness floor when occupied in Normal Mode (0–254). Exempt in Night Mode so 3 AM corridor navigation stays at Night Level.",
   occupiedMax:
     "Maximum brightness ceiling when occupied in Normal Mode (0–254).",
+  stairDarkMin:
+    "Stairway brightness at or below Blend Start Lux in Normal Mode (0–254). Keeps stairs gentle after dark while exempting 3 AM Night Mode (which uses Night Level).",
+  stairBrightMax:
+    "Stairway brightness at or above Blend Full Lux in Normal Mode (0–254). Keeps stairs bright in daylight so your eyes stay adapted to outdoor brightness.",
+  stairStartLux:
+    "Outdoor lux where the Stairway begins blending upward from Dark Minimum (log2 scale).",
+  stairFullLux:
+    "Outdoor lux where the Stairway reaches full Bright Maximum (log2 scale).",
   diminish:
     "Percentage step-down (L2) when a near sensor clears while the wider room stays occupied.",
   perLight:
@@ -681,6 +689,15 @@ export class SolTabLighting extends LitElement {
     const occMinVal = Math.round(this.local(occMinKey, Number(room.settings.occupied_min ?? 0)));
     const occMaxKey = this.key(room.subentry_id, "occupied_max");
     const occMaxVal = Math.round(this.local(occMaxKey, Number(room.settings.occupied_max ?? 254)));
+    const isStairway = room.name.toLowerCase().includes("stair");
+    const stairStartKey = this.key("h", "stairway_start_lux");
+    const stairStartVal = Math.round(
+      this.local(stairStartKey, Number(this.snap.house.stairway_start_lux ?? 10))
+    );
+    const stairFullKey = this.key("h", "stairway_full_lux");
+    const stairFullVal = Math.round(
+      this.local(stairFullKey, Number(this.snap.house.stairway_full_lux ?? 2000))
+    );
 
     return html`
       <div
@@ -807,7 +824,7 @@ export class SolTabLighting extends LitElement {
               </div>`
             : html`<div class="status">
                 <div>
-                  <span class="eyebrow">Demand</span>
+                  <span class="eyebrow">${isStairway ? "Eye blend" : "Demand"}</span>
                   <span class="v tab-num"
                     >${room.demand === null ? "—" : `${Math.round(room.demand * 100)} %`}</span
                   >
@@ -824,11 +841,15 @@ export class SolTabLighting extends LitElement {
                   <span class="eyebrow">Mode</span>
                   <span class="v">${room.mode ?? "—"}</span>
                 </div>
-                ${threshVal !== 0
-                  ? html`<span class="chip-note" title="Threshold offset active">
-                      Threshold ${stopLabel(threshVal)}
+                ${isStairway
+                  ? html`<span class="chip-note" title="Stairway log2-lux eye-adaptation range">
+                      Eye curve ${Math.min(occMinVal, occMaxVal)}–${Math.max(occMinVal, occMaxVal)} lvl
                     </span>`
-                  : nothing}
+                  : threshVal !== 0
+                    ? html`<span class="chip-note" title="Threshold offset active">
+                        Threshold ${stopLabel(threshVal)}
+                      </span>`
+                    : nothing}
               </div>`}
 
           <!-- Primary Everyday Control: Room Bias (Exposure Envelope) -->
@@ -852,146 +873,273 @@ export class SolTabLighting extends LitElement {
             <span>Room setup &amp; ${room.lights.length} fixture${room.lights.length === 1 ? "" : "s"}</span>
             <span class="grow"></span>
             <span style="font-size: 11px; color: var(--sol-text-4);">
-              ${isOpen ? "Hide" : "Thresholds, bounds & per-light clamps"}
+              ${isOpen
+                ? "Hide"
+                : isStairway
+                  ? "Eye-adaptation curve & per-light clamps"
+                  : "Thresholds, bounds & per-light clamps"}
             </span>
           </button>
 
           ${isOpen
             ? html`
                 <div class="drawer">
-                  <!-- Threshold Offset in EV Stops -->
-                  <div class="bias-row">
-                    <span class="lab">
-                      Threshold offset <sol-help .text=${HELP.thresholdStops}></sol-help>
-                    </span>
-                    <div style="flex: 1; display: flex; align-items: center; gap: 8px;">
-                      <sol-slider
-                        tone="amber"
-                        .value=${threshVal}
-                        .min=${-3}
-                        .max=${6}
-                        .step=${0.05}
-                        @value-changed=${(e: CustomEvent) =>
-                          this.pushRoom(
-                            room.subentry_id,
-                            "threshold_stops",
-                            Math.round(e.detail.value * 20) / 20,
-                            e.detail.final
-                          )}
-                      ></sol-slider>
-                      <div style="display: flex; gap: 3px;">
-                        ${[-1, 0, 1, 2, 3].map(
-                          (ev) => html`
-                            <button
-                              style="border: none; cursor: pointer; border-radius: 6px; padding: 2px 6px; font-size: 11px; background: ${threshVal === ev ? "var(--sol-amber-surface)" : "var(--sol-control)"}; color: ${threshVal === ev ? "var(--sol-amber)" : "var(--sol-text-3)"};"
-                              @click=${() =>
-                                this.pushRoom(room.subentry_id, "threshold_stops", ev, true)}
-                            >
-                              ${ev > 0 ? `+${ev}` : ev}
-                            </button>
-                          `
-                        )}
-                      </div>
-                    </div>
-                    <span class="readout tab-num">
-                      ${stopLabel(threshVal)} (${effLux} lx)
-                    </span>
-                  </div>
+                  ${isStairway
+                    ? html`
+                        <!-- Stairway-Only Eye-Adaptation Curve Controls -->
+                        <div class="bias-row">
+                          <span class="lab">
+                            Dark minimum <sol-help .text=${HELP.stairDarkMin}></sol-help>
+                          </span>
+                          <div style="flex: 1; display: flex; align-items: center; gap: 8px;">
+                            <sol-slider
+                              tone="amber"
+                              noReset
+                              .value=${occMinVal}
+                              .min=${0}
+                              .max=${254}
+                              .step=${1}
+                              @value-changed=${(e: CustomEvent) =>
+                                this.pushRoom(
+                                  room.subentry_id,
+                                  "occupied_min",
+                                  Math.round(e.detail.value),
+                                  e.detail.final
+                                )}
+                            ></sol-slider>
+                          </div>
+                          <span class="readout tab-num">
+                            ${lightPct(occMinVal, gamma)}% (${occMinVal} lvl)
+                          </span>
+                        </div>
 
-                  <!-- Ambience -->
-                  <div class="bias-row">
-                    <span class="lab">Ambience <sol-help .text=${HELP.ambience}></sol-help></span>
-                    <div style="flex: 1; display: flex; align-items: center; gap: 8px;">
-                      <sol-slider
-                        tone="cyan"
-                        noReset
-                        .value=${ambVal}
-                        .min=${0}
-                        .max=${100}
-                        .step=${1}
-                        @value-changed=${(e: CustomEvent) =>
-                          this.pushRoom(
-                            room.subentry_id,
-                            "ambience_level",
-                            e.detail.value,
-                            e.detail.final
-                          )}
-                      ></sol-slider>
-                      <div style="display: flex; gap: 3px;">
-                        ${[
-                          { label: "House", lvl: 0 },
-                          { label: "1%", lvl: 3 },
-                          { label: "5%", lvl: 13 },
-                          { label: "10%", lvl: 25 },
-                          { label: "20%", lvl: 51 },
-                        ].map(
-                          (p) => html`
-                            <button
-                              style="border: none; cursor: pointer; border-radius: 6px; padding: 2px 6px; font-size: 11px; background: ${ambVal === p.lvl ? "var(--sol-cyan-tint)" : "var(--sol-control)"}; color: ${ambVal === p.lvl ? "var(--sol-cyan)" : "var(--sol-text-3)"};"
-                              @click=${() =>
-                                this.pushRoom(room.subentry_id, "ambience_level", p.lvl, true)}
-                            >
-                              ${p.label}
-                            </button>
-                          `
-                        )}
-                      </div>
-                    </div>
-                    <span class="readout tab-num">
-                      ${ambVal === 0 ? "Follows house" : `${lightPct(ambVal, gamma)}% (${ambVal} lvl)`}
-                    </span>
-                  </div>
+                        <div class="bias-row">
+                          <span class="lab">
+                            Bright maximum <sol-help .text=${HELP.stairBrightMax}></sol-help>
+                          </span>
+                          <div style="flex: 1; display: flex; align-items: center; gap: 8px;">
+                            <sol-slider
+                              tone="amber"
+                              noReset
+                              .value=${occMaxVal}
+                              .min=${0}
+                              .max=${254}
+                              .step=${1}
+                              @value-changed=${(e: CustomEvent) =>
+                                this.pushRoom(
+                                  room.subentry_id,
+                                  "occupied_max",
+                                  Math.round(e.detail.value),
+                                  e.detail.final
+                                )}
+                            ></sol-slider>
+                          </div>
+                          <span class="readout tab-num">
+                            ${lightPct(occMaxVal, gamma)}% (${occMaxVal} lvl)
+                          </span>
+                        </div>
 
-                  <!-- Occupied Min & Max -->
-                  <div class="bias-row">
-                    <span class="lab">
-                      Occupied min <sol-help .text=${HELP.occupiedMin}></sol-help>
-                    </span>
-                    <div style="flex: 1; display: flex; align-items: center; gap: 8px;">
-                      <sol-slider
-                        tone="amber"
-                        noReset
-                        .value=${occMinVal}
-                        .min=${0}
-                        .max=${254}
-                        .step=${1}
-                        @value-changed=${(e: CustomEvent) =>
-                          this.pushRoom(
-                            room.subentry_id,
-                            "occupied_min",
-                            Math.round(e.detail.value),
-                            e.detail.final
-                          )}
-                      ></sol-slider>
-                    </div>
-                    <span class="readout tab-num">
-                      ${occMinVal === 0 ? "Follows curve" : `${occMinVal} lvl`}
-                    </span>
-                  </div>
+                        <div class="bias-row">
+                          <span class="lab">
+                            Blend start lux <sol-help .text=${HELP.stairStartLux}></sol-help>
+                          </span>
+                          <div style="flex: 1; display: flex; align-items: center; gap: 8px;">
+                            <sol-slider
+                              tone="cyan"
+                              noReset
+                              .value=${Math.min(250, stairStartVal)}
+                              .min=${1}
+                              .max=${250}
+                              .step=${1}
+                              @value-changed=${(e: CustomEvent) =>
+                                this.pushHouse(
+                                  "stairway_start_lux",
+                                  Math.round(e.detail.value),
+                                  e.detail.final
+                                )}
+                            ></sol-slider>
+                            <sol-number
+                              .value=${stairStartVal}
+                              .min=${1}
+                              .max=${500}
+                              suffix="lx"
+                              .width=${56}
+                              @value-changed=${(e: CustomEvent) =>
+                                this.pushHouse("stairway_start_lux", Math.round(e.detail.value), true)}
+                            ></sol-number>
+                          </div>
+                        </div>
 
-                  <div class="bias-row">
-                    <span class="lab">
-                      Occupied max <sol-help .text=${HELP.occupiedMax}></sol-help>
-                    </span>
-                    <div style="flex: 1; display: flex; align-items: center; gap: 8px;">
-                      <sol-slider
-                        tone="amber"
-                        noReset
-                        .value=${occMaxVal}
-                        .min=${0}
-                        .max=${254}
-                        .step=${1}
-                        @value-changed=${(e: CustomEvent) =>
-                          this.pushRoom(
-                            room.subentry_id,
-                            "occupied_max",
-                            Math.round(e.detail.value),
-                            e.detail.final
-                          )}
-                      ></sol-slider>
-                    </div>
-                    <span class="readout tab-num">${occMaxVal} lvl</span>
-                  </div>
+                        <div class="bias-row">
+                          <span class="lab">
+                            Blend full lux <sol-help .text=${HELP.stairFullLux}></sol-help>
+                          </span>
+                          <div style="flex: 1; display: flex; align-items: center; gap: 8px;">
+                            <sol-slider
+                              tone="cyan"
+                              noReset
+                              .value=${Math.min(10000, stairFullVal)}
+                              .min=${50}
+                              .max=${10000}
+                              .step=${50}
+                              @value-changed=${(e: CustomEvent) =>
+                                this.pushHouse(
+                                  "stairway_full_lux",
+                                  Math.round(e.detail.value),
+                                  e.detail.final
+                                )}
+                            ></sol-slider>
+                            <sol-number
+                              .value=${stairFullVal}
+                              .min=${50}
+                              .max=${20000}
+                              suffix="lx"
+                              .width=${64}
+                              @value-changed=${(e: CustomEvent) =>
+                                this.pushHouse("stairway_full_lux", Math.round(e.detail.value), true)}
+                            ></sol-number>
+                          </div>
+                        </div>
+
+                        <div style="font-size: 11px; color: var(--sol-text-4); padding: 4px 2px 6px;">
+                          Log2 outdoor lux blend (bright outside -> bright stairs, dark outside -> dim stairs) · Excluded from ambient · Follows house colour · Night Mode uses Night Level.
+                        </div>
+                      `
+                    : html`
+                        <!-- Threshold Offset in EV Stops -->
+                        <div class="bias-row">
+                          <span class="lab">
+                            Threshold offset <sol-help .text=${HELP.thresholdStops}></sol-help>
+                          </span>
+                          <div style="flex: 1; display: flex; align-items: center; gap: 8px;">
+                            <sol-slider
+                              tone="amber"
+                              .value=${threshVal}
+                              .min=${-3}
+                              .max=${6}
+                              .step=${0.05}
+                              @value-changed=${(e: CustomEvent) =>
+                                this.pushRoom(
+                                  room.subentry_id,
+                                  "threshold_stops",
+                                  Math.round(e.detail.value * 20) / 20,
+                                  e.detail.final
+                                )}
+                            ></sol-slider>
+                            <div style="display: flex; gap: 3px;">
+                              ${[-1, 0, 1, 2, 3].map(
+                                (ev) => html`
+                                  <button
+                                    style="border: none; cursor: pointer; border-radius: 6px; padding: 2px 6px; font-size: 11px; background: ${threshVal === ev ? "var(--sol-amber-surface)" : "var(--sol-control)"}; color: ${threshVal === ev ? "var(--sol-amber)" : "var(--sol-text-3)"};"
+                                    @click=${() =>
+                                      this.pushRoom(room.subentry_id, "threshold_stops", ev, true)}
+                                  >
+                                    ${ev > 0 ? `+${ev}` : ev}
+                                  </button>
+                                `
+                              )}
+                            </div>
+                          </div>
+                          <span class="readout tab-num">
+                            ${stopLabel(threshVal)} (${effLux} lx)
+                          </span>
+                        </div>
+
+                        <!-- Ambience -->
+                        <div class="bias-row">
+                          <span class="lab">Ambience <sol-help .text=${HELP.ambience}></sol-help></span>
+                          <div style="flex: 1; display: flex; align-items: center; gap: 8px;">
+                            <sol-slider
+                              tone="cyan"
+                              noReset
+                              .value=${ambVal}
+                              .min=${0}
+                              .max=${100}
+                              .step=${1}
+                              @value-changed=${(e: CustomEvent) =>
+                                this.pushRoom(
+                                  room.subentry_id,
+                                  "ambience_level",
+                                  e.detail.value,
+                                  e.detail.final
+                                )}
+                            ></sol-slider>
+                            <div style="display: flex; gap: 3px;">
+                              ${[
+                                { label: "House", lvl: 0 },
+                                { label: "1%", lvl: 3 },
+                                { label: "5%", lvl: 13 },
+                                { label: "10%", lvl: 25 },
+                                { label: "20%", lvl: 51 },
+                              ].map(
+                                (p) => html`
+                                  <button
+                                    style="border: none; cursor: pointer; border-radius: 6px; padding: 2px 6px; font-size: 11px; background: ${ambVal === p.lvl ? "var(--sol-cyan-tint)" : "var(--sol-control)"}; color: ${ambVal === p.lvl ? "var(--sol-cyan)" : "var(--sol-text-3)"};"
+                                    @click=${() =>
+                                      this.pushRoom(room.subentry_id, "ambience_level", p.lvl, true)}
+                                  >
+                                    ${p.label}
+                                  </button>
+                                `
+                              )}
+                            </div>
+                          </div>
+                          <span class="readout tab-num">
+                            ${ambVal === 0 ? "Follows house" : `${lightPct(ambVal, gamma)}% (${ambVal} lvl)`}
+                          </span>
+                        </div>
+
+                        <!-- Occupied Min & Max -->
+                        <div class="bias-row">
+                          <span class="lab">
+                            Occupied min <sol-help .text=${HELP.occupiedMin}></sol-help>
+                          </span>
+                          <div style="flex: 1; display: flex; align-items: center; gap: 8px;">
+                            <sol-slider
+                              tone="amber"
+                              noReset
+                              .value=${occMinVal}
+                              .min=${0}
+                              .max=${254}
+                              .step=${1}
+                              @value-changed=${(e: CustomEvent) =>
+                                this.pushRoom(
+                                  room.subentry_id,
+                                  "occupied_min",
+                                  Math.round(e.detail.value),
+                                  e.detail.final
+                                )}
+                            ></sol-slider>
+                          </div>
+                          <span class="readout tab-num">
+                            ${occMinVal === 0 ? "Follows curve" : `${occMinVal} lvl`}
+                          </span>
+                        </div>
+
+                        <div class="bias-row">
+                          <span class="lab">
+                            Occupied max <sol-help .text=${HELP.occupiedMax}></sol-help>
+                          </span>
+                          <div style="flex: 1; display: flex; align-items: center; gap: 8px;">
+                            <sol-slider
+                              tone="amber"
+                              noReset
+                              .value=${occMaxVal}
+                              .min=${0}
+                              .max=${254}
+                              .step=${1}
+                              @value-changed=${(e: CustomEvent) =>
+                                this.pushRoom(
+                                  room.subentry_id,
+                                  "occupied_max",
+                                  Math.round(e.detail.value),
+                                  e.detail.final
+                                )}
+                            ></sol-slider>
+                          </div>
+                          <span class="readout tab-num">${occMaxVal} lvl</span>
+                        </div>
+                      `}
 
                   ${room.zones && room.zones.length > 1
                     ? html`<div class="bias-row">
@@ -1052,25 +1200,27 @@ export class SolTabLighting extends LitElement {
                     ${this.renderGrouped(room)}
                   </div>
 
-                  <div class="footer">
-                    <span class="grow"></span>
-                    <span class="lab">
-                      <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
-                        <input
-                          type="checkbox"
-                          .checked=${Boolean(room.settings.night_off)}
-                          @change=${(e: Event) =>
-                            this.pushRoom(
-                              room.subentry_id,
-                              "night_off",
-                              (e.target as HTMLInputElement).checked
-                            )}
-                        />
-                        Off when asleep
-                      </label>
-                      <sol-help flip .text=${HELP.nightOff}></sol-help>
-                    </span>
-                  </div>
+                  ${!isStairway
+                    ? html`<div class="footer">
+                        <span class="grow"></span>
+                        <span class="lab">
+                          <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+                            <input
+                              type="checkbox"
+                              .checked=${Boolean(room.settings.night_off)}
+                              @change=${(e: Event) =>
+                                this.pushRoom(
+                                  room.subentry_id,
+                                  "night_off",
+                                  (e.target as HTMLInputElement).checked
+                                )}
+                            />
+                            Off when asleep
+                          </label>
+                          <sol-help flip .text=${HELP.nightOff}></sol-help>
+                        </span>
+                      </div>`
+                    : nothing}
                 </div>
               `
             : nothing}

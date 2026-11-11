@@ -1072,67 +1072,135 @@ def test_virtual_sunset_holds_at_low_level_until_bedtime_mode(light):
 
 
 def test_room_occupied_min_and_max_bounds(house, light):
-    """Windowless rooms (Stairway) always turn on at >= occupied_min when occupied,
-    follow Solace in between [occupied_min, occupied_max], cap at occupied_max,
-    and turn off as normal when unoccupied."""
-    stairway = RoomSettings(name="Stairway", occupied_min=51, occupied_max=200)
+    """Non-stairway rooms with generic occupied bounds clamp Normal-mode output into
+    [occupied_min, occupied_max] and turn off as normal when unoccupied."""
+    hallway = RoomSettings(name="Hallway", occupied_min=51, occupied_max=200)
 
     # 1. Unoccupied: turns off as normal (0)
-    unocc = solve(house, stairway, light, _input(lux=0.0, occupied=False))
+    unocc = solve(house, hallway, light, _input(lux=0.0, occupied=False))
     assert unocc.level == 0
     assert unocc.source == "off"
 
     # 2. Bright daylight (2000 lx -> Solace demand 0): occupied clamps up to occupied_min (51)
-    bright_occ = solve(house, stairway, light, _input(lux=2000.0, occupied=True))
+    bright_occ = solve(house, hallway, light, _input(lux=2000.0, occupied=True))
     assert bright_occ.level == 51
     assert bright_occ.source == "demand"
 
-    # 3. House Brightness at 0% (bias_stops=-4.0, min_cutoff=254): normal room is 0, Stairway is occupied_min (51)
+    # 3. House Brightness at 0% (bias_stops=-4.0, min_cutoff=254): normal room is 0, Hallway is occupied_min (51)
     house_zero = HouseSettings(bias_stops=-4.0, min_cutoff=254)
     normal_room = RoomSettings(name="Kitchen")
     assert solve(house_zero, normal_room, light, _input(lux=0.0, occupied=True)).level == 0
-    stairway_zero = solve(house_zero, stairway, light, _input(lux=0.0, occupied=True))
-    assert stairway_zero.level == 51
-    assert stairway_zero.source == "demand"
+    hallway_zero = solve(house_zero, hallway, light, _input(lux=0.0, occupied=True))
+    assert hallway_zero.level == 51
+    assert hallway_zero.source == "demand"
 
     # 4. In-between value (lux=10.0 -> Solace L1 is 161, between 51 and 200): follows Solace (161)
-    mid_occ = solve(house, stairway, light, _input(lux=10.0, occupied=True))
+    mid_occ = solve(house, hallway, light, _input(lux=10.0, occupied=True))
     assert mid_occ.level == 161
     assert mid_occ.source == "demand"
 
     # 5. Above occupied_max (lux=0.0 -> Solace L1 is 254 > 200): caps at occupied_max (200)
-    high_occ = solve(house, stairway, light, _input(lux=0.0, occupied=True))
+    high_occ = solve(house, hallway, light, _input(lux=0.0, occupied=True))
     assert high_occ.level == 200
     assert high_occ.source == "demand"
 
-    # 6. Colour temperature still follows Solace's circadian curve
-    noon = solve(house, stairway, light, _input(lux=2000.0, occupied=True, clock_hour=12.0))
-    late = solve(house, stairway, light, _input(lux=0.0, occupied=True, clock_hour=23.0))
+
+def test_stairway_eye_adaptation_curve_bright_when_bright_dim_when_dark(light):
+    """Stairway-only Eye-Adaptation curve blends log2(lux) from Dark Min to Bright Max,
+    excludes Stairway from ambient lighting, disarms house min_cutoff, and leaves other rooms untouched."""
+    import math
+
+    house_stair = HouseSettings(
+        ambience_level=25,
+        min_cutoff=48,
+        stairway_start_lux=10.0,
+        stairway_full_lux=2000.0,
+    )
+    stairway = RoomSettings(
+        name="Stairway",
+        ambience_level=25,
+        occupied_min=45,  # Dark minimum (< min_cutoff 48!)
+        occupied_max=226,  # Bright maximum
+    )
+
+    # 1. Dark outside (<= 10 lx): occupied outputs Dark Minimum (45), NOT cut off by min_cutoff (48)
+    dark_occ = solve(house_stair, stairway, light, _input(lux=0.0, occupied=True))
+    assert dark_occ.level == 45
+    assert dark_occ.demand == pytest.approx(0.0)
+    assert dark_occ.source == "demand"
+
+    at_start = solve(house_stair, stairway, light, _input(lux=10.0, occupied=True))
+    assert at_start.level == 45
+
+    # 2. Geometric midpoint sqrt(10 * 2000) = 141.42 lx -> 50% log2 blend = round(45 + 0.5 * 181) = 136
+    mid_lux = math.sqrt(10.0 * 2000.0)
+    mid_occ = solve(house_stair, stairway, light, _input(lux=mid_lux, occupied=True))
+    assert mid_occ.demand == pytest.approx(0.5, abs=1e-3)
+    assert mid_occ.level == 136
+
+    # 3. Bright outside (>= 2000 lx): occupied outputs Bright Maximum (226) while normal room is 0
+    bright_occ = solve(house_stair, stairway, light, _input(lux=5000.0, occupied=True))
+    assert bright_occ.demand == pytest.approx(1.0)
+    assert bright_occ.level == 226
+    assert solve(house_stair, RoomSettings(name="Kitchen"), light, _input(lux=5000.0, occupied=True)).level == 0
+
+    # 4. Follows house circadian colour temperature
+    noon = solve(house_stair, stairway, light, _input(lux=5000.0, occupied=True, clock_hour=12.0))
+    late = solve(house_stair, stairway, light, _input(lux=0.0, occupied=True, clock_hour=23.0))
     assert noon.state_table.target_kelvin == 4000
     assert late.state_table.target_kelvin == 2200
 
-    # 7. Stairway is excluded from ambient lighting even when house/room ambience is set and gate is open
-    house_amb = HouseSettings(ambience_level=20)
-    stairway_amb = RoomSettings(name="Stairway", ambience_level=20, occupied_min=51, occupied_max=200)
-    unocc_amb = solve(house_amb, stairway_amb, light, _input(lux=0.0, occupied=False, ambience_resolved=True))
+    # 5. Permanently excluded from ambient lighting (L3 == 0) when unoccupied
+    unocc_amb = solve(house_stair, stairway, light, _input(lux=0.0, occupied=False, ambience_resolved=True))
     assert unocc_amb.state_table.l3 == 0
     assert unocc_amb.level == 0
     assert unocc_amb.source == "off"
 
 
 def test_stairway_night_mode_exempt_from_occupied_min(light):
-    """Stairway occupied_min (51) applies in Normal mode, but Mode.NIGHT drops to night_level (26)."""
-    house_night = HouseSettings(night_level=26)
+    """Stairway Eye-Adaptation curve applies in Normal mode, while Mode.NIGHT drops to night_level (26)."""
+    house_night = HouseSettings(night_level=26, stairway_start_lux=10.0, stairway_full_lux=2000.0)
     stairway = RoomSettings(name="Stairway", occupied_min=51, occupied_max=226, night_off=False)
 
-    normal_occ = solve(house_night, stairway, light, _input(lux=2000.0, occupied=True, night_active=False))
-    assert normal_occ.mode is Mode.NORMAL
-    assert normal_occ.level == 51
+    day_occ = solve(house_night, stairway, light, _input(lux=2000.0, occupied=True, night_active=False))
+    assert day_occ.mode is Mode.NORMAL
+    assert day_occ.level == 226
+
+    evening_occ = solve(house_night, stairway, light, _input(lux=0.0, occupied=True, night_active=False))
+    assert evening_occ.mode is Mode.NORMAL
+    assert evening_occ.level == 51
 
     night_occ = solve(house_night, stairway, light, _input(lux=0.0, occupied=True, night_active=True))
     assert night_occ.mode is Mode.NIGHT
     assert night_occ.level == 26
     assert night_occ.source == "night"
+
+
+def test_sunny_override_lux_and_partlycloudy_multiplier(light):
+    """sunny_override_lux forces 0% cloud blend above threshold (even in rooms with threshold_stops),
+    and partlycloudy weather state does not get the 1.25x overcast optical multiplier."""
+    from custom_components.solace.solar import ClearSkySolarModel
+
+    assert ClearSkySolarModel.weather_optical_multiplier("partlycloudy", 0.0) == 1.0
+    assert ClearSkySolarModel.weather_optical_multiplier("cloudy", 0.0) == 1.25
+    assert ClearSkySolarModel.weather_optical_multiplier("overcast", 0.0) == 1.25
+
+    # Without override: 95% cloud cover at 5000 lx blends overcast curve -> demand > 0
+    house_off = HouseSettings(sunny_override_lux=0.0)
+    cloudy_master = solve_master(5000.0, 12.0, house_off, cloud_coverage=95.0)
+    assert cloudy_master.cloud_alpha > 0.8
+    assert cloudy_master.demand > 0.1
+
+    # With sunny_override_lux=4500: 5000 lx forces Clear Sun (alpha=0, demand=0)
+    house_on = HouseSettings(sunny_override_lux=4500.0)
+    sunny_master = solve_master(5000.0, 12.0, house_on, cloud_coverage=95.0)
+    assert sunny_master.cloud_alpha == 0.0
+    assert sunny_master.demand == 0.0
+
+    # Shaded room (+2 EV -> 5000 / 4 = 1250 lx effective) STILL gets Clear Sun override from raw 5000 lx!
+    bedroom = RoomSettings(name="Bedroom", threshold_stops=2.0)
+    shaded_sol = solve(house_on, bedroom, light, _input(lux=5000.0, occupied=True, cloud_coverage=95.0))
+    assert shaded_sol.level == 0
 
 
 def test_threshold_stops_scales_effective_lux(house, light):

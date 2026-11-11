@@ -51,7 +51,7 @@ class ClearSkySolarModel:
             return 1.50
         if "fog" in cond:
             return 1.40
-        if "cloudy" in cond or "overcast" in cond:
+        if "overcast" in cond or ("cloudy" in cond and "partly" not in cond):
             return 1.25
         return 1.00
 

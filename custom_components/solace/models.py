@@ -178,6 +178,7 @@ class HouseSettings:
     lux_curve: tuple[SplinePoint, ...] = DEFAULT_LUX_CURVE
     lux_cloudy_curve: tuple[SplinePoint, ...] = DEFAULT_LUX_CLOUDY_CURVE
     cloudy_blend_threshold: float = 50.0
+    sunny_override_lux: float = 0.0
     brightness_timeline: tuple[SplinePoint, ...] = DEFAULT_BRIGHTNESS_TIMELINE
     colour_timeline: tuple[SplinePoint, ...] = DEFAULT_COLOUR_TIMELINE
     mood_trim_stops: float = 0.0
@@ -266,6 +267,10 @@ class HouseSettings:
     work_mode_backlight_level: int = 200
     work_mode_corner_level: int = 180
     work_mode_debounce_minutes: float = 5.0
+
+    # -- Stairway Eye-Adaptation Curve --------------------------------------------
+    stairway_start_lux: float = 10.0
+    stairway_full_lux: float = 2000.0
 
     # -- Display Only -------------------------------------------------------------
     gamma: float = 2.39

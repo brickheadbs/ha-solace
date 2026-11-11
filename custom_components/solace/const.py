@@ -80,6 +80,7 @@ class Setting:
 HOUSE_SETTINGS: tuple[Setting, ...] = (
     # Master Processing: Curves & Modifiers
     Setting("cloudy_blend_threshold", "Overcast blend threshold", 0, 100, 1, 50, "%", "mdi:weather-partly-cloudy"),
+    Setting("sunny_override_lux", "Sunny lux override", 0, 50000, 50, 0, "lx", "mdi:white-balance-sunny"),
     Setting("mood_trim_stops", "Master mood trim", -4, 4, 0.05, 0, "stops", "mdi:tune"),
     # Ambient gate
     Setting("ambience_start_lux", "Gate start lux", 0, 2000, 1, 50, "lx", "mdi:weather-sunset-down"),
@@ -183,6 +184,9 @@ HOUSE_SETTINGS: tuple[Setting, ...] = (
     Setting("work_mode_backlight_level", "Work mode: Backlight brightness", 0, 254, 1, 200, None, "mdi:lightbulb-outline"),
     Setting("work_mode_corner_level", "Work mode: Corner brightness", 0, 254, 1, 180, None, "mdi:lightbulb"),
     Setting("work_mode_debounce_minutes", "Work mode: Occupancy debounce", 0.5, 60, 0.5, 5, "min", "mdi:timer-sand"),
+    # Stairway Eye-Adaptation Curve (Stairway-only log2 lux blend)
+    Setting("stairway_start_lux", "Stairway: Blend start lux", 1, 500, 1, 10, "lx", "mdi:stairs-down"),
+    Setting("stairway_full_lux", "Stairway: Blend full lux", 50, 20000, 10, 2000, "lx", "mdi:stairs-up"),
     # Display only
     Setting("gamma", "Gamma (display only)", 1, 4, 0.01, 2.39, None, "mdi:chart-bell-curve"),
 )

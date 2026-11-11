@@ -670,13 +670,14 @@ export class SolTabCurves extends LitElement {
 
   private renderCloudyBoost() {
     const thresh = this.snap?.house?.cloudy_blend_threshold ?? 50;
+    const sunnyLux = Math.round(Number(this.snap?.house?.sunny_override_lux ?? 0));
     const world = this.snap?.world;
     const clouds = world?.cloud_coverage;
+    const liveLux = Math.round(Number(world?.lux ?? 0));
+    const sunnyActive = sunnyLux > 0 && liveLux >= sunnyLux;
     let blendPct: number | null = null;
     if (clouds !== null && clouds !== undefined) {
-      if (clouds <= thresh) {
-        blendPct = 0;
-      } else if (thresh >= 100) {
+      if (sunnyActive || clouds <= thresh || thresh >= 100) {
         blendPct = 0;
       } else {
         blendPct = Math.round(Math.min(100, Math.max(0, ((clouds - thresh) / (100 - thresh)) * 100)));
@@ -705,10 +706,41 @@ export class SolTabCurves extends LitElement {
           ${Math.round(thresh)}%
         </div>
         ${clouds !== null && clouds !== undefined
-          ? html`<span class="status-badge" style="background: rgba(56, 189, 248, 0.15); color: var(--sol-cyan); font-size: 11px; padding: 3px 8px; border-radius: 6px;">
-              ${Math.round(clouds)}% Clouds · ${blendPct}% Overcast active
+          ? html`<span class="status-badge" style="background: ${sunnyActive ? "rgba(255, 183, 77, 0.16)" : "rgba(56, 189, 248, 0.15)"}; color: ${sunnyActive ? "#ffb74d" : "var(--sol-cyan)"}; font-size: 11px; padding: 3px 8px; border-radius: 6px;">
+              ${Math.round(clouds)}% Clouds · ${sunnyActive ? "Forced Clear Sun" : `${blendPct}% Overcast active`}
             </span>`
           : nothing}
+      </div>
+
+      <div class="boost-row" style="margin-top: 8px;">
+        <ha-icon icon="mdi:white-balance-sunny" style="color: #ffb74d;"></ha-icon>
+        <div style="font-size: 12.5px; color: var(--sol-text-2);">Sunny lux override</div>
+        <sol-help text="Live illuminance override (0 = disabled). Whenever outdoor lux reaches or exceeds this threshold, Solace forces 100% Clear Sun mode even if the hourly weather forecast still reports cloud cover."></sol-help>
+        <div style="font-size: 12px; color: var(--sol-text-3); margin-left: 4px;">Above:</div>
+        <input
+          type="range"
+          min="0"
+          max="20000"
+          step="100"
+          .value="${String(Math.min(20000, sunnyLux))}"
+          @input="${(e: Event) => {
+            const v = parseFloat((e.target as HTMLInputElement).value);
+            setHouse(this.hass, { sunny_override_lux: v });
+          }}"
+          style="flex: 1; min-width: 120px;"
+        />
+        <sol-number
+          .value=${sunnyLux}
+          .min=${0}
+          .max=${50000}
+          suffix="lx"
+          .width=${64}
+          @value-changed=${(e: CustomEvent) =>
+            setHouse(this.hass, { sunny_override_lux: Math.round(e.detail.value) })}
+        ></sol-number>
+        <span class="status-badge" style="background: ${sunnyLux === 0 ? "rgba(255, 255, 255, 0.06)" : sunnyActive ? "rgba(255, 183, 77, 0.18)" : "rgba(255, 255, 255, 0.06)"}; color: ${sunnyActive ? "#ffb74d" : "var(--sol-text-3)"}; font-size: 11px; padding: 3px 8px; border-radius: 6px;">
+          ${sunnyLux === 0 ? "Off" : sunnyActive ? `Sunny active (${liveLux} lx)` : `Standby (${liveLux} lx)`}
+        </span>
       </div>
     `;
   }

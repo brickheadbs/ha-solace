@@ -635,7 +635,10 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         await self._async_refresh_forecast()
 
         # Compute raw master demand and filter via AsymmetricFilter (instant attack, damped decay)
-        cloud_coverage = self._cloud_coverage()
+        raw_cloud = self._cloud_coverage()
+        cloud_coverage = (
+            0.0 if (house.sunny_override_lux > 0 and lux >= house.sunny_override_lux) else raw_cloud
+        )
         raw_master = solve_master(lux, clock_hour, house, cloud_coverage=cloud_coverage)
         now_ts = now.timestamp()
         if (
@@ -821,7 +824,11 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                 current_level=current,
                 last_written_level=room.last_written.get(entity_id),
                 last_source=room.last_source.get(entity_id),
-                cloud_coverage=self._cloud_coverage(),
+                cloud_coverage=(
+                    0.0
+                    if (house.sunny_override_lux > 0 and lux >= house.sunny_override_lux)
+                    else self._cloud_coverage()
+                ),
                 demand_override=filtered_demand,
             ),
             zone=zone,
@@ -1439,17 +1446,26 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                 )
                 wake_colour = resolve_colour(clock_hour, dusk, house, light).kelvin
 
-                cutoff = 254 if house.min_cutoff >= 254 else (0 if ambience_open else max(house.min_cutoff, light.clamp_min))
-                l1_level = 0 if (0 < table.l1 <= cutoff if cutoff >= 254 else 0 < table.l1 < cutoff) else table.l1
-                l2_level = 0 if (0 < table.l2 <= cutoff if cutoff >= 254 else 0 < table.l2 < cutoff) else table.l2
-                l1s_level = table.l1s
-
                 occ_min = max(0, min(254, min(room_settings.occupied_min, room_settings.occupied_max)))
                 occ_max = max(0, min(254, max(room_settings.occupied_min, room_settings.occupied_max)))
-                if occ_min > 0 or occ_max < 254:
-                    l1_level = apply_clamp(max(occ_min, min(occ_max, l1_level)), light)
-                    l2_level = apply_clamp(max(occ_min, min(occ_max, l2_level)), light)
-                    l1s_level = apply_clamp(min(occ_max, l1s_level), light)
+                if is_stairway:
+                    cutoff = light.clamp_min
+                    l1_level = 0 if (0 < table.l1 < cutoff) else table.l1
+                    l2_level = 0 if (0 < table.l2 < cutoff) else table.l2
+                    l1s_level = (
+                        apply_clamp(min(occ_max, table.l1s), light)
+                        if occ_max < 254
+                        else table.l1s
+                    )
+                else:
+                    cutoff = 254 if house.min_cutoff >= 254 else (0 if ambience_open else max(house.min_cutoff, light.clamp_min))
+                    l1_level = 0 if (0 < table.l1 <= cutoff if cutoff >= 254 else 0 < table.l1 < cutoff) else table.l1
+                    l2_level = 0 if (0 < table.l2 <= cutoff if cutoff >= 254 else 0 < table.l2 < cutoff) else table.l2
+                    l1s_level = table.l1s
+                    if occ_min > 0 or occ_max < 254:
+                        l1_level = apply_clamp(max(occ_min, min(occ_max, l1_level)), light)
+                        l2_level = apply_clamp(max(occ_min, min(occ_max, l2_level)), light)
+                        l1s_level = apply_clamp(min(occ_max, l1s_level), light)
 
                 l0 = StandbyTarget(
                     level=0,

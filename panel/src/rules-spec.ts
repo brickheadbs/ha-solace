@@ -56,6 +56,7 @@ export interface AutomationStrip {
  */
 export const TRACKED_HOUSE_KEYS: readonly string[] = [
   "cloudy_blend_threshold",
+  "sunny_override_lux",
   "mood_trim_stops",
   "ambience_start_lux",
   "ambience_stop_lux",
@@ -119,6 +120,8 @@ export const TRACKED_HOUSE_KEYS: readonly string[] = [
   "work_mode_backlight_level",
   "work_mode_corner_level",
   "work_mode_debounce_minutes",
+  "stairway_start_lux",
+  "stairway_full_lux",
   "gamma",
 ] as const;
 
@@ -156,9 +159,9 @@ export const PIPELINE_STAGES: readonly PipelineStage[] = [
   {
     step: 3,
     title: "Sky Spline",
-    formula: "lerp(clear_spline, cloudy_spline, cloud_%)",
-    summary: "Monotone Hermite spline maps effective lux -> 0..100% daylight deficit demand, blended by Met Eireann cloud cover.",
-    keys: ["lux_full", "lux_window"],
+    formula: "outdoor_lux >= sunny_override_lux ? clear_spline : lerp(clear, cloudy, cloud_%)",
+    summary: "Monotone Hermite spline maps effective lux -> 0..100% daylight deficit demand, blended by met.no cloud cover unless raw outdoor lux triggers sunny_override_lux.",
+    keys: ["cloudy_blend_threshold", "sunny_override_lux"],
   },
   {
     step: 4,
@@ -251,6 +254,13 @@ export const PRIORITY_LADDER: readonly PriorityRule[] = [
 
 export const CUTOFFS_AND_CLAMPS: readonly CutoffRule[] = [
   {
+    name: "Sunny Lux Override",
+    scope: "House",
+    key: "sunny_override_lux",
+    rule: "When raw outdoor lux >= sunny_override_lux (live: 4,500 lx), forces 0% cloud blend (100% Clear Sun curve) across all rooms even if hourly met.no forecast lags.",
+    exemptions: "Set to 0 lx to disable and rely strictly on weather.forecast_home cloud_coverage.",
+  },
+  {
     name: "Room Threshold Offset",
     scope: "Room",
     key: "threshold_stops",
@@ -282,7 +292,7 @@ export const CUTOFFS_AND_CLAMPS: readonly CutoffRule[] = [
     name: "Occupied Room Bounds",
     scope: "Room",
     key: "occupied_min / occupied_max",
-    rule: "Clamps occupied Normal-mode output into [occupied_min, occupied_max] regardless of bright outdoor sun.",
+    rule: "Non-Stairway rooms clamp occupied Normal-mode output into [occupied_min, occupied_max]; Stairway uses these two values as Dark Minimum and Bright Maximum on its log2-lux Eye-Adaptation curve.",
     exemptions: "Exempt in Mode.NIGHT, Mode.AWAY, and Asleep night_off so night corridor uses night_level without glare.",
   },
   {
@@ -304,19 +314,19 @@ export const CUTOFFS_AND_CLAMPS: readonly CutoffRule[] = [
 export const ROOM_EXCEPTIONS: readonly RoomExceptionSpec[] = [
   {
     room: "Stairway",
-    subtitle: "Windowless upper landing — custom safety & anti-glare rules",
+    subtitle: "Single-window stairwell — Stairway-only log2-lux Eye-Adaptation curve",
     rules: [
       {
-        label: "Permanent Daylight Floor",
-        detail: "Upper landing has zero natural light: occupied_min = 51 (20%) forces light on even at 20,000 lx outdoor sun; occupied_max = 226 caps peak glare.",
+        label: "Eye-Adaptation Curve (Bright Out -> Bright In)",
+        detail: "Exclusively on Stairway: blends log2(lux) from Dark Minimum (occupied_min = 45 lvl at <= stairway_start_lux = 10 lx) up to Bright Maximum (occupied_max = 226 lvl at >= stairway_full_lux = 2,000 lx) while following house colour temperature.",
       },
       {
         label: "Night Corridor Exemption",
-        detail: "In Mode.NIGHT, occupied_min (51) is bypassed so 3 AM stairs run at night_level (26 lvl @ 2190 K) instead of daytime floor.",
+        detail: "In Mode.NIGHT, Dark Minimum (45) is bypassed so 3 AM stairs run at night_level (26 lvl @ 2190 K).",
       },
       {
-        label: "Zero Ambience Glow",
-        detail: "Hardcoded L3 = 0 in engine.py — unoccupied stairway never burns resting evening ambience.",
+        label: "Zero Ambience & Cutoff Exempt",
+        detail: "Hardcoded L3 = 0 (excluded from ambient lighting) and exempt from house min_cutoff (48) so dim evening Dark Minimum levels never drop to 0.",
       },
       {
         label: "0s Hold + 5m Entry Trigger",
@@ -425,8 +435,8 @@ export const HOUSE_AUTOMATIONS: readonly AutomationStrip[] = [
     group: "Lighting & Presence",
     name: "Away Arm / Disarm",
     entityId: "automation.away_arm_on_departure",
-    trigger: "Exterior transit / U200 lock + 3m interior clear + phone off Wi-Fi",
-    guard: "Disarms on U200 unlock, entry sensor, or phone Wi-Fi return",
+    trigger: "U200 Keypad Lock (30s clear) OR Pixel 8a leaves SchuSecure Wi-Fi with U200 locked (3m clear)",
+    guard: "Inside thumbturn locks on SchuSecure Wi-Fi never arm Away; disarms on U200 unlock or SchuSecure Wi-Fi return",
     action: "Toggles input_boolean.away_mode (and 5G/6G Flint 4 radio eco sync)",
   },
   {
