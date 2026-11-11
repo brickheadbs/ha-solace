@@ -1,53 +1,55 @@
 /**
- * Lighting — what the engine is doing right now across every room, and manual controls.
- *
- * The organising rule is the handoff's: **never render a stop number alone.** Every bias
- * control carries "→ level N (x % light)" beside it, computed by the engine that will
- * actually drive the bulb. Displays that are always visible show the *room* result;
- * per-light values live behind the disclosure.
+ * Lighting — compact Edenkiln-style room cards with EV room bias up front and
+ * collapsible "Room setup & fixtures" drawer (Threshold offset in stops, Ambience,
+ * Occupied bounds, Sleep policy, Zones, and per-light bias/clamps).
  */
 
 import { LitElement, css, html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { customElement } from "./custom-element";
 import type { Hass, LightRow, RoomRow, Snapshot, ZoneRow } from "./api";
-import { roomAction, setHouse, setLight, setRoom, setZones } from "./api";
+import { roomAction, setCardOrder, setHouse, setLight, setRoom, setZones } from "./api";
 import { ago, consequence, countdown, lightPct, num, stopLabel } from "./fmt";
+import { applyOrder, moveItem, nudgeItem, reorderStyles } from "./reorder";
 import { tokens } from "./tokens";
 import "./ui";
 
 const HELP = {
   houseBias:
-    "House-wide baseline shift in photographic stops (±4 EV). One stop doubles (+1 EV) or halves (-1 EV) the baseline master demand calculated from the circadian curves. Rooms add their own offsets to this, preserving relative inter-room balance.",
+    "House-wide baseline shift in photographic stops (±4 EV). One stop doubles (+1 EV) or halves (-1 EV) output across all rooms while preserving inter-room balance.",
   roomBias:
-    "Room-specific offset added to the house bias, in photographic stops (±4 EV). Additive arithmetic: Effective Bias = House Bias + Room Bias. Moves all fixtures in the room together without altering adjacent rooms.",
+    "Room-specific offset in photographic stops. Uses Exposure Envelope arithmetic: +EV both shifts the room's turn-on lux threshold upward (turning lights on sooner) and boosts dimmed evening schedule levels toward 254.",
+  thresholdStops:
+    "Permanent room threshold offset in photographic stops (-3 to +6 EV). Divides outdoor lux by 2^EV before evaluating the Lux Curve and Ambience Gate (+1 EV = half window light, +2 EV = quarter window light for north-facing rooms) without altering midnight brightness.",
   zoneBias:
-    "Sub-zone offset within a room, in photographic stops (±4 EV). Applied on top of Room Bias for fixtures assigned to this specific zone (e.g. kitchen island prep area vs dining table).",
+    "Sub-zone offset within a room in photographic stops, added on top of Room Bias.",
   ambience:
-    "Resting background floor (L3) for this room while awake and dusk gate is open. Replaces off (0) with a warm ambient level (0–254). Clamped floor: never lowers a light already active at L1/L2. Setting 0 follows the global house setting.",
+    "Resting background floor (L3) while awake and dusk gate is open (0–100). 0 follows the global house setting.",
+  occupiedMin:
+    "Minimum brightness floor when occupied in Normal Mode (0–254). Exempt in Night Mode so 3 AM corridor navigation stays at Night Level.",
+  occupiedMax:
+    "Maximum brightness ceiling when occupied in Normal Mode (0–254).",
   diminish:
-    "Occupancy dwell step-down (L2). When a zone sensor clears while the main room is still occupied, brightness reduces by this photographic stop offset and holds. Prevents harsh shutoffs during stationary tasks. 0 disables.",
+    "Percentage step-down (L2) when a near sensor clears while the wider room stays occupied.",
   perLight:
-    "Per-fixture bias adjustment in photographic stops (±4 EV), applied after House, Room, and Zone biases. Combined demand = Curve Demand × 2^(House + Room + Zone + Fixture Bias).",
-  cut: "Hard low-end threshold cutoff (0–254). If computed demand falls below this value, the fixture switches fully off (0) rather than emitting an unwanted faint glow. Disarmed when the Ambience Gate is open.",
-  max: "Hard upper ceiling clamp (0–254). Written brightness will never exceed this ceiling under any curve, bias, or boost condition. Enforces glare limits and hardware maximums.",
-  manual:
-    "Manual override latch. Hands full control of this room to manual HA switch/entity commands and disables Solace writes until unlatched. Physical switch interactions also latch manual mode temporarily.",
-  zone:
-    "Sub-area grouping within a room sharing presence but requiring distinct light levels (e.g. kitchen sink vs table). Carries its own zone bias offset and independent diminish behavior.",
-  zoneDiminish:
-    "Zone-specific diminish offset. When this zone's presence sensor clears, lights drop to L2 by this amount while parent room remains occupied. 0 disables.",
+    "Per-fixture bias adjustment in photographic stops, applied after House, Room, and Zone biases.",
+  cut: "Daytime low-end cutoff (0–254). Demand below this value drops to 0 while the Ambience Gate is closed.",
+  max: "Hard upper hardware ceiling (1–254) enforced across all automatic modes.",
   nightOff:
-    "Sleep state policy. When house sleep mode is active, this room is forced completely dark (0) instead of dropping to the night resting level (L3). Unlatches automatically when awake.",
+    "When Sleep Mode is active, forces this room completely dark (0) instead of Night Corridor level.",
 };
 
 @customElement("sol-tab-lighting")
 export class SolTabLighting extends LitElement {
   @property({ attribute: false }) hass!: Hass;
   @property({ attribute: false }) snap!: Snapshot;
+  @property({ type: Boolean }) reorderMode = false;
+
   @state() private open = new Set<string>();
-  /** Local echo so a dragged slider tracks the thumb rather than the round trip. */
   @state() private draft: Record<string, number> = {};
+  @state() private dragId: string | null = null;
+  @state() private overId: string | null = null;
+
   private timer?: number;
   private _debounceTimers: Map<string, number> = new Map();
 
@@ -67,6 +69,7 @@ export class SolTabLighting extends LitElement {
 
   static styles = [
     tokens,
+    reorderStyles,
     css`
       .strip {
         background: var(--sol-card);
@@ -77,33 +80,17 @@ export class SolTabLighting extends LitElement {
         align-items: center;
         font-size: 12.5px;
         color: var(--sol-text-3);
-        box-shadow: var(--sol-shadow);
-      }
-      .strip > div {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        padding: 0 14px;
-        border-left: 1px solid rgba(255, 255, 255, 0.1);
-      }
-      .strip > div:first-child {
-        border-left: none;
-        padding-left: 0;
-      }
-      .strip ha-icon {
-        --mdc-icon-size: 17px;
       }
       .strip b {
         color: var(--sol-text);
         font-weight: 500;
         font-variant-numeric: tabular-nums;
       }
-
       .house {
         background: var(--sol-card);
         border-radius: var(--sol-r-card);
         padding: 12px 16px;
-        margin-top: 14px;
+        margin-top: 10px;
         display: flex;
         align-items: center;
         gap: 12px;
@@ -122,9 +109,9 @@ export class SolTabLighting extends LitElement {
         color: var(--sol-cyan);
       }
       .readout {
-        font-size: 13px;
+        font-size: 12.5px;
         font-variant-numeric: tabular-nums;
-        flex: 0 0 82px;
+        flex: 0 0 112px;
         text-align: right;
       }
       .cons {
@@ -169,8 +156,6 @@ export class SolTabLighting extends LitElement {
       .room-head .motion-icon {
         --mdc-icon-size: 14px;
         color: var(--sol-faint);
-        margin-left: -4px;
-        margin-right: 4px;
         transition: color 0.15s ease;
       }
       .room-head .motion-icon.motion-active {
@@ -187,10 +172,6 @@ export class SolTabLighting extends LitElement {
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
-      }
-      .room-head .sub {
-        font-size: 11.5px;
-        color: var(--sol-text-4);
       }
 
       .status {
@@ -209,6 +190,15 @@ export class SolTabLighting extends LitElement {
       .status .v {
         font-size: 13px;
         font-variant-numeric: tabular-nums;
+      }
+      .chip-note {
+        margin-left: auto;
+        align-self: center;
+        font-size: 11px;
+        color: var(--sol-amber);
+        background: rgba(255, 183, 77, 0.12);
+        padding: 2px 8px;
+        border-radius: 6px;
       }
 
       .manual-block {
@@ -253,26 +243,10 @@ export class SolTabLighting extends LitElement {
         color: var(--sol-text-2);
       }
       .bias-row .lab {
-        flex: 0 0 92px;
+        flex: 0 0 112px;
         display: flex;
         align-items: center;
         gap: 5px;
-      }
-
-      .tape-measure {
-        display: flex;
-        flex-direction: column;
-        flex: 1;
-        min-width: 0;
-        position: relative;
-      }
-      .tape-ticks {
-        display: flex;
-        justify-content: space-between;
-        font-size: 9.5px;
-        color: var(--sol-text-4);
-        padding: 2px 2px 0;
-        font-variant-numeric: tabular-nums;
       }
 
       .disclose {
@@ -282,9 +256,14 @@ export class SolTabLighting extends LitElement {
         align-items: center;
         gap: 6px;
         margin-top: 12px;
+        padding-top: 8px;
+        width: 100%;
+        border-top: 1px solid rgba(255, 255, 255, 0.06);
         font-size: 12px;
         color: var(--sol-text-3);
-        border-radius: var(--sol-r-control);
+      }
+      .disclose:hover {
+        color: var(--sol-text);
       }
       .disclose ha-icon {
         --mdc-icon-size: 16px;
@@ -294,8 +273,12 @@ export class SolTabLighting extends LitElement {
         transform: rotate(90deg);
       }
 
-      .lights {
+      .drawer {
         margin-top: 8px;
+        padding-top: 6px;
+      }
+      .lights {
+        margin-top: 12px;
       }
       .zone-head {
         display: flex;
@@ -410,14 +393,19 @@ export class SolTabLighting extends LitElement {
     `,
   ];
 
-  /* ---------------------------------------------------------------- writes */
-
   private key(...parts: string[]) {
     return parts.join("|");
   }
 
   private local(key: string, fallback: number): number {
     return this.draft[key] ?? fallback;
+  }
+
+  private toggleOpen(id: string) {
+    const next = new Set(this.open);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    this.open = next;
   }
 
   private async pushHouse(key: string, value: number, final: boolean) {
@@ -435,7 +423,7 @@ export class SolTabLighting extends LitElement {
       const timer = window.setTimeout(async () => {
         this._debounceTimers.delete(draftKey);
         await setHouse(this.hass, { [key]: value });
-      }, 1000);
+      }, 600);
       this._debounceTimers.set(draftKey, timer);
     }
   }
@@ -455,7 +443,7 @@ export class SolTabLighting extends LitElement {
       const timer = window.setTimeout(async () => {
         this._debounceTimers.delete(draftKey);
         await setRoom(this.hass, id, { [key]: value });
-      }, 1000);
+      }, 600);
       this._debounceTimers.set(draftKey, timer);
     }
   }
@@ -464,7 +452,6 @@ export class SolTabLighting extends LitElement {
     await setLight(this.hass, id, entity, { [key]: value });
   }
 
-  /** Drop the local echo once the snapshot has caught up, so the server stays the truth. */
   private clearDraft(key: string) {
     window.setTimeout(() => {
       const next = { ...this.draft };
@@ -473,21 +460,34 @@ export class SolTabLighting extends LitElement {
     }, 700);
   }
 
-  /* ---------------------------------------------------------------- render */
+  private orderedRooms(): RoomRow[] {
+    return applyOrder(
+      this.snap.rooms,
+      (r) => r.subentry_id,
+      this.snap.card_order?.lighting
+    );
+  }
+
+  private commitOrder(nextIds: string[]) {
+    setCardOrder(this.hass, "lighting", nextIds);
+  }
 
   private roomIcon(name: string): string {
     const n = name.toLowerCase();
     if (n.includes("bed")) return "mdi:bed";
     if (n.includes("kitchen") || n.includes("diner")) return "mdi:countertop";
-    if (n.includes("entry") || n.includes("hall")) return "mdi:door-open";
+    if (n.includes("entry") || n.includes("hall") || n.includes("stair")) return "mdi:stairs";
     if (n.includes("office")) return "mdi:desk";
     return "mdi:sofa";
   }
 
   private renderStrip() {
     const w = this.snap.world;
-    return html`<div class="strip" style="justify-content: flex-end; padding: 6px 14px; background: transparent; box-shadow: none; margin-bottom: -4px;">
-      <div style="border-left: none; padding: 0;"><span>Updated</span><b>${ago(w.updated_at)}</b></div>
+    return html`<div
+      class="strip"
+      style="justify-content: flex-end; padding: 4px 8px; background: transparent;"
+    >
+      <div><span>Updated </span><b>${ago(w.updated_at)}</b></div>
     </div>`;
   }
 
@@ -509,8 +509,8 @@ export class SolTabLighting extends LitElement {
       <div style="display: flex; align-items: center; gap: 11px; flex-wrap: wrap;">
         <div class="name">
           <ha-icon icon="mdi:camera-metering-spot" style="color: var(--sol-blue);"></ha-icon>
-          <span>Master mood &amp; energy trim</span>
-          <sol-help text="Global master bias dial in photographic stops (±4 EV). Multiplies baseline curve demand across all rooms by 2^EV (one stop doubles or halves output). Preserves relative inter-room balance."></sol-help>
+          <span>Master house exposure bias</span>
+          <sol-help .text=${HELP.houseBias}></sol-help>
         </div>
         <div style="flex: 1;"></div>
         <div style="display: flex; background: var(--sol-control); border-radius: 14px; padding: 2px; gap: 2px;">
@@ -536,7 +536,7 @@ export class SolTabLighting extends LitElement {
             this.pushHouse("bias_stops", e.detail.value, e.detail.final)}
         ></sol-slider>
         <div class="readout tab-num">${stopLabel(value)}</div>
-        <div class="cons">${ref ? consequence(ref, gamma) : "→ all rooms dark"}</div>
+        <div class="cons">${ref ? consequence(ref, gamma) : "-> all rooms dark"}</div>
         ${value !== 0
           ? html`<button
               style="background: none; border: none; padding: 2px; cursor: pointer; color: var(--sol-text-3);"
@@ -555,7 +555,7 @@ export class SolTabLighting extends LitElement {
     const key = this.key(room.subentry_id, light.entity_id, "bias");
     const adj = this.local(key, light.bias_stops);
     const clampedNote = light.kelvin_clamped
-      ? `held at ${num(light.max_kelvin)} K by its bulb`
+      ? `held at ${num(light.max_kelvin)} K by hardware`
       : "";
     return html`<div class="lrow">
       <div class="lname">
@@ -604,9 +604,6 @@ export class SolTabLighting extends LitElement {
     </div>`;
   }
 
-  /**
-   * Per-light rows, grouped under their zone.
-   */
   private renderGrouped(room: RoomRow) {
     if (!room.zones.length) return room.lights.map((l) => this.renderLight(room, l));
     const unassigned = room.lights.filter((l) => !l.zone_id);
@@ -651,252 +648,443 @@ export class SolTabLighting extends LitElement {
       ${unassigned.length
         ? html`<div class="zone-head warnrow">
               <span class="eyebrow">Not in a zone</span>
-              <sol-help
-                flip
-                .text=${"These lights take the area's own zone bias. Assign them to a zone if you want them to follow one."}
-              ></sol-help>
             </div>
             ${unassigned.map((l) => this.renderLight(room, l))}`
         : nothing}
     `;
   }
 
-  private async pushZone(
-    room: RoomRow,
-    zone: ZoneRow,
-    patch: Partial<ZoneRow>
-  ) {
+  private async pushZone(room: RoomRow, zone: ZoneRow, patch: Partial<ZoneRow>) {
     const next = room.zones.map((z) => (z.zone_id === zone.zone_id ? { ...z, ...patch } : z));
     await setZones(this.hass, room.subentry_id, next);
   }
 
-  private renderRoom(room: RoomRow) {
+  private renderRoom(room: RoomRow, idx: number, allIds: string[]) {
     const gamma = this.snap.house.gamma ?? 2.39;
     const lit = (room.level ?? 0) > 0;
-    const open = this.open.has(room.subentry_id);
+    const isOpen = this.open.has(room.subentry_id);
     const manual = room.manual.active;
 
     const biasKey = this.key(room.subentry_id, "bias_stops");
     const bias = this.local(biasKey, Number(room.settings.bias_stops ?? 0));
+    const threshKey = this.key(room.subentry_id, "threshold_stops");
+    const threshVal =
+      Math.round(this.local(threshKey, Number(room.settings.threshold_stops ?? 0)) * 20) / 20;
+    const effLux = Math.round((this.snap.world.lux ?? 0) / Math.pow(2, threshVal));
     const zoneKey = this.key(room.subentry_id, "zone_bias_stops");
     const zone = this.local(zoneKey, Number(room.settings.zone_bias_stops ?? 0));
 
     const ambKey = this.key(room.subentry_id, "ambience_level");
     const ambVal = this.local(ambKey, Number(room.settings.ambience_level ?? 0));
 
-    return html`<div class="room">
-      <div class="room-head">
-        <ha-icon class="room-icon ${lit ? "lit" : ""}" icon=${this.roomIcon(room.name)}></ha-icon>
-        <div class="title">
-          <div style="display:flex;align-items:center;gap:6px">
-            <h3>${room.name}</h3>
-            <ha-icon
-              style="margin-left: 6px;"
-              class="motion-icon ${room.occupied ? "motion-active" : ""}"
-              icon="mdi:motion-sensor"
-              title="${room.occupied ? "Occupied" : "Clear"}"
-            ></ha-icon>
-          </div>
-        </div>
-        <sol-segmented
-          .options=${[
-            { value: "auto", label: "Auto" },
-            { value: "manual", label: "Manual", tone: "amber" as const },
-          ]}
-          .value=${manual ? "manual" : "auto"}
-          @segment-changed=${(e: CustomEvent) =>
-            roomAction(this.hass, room.subentry_id, e.detail.value === "manual" ? "manual" : "auto")}
-        ></sol-segmented>
-      </div>
+    const occMinKey = this.key(room.subentry_id, "occupied_min");
+    const occMinVal = Math.round(this.local(occMinKey, Number(room.settings.occupied_min ?? 0)));
+    const occMaxKey = this.key(room.subentry_id, "occupied_max");
+    const occMaxVal = Math.round(this.local(occMaxKey, Number(room.settings.occupied_max ?? 254)));
 
-      ${manual
-        ? html`<div class="manual-block">
-            <div class="top">
-              <ha-icon icon="mdi:clock-outline"></ha-icon>
-              <span
-                >${room.manual.switch
-                  ? "Held until you switch back"
-                  : `Auto resumes in ${countdown(room.manual.remaining_s)}`}</span
-              >
-              <button class="ghost" @click=${() => roomAction(this.hass, room.subentry_id, "auto")}>
-                Resume now
-              </button>
-            </div>
-            <div class="bias-row">
-              <sol-slider
-                tone="amber"
-                noReset
-                .value=${Math.max(...room.lights.map((l) => l.current_level), 0)}
-                .min=${0}
-                .max=${254}
-                .step=${1}
-                @value-changed=${(e: CustomEvent) =>
-                  roomAction(this.hass, room.subentry_id, "level", Math.round(e.detail.value))}
-              ></sol-slider>
-              <div class="readout tab-num">
-                ${lightPct(Math.max(...room.lights.map((l) => l.current_level), 0), gamma)}% (${Math.max(...room.lights.map((l) => l.current_level), 0)} lvl)
-              </div>
-            </div>
-            <div class="note">A physical switch left on holds this room indefinitely.</div>
-          </div>`
-        : html`<div class="status">
-            <div>
-              <span class="eyebrow">Demand</span>
-              <span class="v tab-num"
-                >${room.demand === null ? "—" : `${Math.round(room.demand * 100)} %`}</span
-              >
-            </div>
-            <div>
-              <span class="eyebrow">Output</span>
-              <span class="v tab-num"
-                >${room.level === null ? "—" : `${lightPct(room.level, gamma)}% (${room.level} lvl)`}</span
-              >
-            </div>
-            <div>
-              <span class="eyebrow">Mode</span>
-              <span class="v">${room.mode ?? "—"}</span>
-            </div>
-          </div>`}
-
-      <div class="bias-row">
-        <span class="lab">Room bias <sol-help .text=${HELP.roomBias}></sol-help></span>
-        <sol-slider
-          .value=${bias}
-          .min=${-2}
-          .max=${2}
-          .step=${0.1}
-          @value-changed=${(e: CustomEvent) =>
-            this.pushRoom(room.subentry_id, "bias_stops", e.detail.value, e.detail.final)}
-        ></sol-slider>
-        <span class="readout tab-num">${stopLabel(bias)}</span>
-        <span class="cons">${consequence(room.level, gamma)}</span>
-      </div>
-
-      <!-- Tape-measure Ambience Slider -->
-      <div class="bias-row">
-        <span class="lab">Ambience <sol-help .text=${HELP.ambience}></sol-help></span>
-        <div style="flex: 1; display: flex; align-items: center; gap: 8px;">
-          <sol-slider
-            tone="cyan"
-            noReset
-            .value=${ambVal}
-            .min=${0}
-            .max=${100}
-            .step=${1}
-            @value-changed=${(e: CustomEvent) =>
-              this.pushRoom(room.subentry_id, "ambience_level", e.detail.value, e.detail.final)}
-          ></sol-slider>
-          <div style="display: flex; gap: 3px;">
-            ${[
-              { label: "Off", lvl: 0 },
-              { label: "1%", lvl: 3 },
-              { label: "5%", lvl: 13 },
-              { label: "10%", lvl: 25 },
-              { label: "20%", lvl: 51 },
-            ].map(
-              (p) => html`
-                <button
-                  style="border: none; cursor: pointer; border-radius: 6px; padding: 2px 6px; font-size: 11px; background: ${ambVal === p.lvl ? "var(--sol-cyan-tint)" : "var(--sol-control)"}; color: ${ambVal === p.lvl ? "var(--sol-cyan)" : "var(--sol-text-3)"};"
-                  @click=${() => this.pushRoom(room.subentry_id, "ambience_level", p.lvl, true)}
-                >
-                  ${p.label}
-                </button>
-              `
-            )}
-          </div>
-        </div>
-        <span class="readout tab-num">
-          ${ambVal === 0 ? "Follows house" : `${lightPct(ambVal, gamma)}% (${ambVal} lvl)`}
-        </span>
-      </div>
-
-      ${room.zones && room.zones.length > 1
-        ? html`<div class="bias-row">
-            <span class="lab">Zone bias <sol-help .text=${HELP.zoneBias}></sol-help></span>
-            <sol-slider
-              .value=${zone}
-              .min=${-1}
-              .max=${1}
-              .step=${0.1}
-              @value-changed=${(e: CustomEvent) =>
-                this.pushRoom(room.subentry_id, "zone_bias_stops", e.detail.value, e.detail.final)}
-            ></sol-slider>
-            <span class="readout tab-num">${stopLabel(zone)}</span>
-          </div>`
-        : nothing}
-
-      ${room.has_near && !room.zones.some((z) => z.presence.length)
-        ? html`<div class="bias-row">
-            <span class="lab">Diminish <sol-help .text=${HELP.diminish}></sol-help></span>
-            <span class="pill ${room.near_clear ? "off" : "on"}"
-              >near ${room.near_clear ? "clear" : "occupied"}</span
-            >
-            <span class="grow"></span>
-            <sol-number
-              .value=${Number(room.settings.diminish_pct ?? 0)}
-              .min=${0}
-              .max=${100}
-              suffix="% when clear"
-              .width=${52}
-              @value-changed=${(e: CustomEvent) =>
-                this.pushRoom(room.subentry_id, "diminish_pct", e.detail.value)}
-            ></sol-number>
-          </div>`
-        : nothing}
-
-      <button
-        class="disclose"
-        aria-expanded=${open}
-        @click=${() => {
-          const next = new Set(this.open);
-          next.has(room.subentry_id)
-            ? next.delete(room.subentry_id)
-            : next.add(room.subentry_id);
-          this.open = next;
+    return html`
+      <div
+        class="reorder-shell ${this.reorderMode ? "reorder-armed" : ""} ${this.overId === room.subentry_id ? "drag-over" : ""}"
+        draggable=${this.reorderMode ? "true" : "false"}
+        @dragstart=${(e: DragEvent) => {
+          if (!this.reorderMode) return;
+          this.dragId = room.subentry_id;
+          e.dataTransfer?.setData("text/plain", room.subentry_id);
+        }}
+        @dragover=${(e: DragEvent) => {
+          if (!this.reorderMode || !this.dragId) return;
+          e.preventDefault();
+          this.overId = room.subentry_id;
+        }}
+        @dragleave=${() => {
+          if (this.overId === room.subentry_id) this.overId = null;
+        }}
+        @drop=${(e: DragEvent) => {
+          if (!this.reorderMode || !this.dragId) return;
+          e.preventDefault();
+          const from = this.dragId;
+          this.dragId = null;
+          this.overId = null;
+          if (from !== room.subentry_id) {
+            this.commitOrder(moveItem(allIds, from, room.subentry_id));
+          }
+        }}
+        @dragend=${() => {
+          this.dragId = null;
+          this.overId = null;
         }}
       >
-        <ha-icon class=${open ? "open" : ""} icon="mdi:chevron-right"></ha-icon>
-        Per-light adjustments (${room.lights.length}${room.zones.length > 1 ? ` in ${room.zones.length} zones` : ""})
-      </button>
+        ${this.reorderMode
+          ? html`
+              <div class="reorder-bar">
+                <span class="reorder-grip">
+                  <ha-icon icon="mdi:drag"></ha-icon>
+                  Drag to reorder · ${room.name}
+                </span>
+                <span class="reorder-arrows">
+                  <button
+                    class="reorder-btn"
+                    ?disabled=${idx === 0}
+                    @click=${() => this.commitOrder(nudgeItem(allIds, room.subentry_id, -1))}
+                    title="Move earlier"
+                  >
+                    <ha-icon icon="mdi:arrow-left"></ha-icon>
+                  </button>
+                  <button
+                    class="reorder-btn"
+                    ?disabled=${idx === allIds.length - 1}
+                    @click=${() => this.commitOrder(nudgeItem(allIds, room.subentry_id, 1))}
+                    title="Move later"
+                  >
+                    <ha-icon icon="mdi:arrow-right"></ha-icon>
+                  </button>
+                </span>
+              </div>
+            `
+          : nothing}
 
-      ${open
-        ? html`<div class="lights">
-            <div class="lhead">
-              <span class="eyebrow">Light</span>
-              <span class="eyebrow">Adjustment <sol-help .text=${HELP.perLight}></sol-help></span>
-              <span class="eyebrow">Cut <sol-help flip .text=${HELP.cut}></sol-help></span>
-              <span class="eyebrow">Max <sol-help flip .text=${HELP.max}></sol-help></span>
+        <div class="room">
+          <div class="room-head">
+            <ha-icon class="room-icon ${lit ? "lit" : ""}" icon=${this.roomIcon(room.name)}></ha-icon>
+            <div class="title">
+              <div style="display:flex;align-items:center;gap:6px">
+                <h3>${room.name}</h3>
+                <ha-icon
+                  class="motion-icon ${room.occupied ? "motion-active" : ""}"
+                  icon="mdi:motion-sensor"
+                  title="${room.occupied ? "Occupied" : "Clear"}"
+                ></ha-icon>
+              </div>
             </div>
-            ${this.renderGrouped(room)}
-          </div>`
-        : nothing}
-
-      <div class="footer">
-        <span class="grow"></span>
-        <span class="lab">
-          <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
-            <input
-              type="checkbox"
-              .checked=${Boolean(room.settings.night_off)}
-              @change=${(e: Event) =>
-                this.pushRoom(
+            <sol-segmented
+              .options=${[
+                { value: "auto", label: "Auto" },
+                { value: "manual", label: "Manual", tone: "amber" as const },
+              ]}
+              .value=${manual ? "manual" : "auto"}
+              @segment-changed=${(e: CustomEvent) =>
+                roomAction(
+                  this.hass,
                   room.subentry_id,
-                  "night_off",
-                  (e.target as HTMLInputElement).checked
+                  e.detail.value === "manual" ? "manual" : "auto"
                 )}
-            />
-            Off when asleep
-          </label>
-          <sol-help flip .text=${HELP.nightOff}></sol-help>
-        </span>
+            ></sol-segmented>
+          </div>
+
+          ${manual
+            ? html`<div class="manual-block">
+                <div class="top">
+                  <ha-icon icon="mdi:clock-outline"></ha-icon>
+                  <span
+                    >${room.manual.switch
+                      ? "Held until you switch back"
+                      : `Auto resumes in ${countdown(room.manual.remaining_s)}`}</span
+                  >
+                  <button
+                    class="ghost"
+                    @click=${() => roomAction(this.hass, room.subentry_id, "auto")}
+                  >
+                    Resume now
+                  </button>
+                </div>
+                <div class="bias-row">
+                  <sol-slider
+                    tone="amber"
+                    noReset
+                    .value=${Math.max(...room.lights.map((l) => l.current_level), 0)}
+                    .min=${0}
+                    .max=${254}
+                    .step=${1}
+                    @value-changed=${(e: CustomEvent) =>
+                      roomAction(this.hass, room.subentry_id, "level", Math.round(e.detail.value))}
+                  ></sol-slider>
+                  <div class="readout tab-num">
+                    ${lightPct(Math.max(...room.lights.map((l) => l.current_level), 0), gamma)}%
+                    (${Math.max(...room.lights.map((l) => l.current_level), 0)} lvl)
+                  </div>
+                </div>
+                <div class="note">Held manually — Solace automatic writes are paused.</div>
+              </div>`
+            : html`<div class="status">
+                <div>
+                  <span class="eyebrow">Demand</span>
+                  <span class="v tab-num"
+                    >${room.demand === null ? "—" : `${Math.round(room.demand * 100)} %`}</span
+                  >
+                </div>
+                <div>
+                  <span class="eyebrow">Output</span>
+                  <span class="v tab-num"
+                    >${room.level === null
+                      ? "—"
+                      : `${lightPct(room.level, gamma)}% (${room.level} lvl)`}</span
+                  >
+                </div>
+                <div>
+                  <span class="eyebrow">Mode</span>
+                  <span class="v">${room.mode ?? "—"}</span>
+                </div>
+                ${threshVal !== 0
+                  ? html`<span class="chip-note" title="Threshold offset active">
+                      Threshold ${stopLabel(threshVal)}
+                    </span>`
+                  : nothing}
+              </div>`}
+
+          <!-- Primary Everyday Control: Room Bias (Exposure Envelope) -->
+          <div class="bias-row">
+            <span class="lab">Room bias <sol-help .text=${HELP.roomBias}></sol-help></span>
+            <sol-slider
+              .value=${bias}
+              .min=${-2}
+              .max=${2}
+              .step=${0.1}
+              @value-changed=${(e: CustomEvent) =>
+                this.pushRoom(room.subentry_id, "bias_stops", e.detail.value, e.detail.final)}
+            ></sol-slider>
+            <span class="readout tab-num">${stopLabel(bias)}</span>
+            <span class="cons">${consequence(room.level, gamma)}</span>
+          </div>
+
+          <!-- Disclosure Drawer Toggle -->
+          <button class="disclose" @click=${() => this.toggleOpen(room.subentry_id)}>
+            <ha-icon class=${isOpen ? "open" : ""} icon="mdi:chevron-right"></ha-icon>
+            <span>Room setup &amp; ${room.lights.length} fixture${room.lights.length === 1 ? "" : "s"}</span>
+            <span class="grow"></span>
+            <span style="font-size: 11px; color: var(--sol-text-4);">
+              ${isOpen ? "Hide" : "Thresholds, bounds & per-light clamps"}
+            </span>
+          </button>
+
+          ${isOpen
+            ? html`
+                <div class="drawer">
+                  <!-- Threshold Offset in EV Stops -->
+                  <div class="bias-row">
+                    <span class="lab">
+                      Threshold offset <sol-help .text=${HELP.thresholdStops}></sol-help>
+                    </span>
+                    <div style="flex: 1; display: flex; align-items: center; gap: 8px;">
+                      <sol-slider
+                        tone="amber"
+                        .value=${threshVal}
+                        .min=${-3}
+                        .max=${6}
+                        .step=${0.05}
+                        @value-changed=${(e: CustomEvent) =>
+                          this.pushRoom(
+                            room.subentry_id,
+                            "threshold_stops",
+                            Math.round(e.detail.value * 20) / 20,
+                            e.detail.final
+                          )}
+                      ></sol-slider>
+                      <div style="display: flex; gap: 3px;">
+                        ${[-1, 0, 1, 2, 3].map(
+                          (ev) => html`
+                            <button
+                              style="border: none; cursor: pointer; border-radius: 6px; padding: 2px 6px; font-size: 11px; background: ${threshVal === ev ? "var(--sol-amber-surface)" : "var(--sol-control)"}; color: ${threshVal === ev ? "var(--sol-amber)" : "var(--sol-text-3)"};"
+                              @click=${() =>
+                                this.pushRoom(room.subentry_id, "threshold_stops", ev, true)}
+                            >
+                              ${ev > 0 ? `+${ev}` : ev}
+                            </button>
+                          `
+                        )}
+                      </div>
+                    </div>
+                    <span class="readout tab-num">
+                      ${stopLabel(threshVal)} (${effLux} lx)
+                    </span>
+                  </div>
+
+                  <!-- Ambience -->
+                  <div class="bias-row">
+                    <span class="lab">Ambience <sol-help .text=${HELP.ambience}></sol-help></span>
+                    <div style="flex: 1; display: flex; align-items: center; gap: 8px;">
+                      <sol-slider
+                        tone="cyan"
+                        noReset
+                        .value=${ambVal}
+                        .min=${0}
+                        .max=${100}
+                        .step=${1}
+                        @value-changed=${(e: CustomEvent) =>
+                          this.pushRoom(
+                            room.subentry_id,
+                            "ambience_level",
+                            e.detail.value,
+                            e.detail.final
+                          )}
+                      ></sol-slider>
+                      <div style="display: flex; gap: 3px;">
+                        ${[
+                          { label: "House", lvl: 0 },
+                          { label: "1%", lvl: 3 },
+                          { label: "5%", lvl: 13 },
+                          { label: "10%", lvl: 25 },
+                          { label: "20%", lvl: 51 },
+                        ].map(
+                          (p) => html`
+                            <button
+                              style="border: none; cursor: pointer; border-radius: 6px; padding: 2px 6px; font-size: 11px; background: ${ambVal === p.lvl ? "var(--sol-cyan-tint)" : "var(--sol-control)"}; color: ${ambVal === p.lvl ? "var(--sol-cyan)" : "var(--sol-text-3)"};"
+                              @click=${() =>
+                                this.pushRoom(room.subentry_id, "ambience_level", p.lvl, true)}
+                            >
+                              ${p.label}
+                            </button>
+                          `
+                        )}
+                      </div>
+                    </div>
+                    <span class="readout tab-num">
+                      ${ambVal === 0 ? "Follows house" : `${lightPct(ambVal, gamma)}% (${ambVal} lvl)`}
+                    </span>
+                  </div>
+
+                  <!-- Occupied Min & Max -->
+                  <div class="bias-row">
+                    <span class="lab">
+                      Occupied min <sol-help .text=${HELP.occupiedMin}></sol-help>
+                    </span>
+                    <div style="flex: 1; display: flex; align-items: center; gap: 8px;">
+                      <sol-slider
+                        tone="amber"
+                        noReset
+                        .value=${occMinVal}
+                        .min=${0}
+                        .max=${254}
+                        .step=${1}
+                        @value-changed=${(e: CustomEvent) =>
+                          this.pushRoom(
+                            room.subentry_id,
+                            "occupied_min",
+                            Math.round(e.detail.value),
+                            e.detail.final
+                          )}
+                      ></sol-slider>
+                    </div>
+                    <span class="readout tab-num">
+                      ${occMinVal === 0 ? "Follows curve" : `${occMinVal} lvl`}
+                    </span>
+                  </div>
+
+                  <div class="bias-row">
+                    <span class="lab">
+                      Occupied max <sol-help .text=${HELP.occupiedMax}></sol-help>
+                    </span>
+                    <div style="flex: 1; display: flex; align-items: center; gap: 8px;">
+                      <sol-slider
+                        tone="amber"
+                        noReset
+                        .value=${occMaxVal}
+                        .min=${0}
+                        .max=${254}
+                        .step=${1}
+                        @value-changed=${(e: CustomEvent) =>
+                          this.pushRoom(
+                            room.subentry_id,
+                            "occupied_max",
+                            Math.round(e.detail.value),
+                            e.detail.final
+                          )}
+                      ></sol-slider>
+                    </div>
+                    <span class="readout tab-num">${occMaxVal} lvl</span>
+                  </div>
+
+                  ${room.zones && room.zones.length > 1
+                    ? html`<div class="bias-row">
+                        <span class="lab">
+                          Zone bias <sol-help .text=${HELP.zoneBias}></sol-help>
+                        </span>
+                        <sol-slider
+                          .value=${zone}
+                          .min=${-1}
+                          .max=${1}
+                          .step=${0.1}
+                          @value-changed=${(e: CustomEvent) =>
+                            this.pushRoom(
+                              room.subentry_id,
+                              "zone_bias_stops",
+                              e.detail.value,
+                              e.detail.final
+                            )}
+                        ></sol-slider>
+                        <span class="readout tab-num">${stopLabel(zone)}</span>
+                      </div>`
+                    : nothing}
+
+                  ${room.has_near && !room.zones.some((z) => z.presence.length)
+                    ? html`<div class="bias-row">
+                        <span class="lab">
+                          Diminish <sol-help .text=${HELP.diminish}></sol-help>
+                        </span>
+                        <span class="pill ${room.near_clear ? "off" : "on"}"
+                          >near ${room.near_clear ? "clear" : "occupied"}</span
+                        >
+                        <span class="grow"></span>
+                        <sol-number
+                          .value=${Number(room.settings.diminish_pct ?? 0)}
+                          .min=${0}
+                          .max=${100}
+                          suffix="% when clear"
+                          .width=${52}
+                          @value-changed=${(e: CustomEvent) =>
+                            this.pushRoom(room.subentry_id, "diminish_pct", e.detail.value)}
+                        ></sol-number>
+                      </div>`
+                    : nothing}
+
+                  <div class="lights">
+                    <div class="lhead">
+                      <span class="eyebrow">Fixture</span>
+                      <span class="eyebrow">
+                        Bias <sol-help .text=${HELP.perLight}></sol-help>
+                      </span>
+                      <span class="eyebrow">
+                        Cut <sol-help flip .text=${HELP.cut}></sol-help>
+                      </span>
+                      <span class="eyebrow">
+                        Max <sol-help flip .text=${HELP.max}></sol-help>
+                      </span>
+                    </div>
+                    ${this.renderGrouped(room)}
+                  </div>
+
+                  <div class="footer">
+                    <span class="grow"></span>
+                    <span class="lab">
+                      <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+                        <input
+                          type="checkbox"
+                          .checked=${Boolean(room.settings.night_off)}
+                          @change=${(e: Event) =>
+                            this.pushRoom(
+                              room.subentry_id,
+                              "night_off",
+                              (e.target as HTMLInputElement).checked
+                            )}
+                        />
+                        Off when asleep
+                      </label>
+                      <sol-help flip .text=${HELP.nightOff}></sol-help>
+                    </span>
+                  </div>
+                </div>
+              `
+            : nothing}
+        </div>
       </div>
-    </div>`;
+    `;
   }
 
   render() {
+    const ordered = this.orderedRooms();
+    const ids = ordered.map((r) => r.subentry_id);
     return html`
       ${this.renderStrip()} ${this.renderHouseBias()}
-      <div class="grid">${this.snap.rooms.map((r) => this.renderRoom(r))}</div>
+      <div class="grid">${ordered.map((r, i) => this.renderRoom(r, i, ids))}</div>
     `;
   }
 }

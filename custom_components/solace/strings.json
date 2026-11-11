@@ -39,6 +39,7 @@
             "presence": "Presence sensor",
             "near_presence": "Near sub-zone sensor (kitchen only)",
             "bias_stops": "Room bias",
+            "threshold_stops": "Threshold offset",
             "zone_bias_stops": "Zone bias",
             "diminish_pct": "Diminish when the near sub-zone is clear",
             "manual_hold_minutes": "Manual hold after a touch"

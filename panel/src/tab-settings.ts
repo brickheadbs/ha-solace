@@ -1,60 +1,21 @@
 /**
- * Settings & Modes Tab — Bedroom Special Modes (Sleep, Virtual Sunrise & Sunset Spline Curves),
- * Housewide Night Mode, and 8-path Transitions Matrix.
+ * Modes & Gate Sub-Tab (under Engine) — Work Mode, Guest Mode, Ambience Gate,
+ * Daytime Cutoffs / Astronomical Fallback Clocks (HH:MM), and 8-path Transitions Matrix.
  */
 
-import { LitElement, css, html, nothing, svg } from "lit";
-import { property, state } from "lit/decorators.js";
+import { LitElement, css, html, nothing } from "lit";
+import { property } from "lit/decorators.js";
 import { customElement } from "./custom-element";
 import type { Hass, Snapshot } from "./api";
-import { setHouse, setRoom, setSunriseCurve, setSunsetCurve, toggleSleep, toggleWorkMode, toggleGuestMode } from "./api";
-import { MonotoneSpline } from "./spline";
+import { setHouse, toggleGuestMode, toggleWorkMode } from "./api";
+import { clock, parseClock } from "./fmt";
 import { tokens } from "./tokens";
 import "./ui";
-
-interface NodeDef {
-  x: number; // 0..100 (%)
-  y: number; // 0..254 (level)
-}
-
-const DEF_SUNRISE: NodeDef[] = [
-  { x: 0, y: 0 },
-  { x: 30, y: 15 },
-  { x: 70, y: 90 },
-  { x: 100, y: 180 },
-];
-
-const DEF_SUNSET: NodeDef[] = [
-  { x: 0, y: 180 },
-  { x: 30, y: 120 },
-  { x: 70, y: 40 },
-  { x: 100, y: 3 },
-];
-
-const X0 = 48;
-const X1 = 762;
-const Y0 = 14;
-const Y1 = 206;
-const VW = 780;
-const VH = 230;
 
 @customElement("sol-tab-settings")
 export class SolTabSettings extends LitElement {
   @property({ attribute: false }) hass!: Hass;
   @property({ attribute: false }) snap!: Snapshot;
-
-  // Local editable curves for responsive dragging
-  @state() private localSunrise: NodeDef[] | null = null;
-  @state() private localSunset: NodeDef[] | null = null;
-
-  @state() private selSunriseIdx: number | null = null;
-  @state() private selSunsetIdx: number | null = null;
-
-  @state() private hoverSunrise: { x: number; y: number } | null = null;
-  @state() private hoverSunset: { x: number; y: number } | null = null;
-
-  private _drag: { type: "sunrise" | "sunset"; idx: number } | null = null;
-  private _debounceTimer?: number;
 
   static styles = [
     tokens,
@@ -91,11 +52,6 @@ export class SolTabSettings extends LitElement {
       }
       .spacer {
         flex: 1;
-      }
-      .bed-grid {
-        display: flex;
-        flex-direction: column;
-        gap: 16px;
       }
       .modes-row {
         display: grid;
@@ -140,19 +96,14 @@ export class SolTabSettings extends LitElement {
         border-radius: 6px;
         font-size: 12px;
         color: var(--sol-text-3);
-        transition: all 0.2s ease;
       }
       .trigger-item.active {
         background: rgba(255, 183, 77, 0.16);
         border-color: rgba(255, 183, 77, 0.35);
         color: #ffb74d;
       }
-      .trigger-item.active ha-icon {
-        color: #ffb74d;
-      }
       .trigger-item ha-icon {
         --mdc-icon-size: 16px;
-        color: var(--sol-text-4);
       }
       .manual-sleep-btn {
         display: inline-flex;
@@ -167,32 +118,16 @@ export class SolTabSettings extends LitElement {
         font-size: 12px;
         font-weight: 500;
         cursor: pointer;
-        transition: all 0.15s ease;
         margin-left: auto;
-      }
-      .manual-sleep-btn:hover {
-        background: var(--sol-card-high);
-        color: var(--sol-text);
-      }
-      .manual-sleep-btn.active {
-        background: rgba(255, 183, 77, 0.22);
-        border-color: #ffb74d;
-        color: #ffb74d;
-      }
-      .manual-sleep-btn.active ha-icon {
-        color: #ffb74d;
       }
       .manual-sleep-btn.active-work {
         background: rgba(33, 150, 243, 0.22);
         border-color: #64b5f6;
         color: #64b5f6;
       }
-      .manual-sleep-btn.active-work ha-icon {
-        color: #64b5f6;
-      }
       .sleep-inputs-grid {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
         gap: 12px 18px;
         margin-top: auto;
         padding-top: 10px;
@@ -212,7 +147,6 @@ export class SolTabSettings extends LitElement {
         display: inline-block;
         padding: 3px 8px;
         border-radius: 5px;
-        font-family: inherit;
         font-size: 11px;
         font-weight: 500;
       }
@@ -228,127 +162,25 @@ export class SolTabSettings extends LitElement {
         background: rgba(255, 255, 255, 0.06);
         color: var(--sol-text-3);
       }
-      .toggle-btn {
-        border: none;
-        cursor: pointer;
-        border-radius: 12px;
-        padding: 4px 11px;
-        font-family: inherit;
-        font-size: 11.5px;
-        font-weight: 500;
-        transition: background 0.15s;
-      }
-      .toggle-on {
-        background: #3b4a52;
-        color: var(--sol-blue);
-      }
-      .toggle-off {
-        background: var(--sol-card);
-        color: var(--sol-text-3);
-      }
-      .num-input {
+      .num-input,
+      .time-input {
         box-sizing: border-box;
         background: var(--sol-card);
-        border: 1px solid rgba(255, 255, 255, 0.1);
+        border: 1px solid rgba(255, 255, 255, 0.12);
         border-radius: 6px;
         padding: 5px 8px;
         font-family: inherit;
         font-size: 12.5px;
         color: var(--sol-text);
+        outline: none;
+      }
+      .num-input {
         text-align: right;
-        outline: none;
       }
-      .num-input:focus {
-        border-color: var(--sol-blue);
+      .time-input {
+        color: var(--sol-cyan);
+        font-weight: 600;
       }
-      .curve-ctrl-bar {
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        flex-wrap: wrap;
-        margin: 6px 0 10px;
-        padding: 8px 12px;
-        background: rgba(0, 0, 0, 0.2);
-        border-radius: 8px;
-      }
-      .curve-metric {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        font-size: 12px;
-        color: var(--sol-text-2);
-      }
-      .curve-metric strong {
-        color: var(--sol-text);
-      }
-      .btn-reset {
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        background: var(--sol-card);
-        color: var(--sol-text-3);
-        border-radius: 6px;
-        padding: 3px 8px;
-        font-family: inherit;
-        font-size: 11px;
-        font-weight: 500;
-        cursor: pointer;
-        transition: all 0.15s ease;
-      }
-      .btn-reset:hover {
-        background: var(--sol-card-high);
-        color: var(--sol-text);
-      }
-      .svg-wrap {
-        position: relative;
-        width: 100%;
-        background: var(--sol-card);
-        border-radius: 8px;
-        overflow: hidden;
-        border: 1px solid rgba(255, 255, 255, 0.05);
-        user-select: none;
-      }
-      svg {
-        display: block;
-        width: 100%;
-        height: auto;
-      }
-      .node-editor {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        background: rgba(0, 0, 0, 0.3);
-        border-radius: 8px;
-        padding: 5px 10px;
-        margin-top: 8px;
-      }
-      .node-editor input {
-        width: 60px;
-        box-sizing: border-box;
-        background: var(--sol-card);
-        border: 1px solid rgba(255, 183, 77, 0.35);
-        border-radius: 5px;
-        padding: 3px 5px;
-        text-align: center;
-        font-size: 11.5px;
-        color: var(--sol-text);
-        outline: none;
-      }
-      .btn-node-del {
-        border: 1px solid rgba(239, 83, 80, 0.3);
-        background: rgba(239, 83, 80, 0.1);
-        color: #ef5350;
-        border-radius: 5px;
-        padding: 3px 8px;
-        font-family: inherit;
-        font-size: 11px;
-        font-weight: 500;
-        cursor: pointer;
-        margin-left: auto;
-      }
-      .btn-node-del:hover {
-        background: rgba(239, 83, 80, 0.25);
-      }
-
-      /* Transitions Matrix styling */
       .trans-grp {
         background: var(--sol-control);
         border-radius: 8px;
@@ -367,20 +199,10 @@ export class SolTabSettings extends LitElement {
         align-items: center;
         gap: 8px;
         margin-bottom: 7px;
-        cursor: help;
-        transition: opacity 0.15s ease;
-      }
-      .trans-row:hover .trans-lbl {
-        color: var(--sol-text);
-      }
-      .trans-row:hover .trans-path {
-        color: var(--sol-blue);
-        background: rgba(86, 182, 194, 0.15);
       }
       .trans-lbl {
         font-size: 12.5px;
         color: var(--sol-text-2);
-        min-width: 0;
         white-space: nowrap;
         display: flex;
         align-items: center;
@@ -399,948 +221,166 @@ export class SolTabSettings extends LitElement {
         border-radius: 4px;
         font-variant-numeric: tabular-nums;
         white-space: nowrap;
-        transition: all 0.15s ease;
       }
     `,
   ];
 
-  connectedCallback() {
-    super.connectedCallback();
-    window.addEventListener("mousemove", this._onWindowMouseMove);
-    window.addEventListener("mouseup", this._onWindowMouseUp);
-  }
-
-  disconnectedCallback() {
-    super.disconnectedCallback();
-    window.removeEventListener("mousemove", this._onWindowMouseMove);
-    window.removeEventListener("mouseup", this._onWindowMouseUp);
-  }
-
-  private findBedroom() {
-    return this.snap?.rooms?.find(
-      (r) => r.name.toLowerCase().includes("bed") || r.subentry_id.includes("bedroom")
-    );
-  }
-
-  // --- Node Retrieval & Coordinate Transforms ---------------------------------
-
-  private getSunriseNodes(): NodeDef[] {
-    if (this.localSunrise) return this.localSunrise;
-    if (this.snap?.sunrise_curve?.length) {
-      return this.snap.sunrise_curve.map((p) => ({ x: p.progress, y: p.level }));
-    }
-    return DEF_SUNRISE;
-  }
-
-  private getSunsetNodes(): NodeDef[] {
-    if (this.localSunset) return this.localSunset;
-    if (this.snap?.sunset_curve?.length) {
-      return this.snap.sunset_curve.map((p) => ({ x: p.progress, y: p.level }));
-    }
-    return DEF_SUNSET;
-  }
-
-  private toSvgX(pct: number): number {
-    return X0 + (Math.max(0, Math.min(100, pct)) / 100.0) * (X1 - X0);
-  }
-
-  private fromSvgX(px: number): number {
-    return Math.max(0, Math.min(100, ((px - X0) / (X1 - X0)) * 100.0));
-  }
-
-  private toSvgY(lvl: number): number {
-    return Y1 - (Math.max(0, Math.min(254, lvl)) / 254.0) * (Y1 - Y0);
-  }
-
-  private fromSvgY(py: number): number {
-    return Math.max(0, Math.min(254, Math.round(((Y1 - py) / (Y1 - Y0)) * 254.0)));
-  }
-
-  // --- Spline Path Generation -------------------------------------------------
-
-  private buildPath(nodes: NodeDef[]): string {
-    if (!nodes.length) return "";
-    const spline = new MonotoneSpline(nodes);
-    const steps = 100;
-    let d = "";
-    for (let i = 0; i <= steps; i++) {
-      const pct = (i / steps) * 100.0;
-      const lvl = Math.max(0, Math.min(254, spline.evaluate(pct)));
-      const px = this.toSvgX(pct);
-      const py = this.toSvgY(lvl);
-      d += i === 0 ? `M ${px.toFixed(1)} ${py.toFixed(1)}` : ` L ${px.toFixed(1)} ${py.toFixed(1)}`;
-    }
-    return d;
-  }
-
-  private buildArea(nodes: NodeDef[]): string {
-    const linePath = this.buildPath(nodes);
-    if (!linePath) return "";
-    return `${linePath} L ${X1} ${Y1} L ${X0} ${Y1} Z`;
-  }
-
-  // --- Interaction & Saving ---------------------------------------------------
-
-  private _onWindowMouseMove = (e: MouseEvent) => {
-    if (!this._drag) return;
-    const svgEl = this.shadowRoot?.getElementById(`svg-${this._drag.type}`);
-    if (!svgEl) return;
-    const rect = svgEl.getBoundingClientRect();
-    const scaleX = VW / rect.width;
-    const scaleY = VH / rect.height;
-    const px = (e.clientX - rect.left) * scaleX;
-    const py = (e.clientY - rect.top) * scaleY;
-
-    const newX = Math.round(this.fromSvgX(px) * 10) / 10;
-    const newY = this.fromSvgY(py);
-
-    if (this._drag.type === "sunrise") {
-      const nodes = [...this.getSunriseNodes()];
-      const idx = this._drag.idx;
-      // Anchor endpoints at 0% and 100%
-      const boundedX = idx === 0 ? 0 : idx === nodes.length - 1 ? 100 : Math.max(1, Math.min(99, newX));
-      nodes[idx] = { x: boundedX, y: newY };
-      this.localSunrise = nodes;
-      this.debounceSaveSunrise();
-    } else {
-      const nodes = [...this.getSunsetNodes()];
-      const idx = this._drag.idx;
-      const boundedX = idx === 0 ? 0 : idx === nodes.length - 1 ? 100 : Math.max(1, Math.min(99, newX));
-      nodes[idx] = { x: boundedX, y: newY };
-      this.localSunset = nodes;
-      this.debounceSaveSunset();
-    }
-  };
-
-  private _onWindowMouseUp = () => {
-    if (this._drag) {
-      this._drag = null;
-    }
-  };
-
-  private handleSvgClick(type: "sunrise" | "sunset", e: MouseEvent) {
-    const svgEl = this.shadowRoot?.getElementById(`svg-${type}`);
-    if (!svgEl) return;
-    const rect = svgEl.getBoundingClientRect();
-    const scaleX = VW / rect.width;
-    const scaleY = VH / rect.height;
-    const px = (e.clientX - rect.left) * scaleX;
-    const py = (e.clientY - rect.top) * scaleY;
-
-    if (px < X0 || px > X1 || py < Y0 || py > Y1) return;
-
-    const clickX = Math.round(this.fromSvgX(px));
-    const clickY = this.fromSvgY(py);
-
-    if (type === "sunrise") {
-      const nodes = [...this.getSunriseNodes()];
-      // Check if near existing node
-      const nearIdx = nodes.findIndex((n) => Math.hypot(this.toSvgX(n.x) - px, this.toSvgY(n.y) - py) < 14);
-      if (nearIdx !== -1) {
-        this.selSunriseIdx = nearIdx;
-        return;
-      }
-      // Add node
-      nodes.push({ x: clickX, y: clickY });
-      nodes.sort((a, b) => a.x - b.x);
-      this.localSunrise = nodes;
-      this.selSunriseIdx = nodes.findIndex((n) => n.x === clickX);
-      this.debounceSaveSunrise();
-    } else {
-      const nodes = [...this.getSunsetNodes()];
-      const nearIdx = nodes.findIndex((n) => Math.hypot(this.toSvgX(n.x) - px, this.toSvgY(n.y) - py) < 14);
-      if (nearIdx !== -1) {
-        this.selSunsetIdx = nearIdx;
-        return;
-      }
-      nodes.push({ x: clickX, y: clickY });
-      nodes.sort((a, b) => a.x - b.x);
-      this.localSunset = nodes;
-      this.selSunsetIdx = nodes.findIndex((n) => n.x === clickX);
-      this.debounceSaveSunset();
-    }
-  }
-
-  private debounceSaveSunrise() {
-    window.clearTimeout(this._debounceTimer);
-    this._debounceTimer = window.setTimeout(() => {
-      if (this.localSunrise) {
-        setSunriseCurve(
-          this.hass,
-          this.localSunrise.map((n) => ({ progress: n.x, level: n.y }))
-        );
-      }
-    }, 250);
-  }
-
-  private debounceSaveSunset() {
-    window.clearTimeout(this._debounceTimer);
-    this._debounceTimer = window.setTimeout(() => {
-      if (this.localSunset) {
-        setSunsetCurve(
-          this.hass,
-          this.localSunset.map((n) => ({ progress: n.x, level: n.y }))
-        );
-      }
-    }, 250);
-  }
-
-  private resetSunrise() {
-    this.localSunrise = DEF_SUNRISE;
-    this.selSunriseIdx = null;
-    setSunriseCurve(
-      this.hass,
-      DEF_SUNRISE.map((n) => ({ progress: n.x, level: n.y }))
-    );
-  }
-
-  private resetSunset() {
-    this.localSunset = DEF_SUNSET;
-    this.selSunsetIdx = null;
-    setSunsetCurve(
-      this.hass,
-      DEF_SUNSET.map((n) => ({ progress: n.x, level: n.y }))
-    );
-  }
-
-  private deleteSunriseNode(idx: number) {
-    const nodes = this.getSunriseNodes().filter((_, i) => i !== idx);
-    if (nodes.length < 2) return;
-    this.localSunrise = nodes;
-    this.selSunriseIdx = null;
-    this.debounceSaveSunrise();
-  }
-
-  private deleteSunsetNode(idx: number) {
-    const nodes = this.getSunsetNodes().filter((_, i) => i !== idx);
-    if (nodes.length < 2) return;
-    this.localSunset = nodes;
-    this.selSunsetIdx = null;
-    this.debounceSaveSunset();
-  }
-
-  // --- Render -----------------------------------------------------------------
-
   render() {
     const house = this.snap?.house ?? {};
-    const bed = this.findBedroom();
-    const bedSettings = bed?.settings ?? {};
-
     const world = this.snap?.world;
-    const sleepActive = !!world?.asleep;
     const workActive =
       this.hass.states["input_boolean.work_mode"]?.state === "on" || !!world?.work_mode;
     const guestActive =
       this.hass.states["input_boolean.living_guest_mode"]?.state === "on" || !!world?.guest_mode;
-    const phoneActive = !!world?.phone_dnd;
-    const watchActive = !!world?.watch_bedtime;
-    const manualActive = !!world?.manual_sleep;
-
-    const riseActive = !!bedSettings.sunrise_enabled;
-    const setActive = !!bedSettings.sunset_enabled;
-
-    const currentDemandLevel = Math.round(((world?.demand ?? 1.0) as number) * 254);
-    const demandSvgY = this.toSvgY(currentDemandLevel);
-
-    const sunriseNodes = this.getSunriseNodes();
-    const sunsetNodes = this.getSunsetNodes();
-
-    const riseProgress = world?.sunrise_progress ?? null;
-    const setProgress = world?.sunset_progress ?? null;
-
-    // The gate is house-wide in practice (one lux sensor, one pair of thresholds), so any
-    // room's resolved state answers for all of them. Read it rather than recomputing from
-    // lux — the coordinator's value carries the hysteresis and debounce this cannot see.
     const gateOpen = !!this.snap?.rooms?.some((r) => r.ambience_open);
     const gateInverted =
       (house.ambience_start_lux ?? 50) > (house.ambience_stop_lux ?? 80);
 
     return html`
       <div class="grid">
-        <!-- 1. Special Modes (Work & Bedroom Special Modes) -->
+        <!-- 1. Special Room Modes -->
         <div class="card full-col">
           <div class="head">
             <ha-icon icon="mdi:tune" style="color: var(--sol-blue);"></ha-icon>
-            <div class="title">Special modes</div>
-            <sol-help text="Targeted room overrides that decouple from circadian curves under specific triggers: Work Mode (manual desk presets with debounce), Sleep Mode (forces dark across daytime naps and summer dawns), Virtual Sunrise (gradual alarm dawn), and Virtual Sunset (bedtime wind-down)."></sol-help>
+            <div class="title">Special Room Modes (Work &amp; Guest)</div>
           </div>
-          <div class="bed-grid">
-            <div class="modes-row">
-              <!-- Mode: Work Mode (Left) -->
-              <div class="bed-card">
-                <div class="bed-head">
-                  <ha-icon icon="mdi:desk-lamp" style="color: var(--sol-blue);"></ha-icon>
-                  <div class="bed-title">Work mode</div>
-                  <sol-help text="Overrides office zone lights with manual work brightness levels while occupied (with 5-min off-debounce). Resets automatically overnight."></sol-help>
-                  <div class="spacer"></div>
-                  <div class="badge ${workActive ? "badge-blue" : "badge-dim"}">
-                    ${workActive ? "Working (Active)" : "Standby (Normal)"}
-                  </div>
-                </div>
-
-                <!-- Triggers Status Bar -->
-                <div class="triggers-bar">
-                  <div class="trigger-item ${workActive ? "active" : ""}">
-                    <ha-icon icon="mdi:gesture-tap-hold"></ha-icon>
-                    <span>Sonoff Button: <strong>Hold to toggle</strong></span>
-                  </div>
-                  <button
-                    class="manual-sleep-btn ${workActive ? "active-work" : ""}"
-                    @click="${() => toggleWorkMode(this.hass)}"
-                    title="Toggle work mode helper"
-                  >
-                    <ha-icon icon="mdi:desk-lamp"></ha-icon>
-                    <span>Manual Switch: <strong>${workActive ? "ON" : "OFF"}</strong></span>
-                  </button>
-                </div>
-
-                <!-- Office Zone Lights & Debounce -->
-                <div class="sleep-inputs-grid">
-                  <div>
-                    <div style="display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--sol-text-2); margin-bottom: 4px;">
-                      <ha-icon icon="mdi:lamp" style="--mdc-icon-size: 14px; color: var(--sol-amber);"></ha-icon>
-                      Desk lamp brightness
-                      <sol-help text="Preset brightness level (0–254) written to light.office_desk_lamp when Work Mode is active and office presence is detected."></sol-help>
-                    </div>
-                    <div class="input-with-unit">
-                      <input
-                        type="number"
-                        class="num-input"
-                        style="flex: 1;"
-                        min="0"
-                        max="254"
-                        .value="${String(house.work_mode_desk_level ?? 254)}"
-                        @change="${(e: Event) => {
-                          const v = parseFloat((e.target as HTMLInputElement).value);
-                          setHouse(this.hass, { work_mode_desk_level: v });
-                        }}"
-                      />
-                      <span class="unit-label">/254</span>
-                    </div>
-                  </div>
-
-                  <div>
-                    <div style="display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--sol-text-2); margin-bottom: 4px;">
-                      <ha-icon icon="mdi:lightbulb-outline" style="--mdc-icon-size: 14px; color: var(--sol-amber);"></ha-icon>
-                      Backlight brightness
-                      <sol-help text="Preset brightness level (0–254) written to light.office_desk_backlight when Work Mode is active and office presence is detected."></sol-help>
-                    </div>
-                    <div class="input-with-unit">
-                      <input
-                        type="number"
-                        class="num-input"
-                        style="flex: 1;"
-                        min="0"
-                        max="254"
-                        .value="${String(house.work_mode_backlight_level ?? 200)}"
-                        @change="${(e: Event) => {
-                          const v = parseFloat((e.target as HTMLInputElement).value);
-                          setHouse(this.hass, { work_mode_backlight_level: v });
-                        }}"
-                      />
-                      <span class="unit-label">/254</span>
-                    </div>
-                  </div>
-
-                  <div>
-                    <div style="display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--sol-text-2); margin-bottom: 4px;">
-                      <ha-icon icon="mdi:lightbulb" style="--mdc-icon-size: 14px; color: var(--sol-amber);"></ha-icon>
-                      Corner brightness
-                      <sol-help text="Preset brightness level (0–254) written to light.office_desk_corner when Work Mode is active and office presence is detected."></sol-help>
-                    </div>
-                    <div class="input-with-unit">
-                      <input
-                        type="number"
-                        class="num-input"
-                        style="flex: 1;"
-                        min="0"
-                        max="254"
-                        .value="${String(house.work_mode_corner_level ?? 180)}"
-                        @change="${(e: Event) => {
-                          const v = parseFloat((e.target as HTMLInputElement).value);
-                          setHouse(this.hass, { work_mode_corner_level: v });
-                        }}"
-                      />
-                      <span class="unit-label">/254</span>
-                    </div>
-                  </div>
-
-                  <div>
-                    <div style="display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--sol-text-2); margin-bottom: 4px;">
-                      <ha-icon icon="mdi:timer-sand" style="--mdc-icon-size: 14px; color: var(--sol-amber);"></ha-icon>
-                      Occupancy debounce
-                      <sol-help text="Grace period in minutes before turning office work lights off when room occupancy clears. Prevents lights shutting off during brief departures (e.g. grabbing coffee)."></sol-help>
-                    </div>
-                    <div class="input-with-unit">
-                      <input
-                        type="number"
-                        class="num-input"
-                        style="flex: 1;"
-                        min="0.5"
-                        max="60"
-                        step="0.5"
-                        .value="${String(house.work_mode_debounce_minutes ?? 5)}"
-                        @change="${(e: Event) => {
-                          const v = parseFloat((e.target as HTMLInputElement).value);
-                          setHouse(this.hass, { work_mode_debounce_minutes: v });
-                        }}"
-                      />
-                      <span class="unit-label">min</span>
-                    </div>
-                  </div>
+          <div class="modes-row">
+            <!-- Work Mode -->
+            <div class="bed-card">
+              <div class="bed-head">
+                <ha-icon icon="mdi:desk-lamp" style="color: var(--sol-blue);"></ha-icon>
+                <div class="bed-title">Work mode (Living Office)</div>
+                <div class="spacer"></div>
+                <div class="badge ${workActive ? "badge-blue" : "badge-dim"}">
+                  ${workActive ? "Working (Active)" : "Standby"}
                 </div>
               </div>
 
-              <!-- Mode: Guest Mode (Living room) -->
-              <div class="bed-card">
-                <div class="bed-head">
-                  <ha-icon icon="mdi:account-star" style="color: var(--sol-cyan);"></ha-icon>
-                  <div class="bed-title">Guest mode · Living room</div>
-                  <sol-help text="Treats the living room as a guest bedroom. Suppresses motion turn-on during sleep mode so overnight movement does not trigger lights. The guest controls room lights and bias directly using the Living Office Styrbar remote."></sol-help>
-                  <div class="spacer"></div>
-                  <div class="badge ${guestActive ? "badge-blue" : "badge-dim"}">
-                    ${guestActive ? "Guest Staying (Active)" : "Standby (Normal)"}
-                  </div>
+              <div class="triggers-bar">
+                <div class="trigger-item ${workActive ? "active" : ""}">
+                  <ha-icon icon="mdi:gesture-tap-hold"></ha-icon>
+                  <span>Sonoff Button: <strong>Hold to toggle</strong></span>
                 </div>
-
-                <!-- Triggers Status Bar -->
-                <div class="triggers-bar">
-                  <div class="trigger-item ${guestActive ? "active" : ""}">
-                    <ha-icon icon="mdi:remote"></ha-icon>
-                    <span>Styrbar: <strong>Office Control</strong></span>
-                  </div>
-                  <button
-                    class="manual-sleep-btn ${guestActive ? "active-work" : ""}"
-                    @click="${() => toggleGuestMode(this.hass)}"
-                    title="Toggle living room guest mode helper"
-                  >
-                    <ha-icon icon="mdi:account-star"></ha-icon>
-                    <span>Guest Mode: <strong>${guestActive ? "ON" : "OFF"}</strong></span>
-                  </button>
-                </div>
-
-                <!-- Remote Controls Summary -->
-                <div class="sleep-inputs-grid" style="grid-template-columns: 1fr;">
-                  <div style="font-size: 12px; color: var(--sol-text-2); line-height: 1.6; padding: 4px 2px;">
-                    <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 5px;">
-                      <ha-icon icon="mdi:arrow-up-down" style="--mdc-icon-size: 16px; color: var(--sol-cyan);"></ha-icon>
-                      <span><strong>Up / Down:</strong> Nudge room brightness bias (±0.5 stops)</span>
-                    </div>
-                    <div style="display: flex; align-items: center; gap: 6px;">
-                      <ha-icon icon="mdi:gesture-tap-hold" style="--mdc-icon-size: 16px; color: var(--sol-amber);"></ha-icon>
-                      <span><strong>Hold Up / Hold Down:</strong> Turn ON / Turn OFF room lights</span>
-                    </div>
-                  </div>
-                </div>
+                <button
+                  class="manual-sleep-btn ${workActive ? "active-work" : ""}"
+                  @click=${() => toggleWorkMode(this.hass)}
+                >
+                  <ha-icon icon="mdi:desk-lamp"></ha-icon>
+                  <span>Work Mode: <strong>${workActive ? "ON" : "OFF"}</strong></span>
+                </button>
               </div>
 
-              <!-- Mode 1: Sleep (Right) -->
-              <div class="bed-card">
-                <div class="bed-head">
-                  <ha-icon icon="mdi:weather-night" style="color: var(--sol-amber);"></ha-icon>
-                  <div class="bed-title">1 · Sleep mode</div>
-                  <sol-help text="Forces bedroom lights dark (0) across 04:30 summer dawns and daytime naps. Triggered by Phone DND, Watch Bedtime, or manual switch. Automatically unlatches when Virtual Sunrise begins or when outdoor daylight crosses the dawn release threshold."></sol-help>
-                  <div class="spacer"></div>
-                  <div class="badge ${sleepActive ? "badge-amber" : "badge-dim"}">
-                    ${sleepActive ? "Asleep (Night active)" : "Awake (Standby)"}
+              <div class="sleep-inputs-grid">
+                <div>
+                  <div style="font-size: 11.5px; color: var(--sol-text-2); margin-bottom: 4px;">Desk lamp</div>
+                  <div class="input-with-unit">
+                    <input
+                      type="number"
+                      class="num-input"
+                      style="flex: 1;"
+                      min="0"
+                      max="254"
+                      .value=${String(house.work_mode_desk_level ?? 254)}
+                      @change=${(e: Event) =>
+                        setHouse(this.hass, { work_mode_desk_level: parseFloat((e.target as HTMLInputElement).value) })}
+                    />
+                    <span class="unit-label">/254</span>
                   </div>
                 </div>
 
-                <!-- Triggers Status Bar -->
-                <div class="triggers-bar">
-                  <div class="trigger-item ${phoneActive ? "active" : ""}">
-                    <ha-icon icon="mdi:cellphone"></ha-icon>
-                    <span>Phone DND: <strong>${phoneActive ? "Priority Only" : "Off"}</strong></span>
+                <div>
+                  <div style="font-size: 11.5px; color: var(--sol-text-2); margin-bottom: 4px;">Backlight</div>
+                  <div class="input-with-unit">
+                    <input
+                      type="number"
+                      class="num-input"
+                      style="flex: 1;"
+                      min="0"
+                      max="254"
+                      .value=${String(house.work_mode_backlight_level ?? 200)}
+                      @change=${(e: Event) =>
+                        setHouse(this.hass, { work_mode_backlight_level: parseFloat((e.target as HTMLInputElement).value) })}
+                    />
+                    <span class="unit-label">/254</span>
                   </div>
-                  <div class="trigger-item ${watchActive ? "active" : ""}">
-                    <ha-icon icon="mdi:watch-variant"></ha-icon>
-                    <span>Pixel Watch: <strong>${watchActive ? "Bedtime Mode" : "Off"}</strong></span>
-                  </div>
-                  <button
-                    class="manual-sleep-btn ${manualActive ? "active" : ""}"
-                    @click="${() => toggleSleep(this.hass)}"
-                    title="Toggle manual sleep helper"
-                  >
-                    <ha-icon icon="mdi:power-sleep"></ha-icon>
-                    <span>Manual Switch: <strong>${manualActive ? "ON" : "OFF"}</strong></span>
-                  </button>
                 </div>
 
-                <!-- Dawn Release Setting -->
-                <div class="sleep-inputs-grid">
-                  <div>
-                    <div style="display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--sol-text-2); margin-bottom: 4px;">
-                      <ha-icon icon="mdi:weather-sunset-up" style="--mdc-icon-size: 14px; color: var(--sol-amber);"></ha-icon>
-                      Release lux (dawn unlatch)
-                      <sol-help text="Outdoor illuminance in lux at which Sleep Mode automatically unlatches at dawn, allowing normal daytime circadian tracking to resume seamlessly."></sol-help>
-                    </div>
-                    <div class="input-with-unit">
-                      <input
-                        type="number"
-                        class="num-input"
-                        style="flex: 1;"
-                        .value="${String(house.night_release_lux ?? 10)}"
-                        @change="${(e: Event) => {
-                          const v = parseFloat((e.target as HTMLInputElement).value);
-                          setHouse(this.hass, { night_release_lux: v });
-                        }}"
-                      />
-                      <span class="unit-label">lx</span>
-                    </div>
+                <div>
+                  <div style="font-size: 11.5px; color: var(--sol-text-2); margin-bottom: 4px;">Corner</div>
+                  <div class="input-with-unit">
+                    <input
+                      type="number"
+                      class="num-input"
+                      style="flex: 1;"
+                      min="0"
+                      max="254"
+                      .value=${String(house.work_mode_corner_level ?? 180)}
+                      @change=${(e: Event) =>
+                        setHouse(this.hass, { work_mode_corner_level: parseFloat((e.target as HTMLInputElement).value) })}
+                    />
+                    <span class="unit-label">/254</span>
+                  </div>
+                </div>
+
+                <div>
+                  <div style="font-size: 11.5px; color: var(--sol-text-2); margin-bottom: 4px;">Clear debounce</div>
+                  <div class="input-with-unit">
+                    <input
+                      type="number"
+                      class="num-input"
+                      style="flex: 1;"
+                      min="0.5"
+                      max="60"
+                      step="0.5"
+                      .value=${String(house.work_mode_debounce_minutes ?? 5)}
+                      @change=${(e: Event) =>
+                        setHouse(this.hass, { work_mode_debounce_minutes: parseFloat((e.target as HTMLInputElement).value) })}
+                    />
+                    <span class="unit-label">min</span>
                   </div>
                 </div>
               </div>
             </div>
 
-            <!-- Mode 2: Virtual Sunrise Spline Curve -->
+            <!-- Guest Mode -->
             <div class="bed-card">
               <div class="bed-head">
-                <ha-icon icon="mdi:weather-sunset-up" style="color: var(--sol-amber);"></ha-icon>
-                <div class="bed-title">2 · Virtual sunrise curve</div>
-                <sol-help text="Gradual artificial dawn simulated in the bedroom ahead of next scheduled alarm. Evaluated along the custom spline curve over the configured fade duration. Output is dynamically clamped by Master Demand so electric lights never illuminate brighter than natural daylight."></sol-help>
+                <ha-icon icon="mdi:account-star" style="color: var(--sol-cyan);"></ha-icon>
+                <div class="bed-title">Guest mode (Living Office)</div>
                 <div class="spacer"></div>
-                <button class="btn-reset" @click="${() => this.resetSunrise()}">Reset</button>
+                <div class="badge ${guestActive ? "badge-blue" : "badge-dim"}">
+                  ${guestActive ? "Guest Staying" : "Standby"}
+                </div>
+              </div>
+
+              <div class="triggers-bar">
+                <div class="trigger-item ${guestActive ? "active" : ""}">
+                  <ha-icon icon="mdi:remote"></ha-icon>
+                  <span>Styrbar: <strong>Office Control</strong></span>
+                </div>
                 <button
-                  class="toggle-btn ${riseActive ? "toggle-on" : "toggle-off"}"
-                  style="margin-left: 6px;"
-                  @click="${() => {
-                    if (bed) setRoom(this.hass, bed.subentry_id, { sunrise_enabled: !riseActive });
-                  }}"
+                  class="manual-sleep-btn ${guestActive ? "active-work" : ""}"
+                  @click=${() => toggleGuestMode(this.hass)}
                 >
-                  ${riseActive ? "On" : "Off"}
+                  <ha-icon icon="mdi:account-star"></ha-icon>
+                  <span>Guest Mode: <strong>${guestActive ? "ON" : "OFF"}</strong></span>
                 </button>
               </div>
 
-              <!-- Controls & Readouts -->
-              <div class="curve-ctrl-bar">
-                <div class="curve-metric">
-                  <span>Fade duration:</span>
-                  <sol-help text="Total ramp duration in minutes over which bedroom lights fade up along the sunrise spline curve before alarm time."></sol-help>
-                  <div class="input-with-unit">
-                    <input
-                      type="number"
-                      class="num-input"
-                      style="width: 58px;"
-                      .value="${String(house.sunrise_fade_minutes ?? 30)}"
-                      @change="${(e: Event) => {
-                        const v = parseFloat((e.target as HTMLInputElement).value);
-                        setHouse(this.hass, { sunrise_fade_minutes: v });
-                      }}"
-                    />
-                    <span class="unit-label">min</span>
-                  </div>
-                </div>
-                <div class="curve-metric" style="margin-left: auto;">
-                  <span>Demand Ceiling:</span>
-                  <strong style="color: var(--sol-cyan);">${currentDemandLevel} lvl / 254</strong>
-                </div>
-                ${this.hoverSunrise
-                  ? html`
-                      <div class="curve-metric">
-                        <span>Progress: <strong>${this.hoverSunrise.x}%</strong></span>
-                        <span>Level: <strong>${this.hoverSunrise.y} lvl</strong></span>
-                      </div>
-                    `
-                  : nothing}
+              <div style="font-size: 12px; color: var(--sol-text-3); line-height: 1.55; margin-top: 4px;">
+                Suppresses overnight motion turn-on in Living Office while Sleep Mode is active so a
+                sleeping guest is never woken by rolling over. Guest controls room lights directly via
+                the Styrbar remote.
               </div>
-
-              <!-- Interactive SVG Canvas -->
-              <div class="svg-wrap">
-                <svg
-                  id="svg-sunrise"
-                  viewBox="0 0 ${VW} ${VH}"
-                  @click="${(e: MouseEvent) => this.handleSvgClick("sunrise", e)}"
-                  @mousemove="${(e: MouseEvent) => {
-                    const target = e.currentTarget as SVGSVGElement | null;
-                    if (!target) return;
-                    const rect = target.getBoundingClientRect();
-                    const px = (e.clientX - rect.left) * (VW / rect.width);
-                    const py = (e.clientY - rect.top) * (VH / rect.height);
-                    if (px >= X0 && px <= X1 && py >= Y0 && py <= Y1) {
-                      this.hoverSunrise = {
-                        x: Math.round(this.fromSvgX(px)),
-                        y: this.fromSvgY(py),
-                      };
-                    } else {
-                      this.hoverSunrise = null;
-                    }
-                  }}"
-                  @mouseleave="${() => (this.hoverSunrise = null)}"
-                >
-                  <defs>
-                    <linearGradient id="grad-sunrise" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stop-color="#ffb74d" stop-opacity="0.32" />
-                      <stop offset="100%" stop-color="#ffb74d" stop-opacity="0.02" />
-                    </linearGradient>
-                  </defs>
-
-                  <!-- Grid Lines & Labels -->
-                  ${[0, 25, 50, 75, 100].map((pct) => {
-                    const x = this.toSvgX(pct);
-                    return svg`
-                      <line x1="${x}" y1="${Y0}" x2="${x}" y2="${Y1}" stroke="rgba(255,255,255,0.06)" stroke-width="1" />
-                      <text x="${x}" y="${VH - 6}" fill="var(--sol-text-4)" font-size="10" text-anchor="middle">${pct}%</text>
-                    `;
-                  })}
-                  ${[0, 64, 128, 192, 254].map((lvl) => {
-                    const y = this.toSvgY(lvl);
-                    return svg`
-                      <line x1="${X0}" y1="${y}" x2="${X1}" y2="${y}" stroke="rgba(255,255,255,0.06)" stroke-width="1" />
-                      <text x="${X0 - 8}" y="${y + 3}" fill="var(--sol-text-4)" font-size="9.5" text-anchor="end">${lvl}</text>
-                    `;
-                  })}
-
-                  <!-- Master Demand Ceiling Line -->
-                  <line
-                    x1="${X0}"
-                    y1="${demandSvgY}"
-                    x2="${X1}"
-                    y2="${demandSvgY}"
-                    stroke="var(--sol-cyan)"
-                    stroke-width="1.5"
-                    stroke-dasharray="4,4"
-                    opacity="0.75"
-                  />
-                  <text x="${X1 - 4}" y="${demandSvgY - 5}" fill="var(--sol-cyan)" font-size="9" text-anchor="end">Demand Cap</text>
-
-                  <!-- Spline Area & Curve Stroke -->
-                  <path d="${this.buildArea(sunriseNodes)}" fill="url(#grad-sunrise)" />
-                  <path d="${this.buildPath(sunriseNodes)}" fill="none" stroke="#ffb74d" stroke-width="2.5" />
-
-                  <!-- Live Progress Indicator -->
-                  ${riseProgress !== null
-                    ? svg`
-                        <line
-                          x1="${this.toSvgX(riseProgress * 100)}"
-                          y1="${Y0}"
-                          x2="${this.toSvgX(riseProgress * 100)}"
-                          y2="${Y1}"
-                          stroke="#ffffff"
-                          stroke-width="2"
-                        />
-                      `
-                    : nothing}
-
-                  <!-- Interactive Draggable Control Nodes -->
-                  ${sunriseNodes.map((n, i) => {
-                    const cx = this.toSvgX(n.x);
-                    const cy = this.toSvgY(n.y);
-                    const isSelected = this.selSunriseIdx === i;
-                    return svg`
-                      <circle
-                        cx="${cx}"
-                        cy="${cy}"
-                        r="${isSelected ? 7 : 5.5}"
-                        fill="${isSelected ? "#ffffff" : "#ffb74d"}"
-                        stroke="#1a1c1e"
-                        stroke-width="2"
-                        style="cursor: grab;"
-                        @mousedown="${(e: MouseEvent) => {
-                          e.stopPropagation();
-                          this._drag = { type: "sunrise", idx: i };
-                          this.selSunriseIdx = i;
-                        }}"
-                      />
-                    `;
-                  })}
-                </svg>
-              </div>
-
-              <!-- Node Editor Toolbar -->
-              ${this.selSunriseIdx !== null && sunriseNodes[this.selSunriseIdx]
-                ? html`
-                    <div class="node-editor">
-                      <span style="font-size: 11.5px; color: var(--sol-text-3);">Node ${this.selSunriseIdx + 1}</span>
-                      <span style="font-size: 11.5px; color: var(--sol-text-2); margin-left: 10px;">Progress (%)</span>
-                      <input
-                        type="number"
-                        min="0"
-                        max="100"
-                        disabled="${this.selSunriseIdx === 0 || this.selSunriseIdx === sunriseNodes.length - 1}"
-                        .value="${String(sunriseNodes[this.selSunriseIdx].x)}"
-                        @change="${(e: Event) => {
-                          const v = Math.max(0, Math.min(100, parseFloat((e.target as HTMLInputElement).value)));
-                          const nodes = [...sunriseNodes];
-                          nodes[this.selSunriseIdx!] = { ...nodes[this.selSunriseIdx!], x: v };
-                          nodes.sort((a, b) => a.x - b.x);
-                          this.localSunrise = nodes;
-                          this.debounceSaveSunrise();
-                        }}"
-                      />
-                      <span style="font-size: 11.5px; color: var(--sol-text-2); margin-left: 6px;">Level (0-254 lvl)</span>
-                      <input
-                        type="number"
-                        min="0"
-                        max="254"
-                        .value="${String(sunriseNodes[this.selSunriseIdx].y)}"
-                        @change="${(e: Event) => {
-                          const v = Math.max(0, Math.min(254, parseInt((e.target as HTMLInputElement).value, 10)));
-                          const nodes = [...sunriseNodes];
-                          nodes[this.selSunriseIdx!] = { ...nodes[this.selSunriseIdx!], y: v };
-                          this.localSunrise = nodes;
-                          this.debounceSaveSunrise();
-                        }}"
-                      />
-                      ${this.selSunriseIdx > 0 && this.selSunriseIdx < sunriseNodes.length - 1
-                        ? html`
-                            <button class="btn-node-del" @click="${() => this.deleteSunriseNode(this.selSunriseIdx!)}">
-                              Delete node
-                            </button>
-                          `
-                        : nothing}
-                    </div>
-                  `
-                : nothing}
-            </div>
-
-            <!-- Mode 3: Virtual Sunset Spline Curve -->
-            <div class="bed-card">
-              <div class="bed-head">
-                <ha-icon icon="mdi:weather-sunset-down" style="color: var(--sol-amber);"></ha-icon>
-                <div class="bed-title">3 · Virtual sunset curve</div>
-                <sol-help text="Gradual evening bedtime wind-down simulated in the bedroom. Triggers after the configured Window Start hour once continuous bedroom occupancy exceeds the Dwell time. Smoothly fades brightness down along the custom spline curve over Fade Duration to prepare for sleep."></sol-help>
-                <div class="spacer"></div>
-                <button class="btn-reset" @click="${() => this.resetSunset()}">Reset</button>
-                <button
-                  class="toggle-btn ${setActive ? "toggle-on" : "toggle-off"}"
-                  style="margin-left: 6px;"
-                  @click="${() => {
-                    if (bed) setRoom(this.hass, bed.subentry_id, { sunset_enabled: !setActive });
-                  }}"
-                >
-                  ${setActive ? "On" : "Off"}
-                </button>
-              </div>
-
-              <!-- Controls & Readouts -->
-              <div class="curve-ctrl-bar">
-                <div class="curve-metric">
-                  <span>Window start:</span>
-                  <sol-help text="Earliest hour of the evening (24h decimal, e.g. 22.0 = 22:00) when bedtime wind-down evaluation becomes active."></sol-help>
-                  <div class="input-with-unit">
-                    <input
-                      type="number"
-                      step="0.25"
-                      class="num-input"
-                      style="width: 62px;"
-                      .value="${String(house.bedtime_dwell_hour ?? 22.0)}"
-                      @change="${(e: Event) => {
-                        const v = parseFloat((e.target as HTMLInputElement).value);
-                        setHouse(this.hass, { bedtime_dwell_hour: v });
-                      }}"
-                    />
-                    <span class="unit-label">h</span>
-                  </div>
-                </div>
-                <div class="curve-metric">
-                  <span>Bedroom dwell:</span>
-                  <sol-help text="Continuous occupancy duration in minutes required in the bedroom after the window start hour before the wind-down fade begins."></sol-help>
-                  <div class="input-with-unit">
-                    <input
-                      type="number"
-                      class="num-input"
-                      style="width: 54px;"
-                      .value="${String(house.sunset_dwell_minutes ?? 5)}"
-                      @change="${(e: Event) => {
-                        const v = parseFloat((e.target as HTMLInputElement).value);
-                        setHouse(this.hass, { sunset_dwell_minutes: v });
-                      }}"
-                    />
-                    <span class="unit-label">min</span>
-                  </div>
-                </div>
-                <div class="curve-metric">
-                  <span>Fade duration:</span>
-                  <sol-help text="Total duration in minutes over which bedroom lights fade down along the sunset spline curve to the wind-down hold level before sleep mode starts."></sol-help>
-                  <div class="input-with-unit">
-                    <input
-                      type="number"
-                      class="num-input"
-                      style="width: 54px;"
-                      .value="${String(house.sunset_fade_minutes ?? 20)}"
-                      @change="${(e: Event) => {
-                        const v = parseFloat((e.target as HTMLInputElement).value);
-                        setHouse(this.hass, { sunset_fade_minutes: v });
-                      }}"
-                    />
-                    <span class="unit-label">min</span>
-                  </div>
-                </div>
-                <div class="curve-metric" style="margin-left: auto;">
-                  <span>Demand Ceiling:</span>
-                  <strong style="color: var(--sol-cyan);">${currentDemandLevel} lvl / 254</strong>
-                </div>
-                ${this.hoverSunset
-                  ? html`
-                      <div class="curve-metric">
-                        <span>Progress: <strong>${this.hoverSunset.x}%</strong></span>
-                        <span>Level: <strong>${this.hoverSunset.y} lvl</strong></span>
-                      </div>
-                    `
-                  : nothing}
-              </div>
-
-              <!-- Interactive SVG Canvas -->
-              <div class="svg-wrap">
-                <svg
-                  id="svg-sunset"
-                  viewBox="0 0 ${VW} ${VH}"
-                  @click="${(e: MouseEvent) => this.handleSvgClick("sunset", e)}"
-                  @mousemove="${(e: MouseEvent) => {
-                    const target = e.currentTarget as SVGSVGElement | null;
-                    if (!target) return;
-                    const rect = target.getBoundingClientRect();
-                    const px = (e.clientX - rect.left) * (VW / rect.width);
-                    const py = (e.clientY - rect.top) * (VH / rect.height);
-                    if (px >= X0 && px <= X1 && py >= Y0 && py <= Y1) {
-                      this.hoverSunset = {
-                        x: Math.round(this.fromSvgX(px)),
-                        y: this.fromSvgY(py),
-                      };
-                    } else {
-                      this.hoverSunset = null;
-                    }
-                  }}"
-                  @mouseleave="${() => (this.hoverSunset = null)}"
-                >
-                  <defs>
-                    <linearGradient id="grad-sunset" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stop-color="#ff7043" stop-opacity="0.32" />
-                      <stop offset="100%" stop-color="#ff7043" stop-opacity="0.02" />
-                    </linearGradient>
-                  </defs>
-
-                  <!-- Grid Lines & Labels -->
-                  ${[0, 25, 50, 75, 100].map((pct) => {
-                    const x = this.toSvgX(pct);
-                    return svg`
-                      <line x1="${x}" y1="${Y0}" x2="${x}" y2="${Y1}" stroke="rgba(255,255,255,0.06)" stroke-width="1" />
-                      <text x="${x}" y="${VH - 6}" fill="var(--sol-text-4)" font-size="10" text-anchor="middle">${pct}%</text>
-                    `;
-                  })}
-                  ${[0, 64, 128, 192, 254].map((lvl) => {
-                    const y = this.toSvgY(lvl);
-                    return svg`
-                      <line x1="${X0}" y1="${y}" x2="${X1}" y2="${y}" stroke="rgba(255,255,255,0.06)" stroke-width="1" />
-                      <text x="${X0 - 8}" y="${y + 3}" fill="var(--sol-text-4)" font-size="9.5" text-anchor="end">${lvl}</text>
-                    `;
-                  })}
-
-                  <!-- Master Demand Ceiling Line -->
-                  <line
-                    x1="${X0}"
-                    y1="${demandSvgY}"
-                    x2="${X1}"
-                    y2="${demandSvgY}"
-                    stroke="var(--sol-cyan)"
-                    stroke-width="1.5"
-                    stroke-dasharray="4,4"
-                    opacity="0.75"
-                  />
-                  <text x="${X1 - 4}" y="${demandSvgY - 5}" fill="var(--sol-cyan)" font-size="9" text-anchor="end">Demand Cap</text>
-
-                  <!-- Spline Area & Curve Stroke -->
-                  <path d="${this.buildArea(sunsetNodes)}" fill="url(#grad-sunset)" />
-                  <path d="${this.buildPath(sunsetNodes)}" fill="none" stroke="#ff7043" stroke-width="2.5" />
-
-                  <!-- Live Progress Indicator -->
-                  ${setProgress !== null
-                    ? svg`
-                        <circle
-                          cx="${this.toSvgX(setProgress * 100)}"
-                          cy="${this.toSvgY(new MonotoneSpline(sunsetNodes).evaluate(setProgress * 100))}"
-                          r="7"
-                          fill="#ff7043"
-                          stroke="#fff"
-                          stroke-width="2"
-                        >
-                          <animate attributeName="r" values="6;9;6" dur="2s" repeatCount="indefinite" />
-                        </circle>
-                      `
-                    : nothing}
-
-                  <!-- Draggable Nodes -->
-                  ${sunsetNodes.map((n, idx) => {
-                    const cx = this.toSvgX(n.x);
-                    const cy = this.toSvgY(n.y);
-                    const isSel = this.selSunsetIdx === idx;
-                    return svg`
-                      <circle
-                        cx="${cx}"
-                        cy="${cy}"
-                        r="${isSel ? 7.5 : 5.5}"
-                        fill="${isSel ? "#fff" : "#ff7043"}"
-                        stroke="${isSel ? "#ff7043" : "rgba(0,0,0,0.6)"}"
-                        stroke-width="2"
-                        style="cursor: grab;"
-                        @mousedown="${(e: MouseEvent) => {
-                          e.stopPropagation();
-                          this.selSunsetIdx = idx;
-                          this._drag = { type: "sunset", idx };
-                        }}"
-                      />
-                    `;
-                  })}
-                </svg>
-              </div>
-
-              <!-- Selected Node Controls -->
-              ${this.selSunsetIdx !== null && sunsetNodes[this.selSunsetIdx]
-                ? html`
-                    <div class="node-editor">
-                      <span style="font-size: 11.5px; color: var(--sol-text-3);">Node:</span>
-                      <span style="font-size: 11.5px; color: var(--sol-text-2);">Progress %</span>
-                      <input
-                        type="number"
-                        min="0"
-                        max="100"
-                        .value="${String(sunsetNodes[this.selSunsetIdx].x)}"
-                        ?disabled="${this.selSunsetIdx === 0 || this.selSunsetIdx === sunsetNodes.length - 1}"
-                        @change="${(e: Event) => {
-                          const v = Math.max(0, Math.min(100, parseFloat((e.target as HTMLInputElement).value)));
-                          const nodes = [...sunsetNodes];
-                          nodes[this.selSunsetIdx!] = { ...nodes[this.selSunsetIdx!], x: v };
-                          nodes.sort((a, b) => a.x - b.x);
-                          this.localSunset = nodes;
-                          this.debounceSaveSunset();
-                        }}"
-                      />
-                      <span style="font-size: 11.5px; color: var(--sol-text-2); margin-left: 6px;">Level (0-254)</span>
-                      <input
-                        type="number"
-                        min="0"
-                        max="254"
-                        .value="${String(sunsetNodes[this.selSunsetIdx].y)}"
-                        @change="${(e: Event) => {
-                          const v = Math.max(0, Math.min(254, parseInt((e.target as HTMLInputElement).value, 10)));
-                          const nodes = [...sunsetNodes];
-                          nodes[this.selSunsetIdx!] = { ...nodes[this.selSunsetIdx!], y: v };
-                          this.localSunset = nodes;
-                          this.debounceSaveSunset();
-                        }}"
-                      />
-                      ${this.selSunsetIdx > 0 && this.selSunsetIdx < sunsetNodes.length - 1
-                        ? html`
-                            <button class="btn-node-del" @click="${() => this.deleteSunsetNode(this.selSunsetIdx!)}">
-                              Delete node
-                            </button>
-                          `
-                        : nothing}
-                    </div>
-                  `
-                : nothing}
             </div>
           </div>
         </div>
 
-        <!-- 2. Ambience Gate -->
+        <!-- 2. Ambience Gate & Daytime Cutoffs -->
         <div class="card full-col">
           <div class="head">
             <ha-icon icon="mdi:theme-light-dark" style="color: var(--sol-blue);"></ha-icon>
-            <div class="title">Ambience gate</div>
-            <sol-help
-              text="Hysteretic daylight threshold that arms the L3 ambience floor. Opens when outdoor lux drops to the start value and holds until lux rises above the stop value, preventing dusk chatter. While the gate is open, per-light Cut Offs are disarmed so low evening curve demand does not cut resting ambient glow."
-            ></sol-help>
+            <div class="title">Ambience Gate, Cutoffs &amp; Fallback Clocks</div>
             <div class="spacer"></div>
             <div class="badge ${gateOpen ? "badge-amber" : "badge-dim"}">
               ${gateOpen ? "Open · ambience armed" : "Closed · daylight"}
@@ -1349,10 +389,8 @@ export class SolTabSettings extends LitElement {
 
           <div class="sleep-inputs-grid" style="border-top: none; padding-top: 0;">
             <div>
-              <div style="display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--sol-text-2); margin-bottom: 4px;">
-                <ha-icon icon="mdi:weather-sunset-down" style="--mdc-icon-size: 14px; color: var(--sol-amber);"></ha-icon>
-                Start lux (gate opens)
-                <sol-help text="Outdoor illuminance in lux at or below which the gate opens: arms resting ambience (L3) and disarms low-end cutoffs. Must be lower than stop lux."></sol-help>
+              <div style="font-size: 11.5px; color: var(--sol-text-2); margin-bottom: 4px;">
+                Gate start lux (opens)
               </div>
               <div class="input-with-unit">
                 <input
@@ -1361,21 +399,19 @@ export class SolTabSettings extends LitElement {
                   style="flex: 1;"
                   min="0"
                   max="2000"
-                  .value="${String(house.ambience_start_lux ?? 50)}"
-                  @change="${(e: Event) => {
+                  .value=${String(house.ambience_start_lux ?? 50)}
+                  @change=${(e: Event) => {
                     const v = parseFloat((e.target as HTMLInputElement).value);
                     if (!Number.isNaN(v)) setHouse(this.hass, { ambience_start_lux: v });
-                  }}"
+                  }}
                 />
                 <span class="unit-label">lx</span>
               </div>
             </div>
 
             <div>
-              <div style="display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--sol-text-2); margin-bottom: 4px;">
-                <ha-icon icon="mdi:weather-sunset-up" style="--mdc-icon-size: 14px; color: var(--sol-amber);"></ha-icon>
-                Stop lux (gate closes)
-                <sol-help text="Outdoor illuminance in lux at or above which the gate closes at dawn: disarms resting ambience and re-arms daytime cutoffs. Span between start and stop creates the anti-flicker hysteresis band."></sol-help>
+              <div style="font-size: 11.5px; color: var(--sol-text-2); margin-bottom: 4px;">
+                Gate stop lux (closes)
               </div>
               <div class="input-with-unit">
                 <input
@@ -1384,74 +420,113 @@ export class SolTabSettings extends LitElement {
                   style="flex: 1;"
                   min="0"
                   max="2000"
-                  .value="${String(house.ambience_stop_lux ?? 80)}"
-                  @change="${(e: Event) => {
+                  .value=${String(house.ambience_stop_lux ?? 80)}
+                  @change=${(e: Event) => {
                     const v = parseFloat((e.target as HTMLInputElement).value);
                     if (!Number.isNaN(v)) setHouse(this.hass, { ambience_stop_lux: v });
-                  }}"
+                  }}
                 />
                 <span class="unit-label">lx</span>
               </div>
             </div>
 
             <div>
-              <div style="display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--sol-text-2); margin-bottom: 4px;">
-                <ha-icon icon="mdi:timer-sand" style="--mdc-icon-size: 14px; color: var(--sol-text-3);"></ha-icon>
-                Debounce falling
-                <sol-help text="How long outdoor lux must continuously remain below the start threshold before the gate opens. Prevents temporary shadows or dark clouds from opening the gate prematurely. 0 disables."></sol-help>
+              <div style="font-size: 11.5px; color: var(--sol-text-2); margin-bottom: 4px;">
+                Daytime low cutoff
               </div>
               <div class="input-with-unit">
                 <input
                   type="number"
-                  step="0.5"
                   class="num-input"
                   style="flex: 1;"
                   min="0"
-                  max="900"
-                  .value="${String(house.ambience_debounce_falling_s ?? 0)}"
-                  @change="${(e: Event) => {
+                  max="120"
+                  .value=${String(house.min_cutoff ?? 48)}
+                  @change=${(e: Event) => {
                     const v = parseFloat((e.target as HTMLInputElement).value);
-                    if (!Number.isNaN(v)) setHouse(this.hass, { ambience_debounce_falling_s: v });
-                  }}"
+                    if (!Number.isNaN(v)) setHouse(this.hass, { min_cutoff: v });
+                  }}
                 />
-                <span class="unit-label">s</span>
+                <span class="unit-label">/254</span>
               </div>
             </div>
 
             <div>
-              <div style="display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--sol-text-2); margin-bottom: 4px;">
-                <ha-icon icon="mdi:timer-sand" style="--mdc-icon-size: 14px; color: var(--sol-text-3);"></ha-icon>
-                Debounce rising
-                <sol-help text="How long outdoor lux must continuously remain above the stop threshold before the gate closes. Prevents momentary sun breaks or bright headlights from closing the gate prematurely. 0 disables."></sol-help>
+              <div style="font-size: 11.5px; color: var(--sol-text-2); margin-bottom: 4px;">
+                Write dead-zone &amp; Manual hold
               </div>
               <div class="input-with-unit">
                 <input
                   type="number"
-                  step="0.5"
                   class="num-input"
-                  style="flex: 1;"
+                  style="width: 58px;"
                   min="0"
-                  max="900"
-                  .value="${String(house.ambience_debounce_rising_s ?? 0)}"
-                  @change="${(e: Event) => {
+                  max="30"
+                  .value=${String(house.dead_zone ?? 8)}
+                  @change=${(e: Event) => {
                     const v = parseFloat((e.target as HTMLInputElement).value);
-                    if (!Number.isNaN(v)) setHouse(this.hass, { ambience_debounce_rising_s: v });
-                  }}"
+                    if (!Number.isNaN(v)) setHouse(this.hass, { dead_zone: v });
+                  }}
                 />
-                <span class="unit-label">s</span>
+                <span class="unit-label">lvl</span>
+                <input
+                  type="number"
+                  class="num-input"
+                  style="width: 62px;"
+                  min="5"
+                  max="480"
+                  .value=${String(house.manual_hold_minutes ?? 60)}
+                  @change=${(e: Event) => {
+                    const v = parseFloat((e.target as HTMLInputElement).value);
+                    if (!Number.isNaN(v)) setHouse(this.hass, { manual_hold_minutes: v });
+                  }}
+                />
+                <span class="unit-label">min</span>
+              </div>
+            </div>
+
+            <div>
+              <div style="font-size: 11.5px; color: var(--sol-text-2); margin-bottom: 4px;">
+                Evening ramp axis (HH:MM)
+              </div>
+              <div class="input-with-unit">
+                <input
+                  type="time"
+                  class="time-input"
+                  style="flex: 1;"
+                  .value=${clock(house.evening_axis_hour ?? 20.0)}
+                  @change=${(e: Event) => {
+                    const raw = (e.target as HTMLInputElement).value;
+                    if (raw) setHouse(this.hass, { evening_axis_hour: parseClock(raw) });
+                  }}
+                />
+              </div>
+            </div>
+
+            <div>
+              <div style="font-size: 11.5px; color: var(--sol-text-2); margin-bottom: 4px;">
+                Civil dusk fallback (HH:MM)
+              </div>
+              <div class="input-with-unit">
+                <input
+                  type="time"
+                  class="time-input"
+                  style="flex: 1;"
+                  .value=${clock(house.dusk_fallback_hour ?? 20.0)}
+                  @change=${(e: Event) => {
+                    const raw = (e.target as HTMLInputElement).value;
+                    if (raw) setHouse(this.hass, { dusk_fallback_hour: parseClock(raw) });
+                  }}
+                />
               </div>
             </div>
           </div>
 
-          <div style="margin-top: 12px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; font-size: 11.5px; color: var(--sol-text-3);">
-            <span>Outdoor lux now: <strong style="color: var(--sol-cyan);">${world?.lux ?? "—"} lx</strong></span>
-            <span>Band: <strong>${house.ambience_start_lux ?? 50} – ${house.ambience_stop_lux ?? 80} lx</strong></span>
-            ${gateInverted
-              ? html`<span style="color: #ffb74d;">
-                  ⚠ Start is above stop — the hysteresis band is inverted and the gate will chatter.
-                </span>`
-              : nothing}
-          </div>
+          ${gateInverted
+            ? html`<div style="margin-top: 10px; font-size: 11.5px; color: #ffb74d;">
+                Start lux is above stop lux — hysteresis band is inverted.
+              </div>`
+            : nothing}
         </div>
 
         <!-- 3. Transitions Matrix -->
@@ -1459,138 +534,107 @@ export class SolTabSettings extends LitElement {
           <div class="head">
             <ha-icon icon="mdi:speedometer" style="color: var(--sol-blue);"></ha-icon>
             <div class="title">Transitions Matrix</div>
-            <sol-help text="Dedicated hardware transition speeds in seconds. Segregates fast occupancy arrival from smooth environmental threshold rises, gentle ambient wakes, warning diminish steps, and background tracking glides."></sol-help>
             <div class="spacer"></div>
             <div style="font-size: 11px; color: var(--sol-text-4);">seconds</div>
           </div>
 
           <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px;">
-            <!-- Up Group -->
             <div class="trans-grp">
               <div class="grp-lbl">Up</div>
-              <div class="trans-row" title="Clear → L1 • Motion arrival: snappy illumination directly to primary curve level (L1)">
-                <div class="trans-lbl">
-                  Occupancy
-                  <sol-help text="Motion arrival: Triggered when a room transitions from clear to occupied. Snappy hardware ramp directly into the current circadian curve level (L1), ensuring instant visibility upon walking into the room."></sol-help>
-                </div>
+              <div class="trans-row">
+                <div class="trans-lbl">Occupancy</div>
                 <div class="trans-dots"></div>
-                <div class="trans-path">Clear → L1</div>
+                <div class="trans-path">Clear -&gt; L1</div>
                 <input
                   type="number"
                   step="0.5"
                   class="num-input"
                   style="width: 62px;"
-                  .value="${String(house.transition_up_occupancy_s ?? house.transition_turn_on_l1_s ?? 2.0)}"
-                  @change="${(e: Event) => {
-                    setHouse(this.hass, { transition_up_occupancy_s: parseFloat((e.target as HTMLInputElement).value) });
-                  }}"
+                  .value=${String(house.transition_up_occupancy_s ?? 2.0)}
+                  @change=${(e: Event) =>
+                    setHouse(this.hass, { transition_up_occupancy_s: parseFloat((e.target as HTMLInputElement).value) })}
                 />
               </div>
-              <div class="trans-row" title="Occupied L0 → UP L* • Occupied turn-on: gentle rise to L1 while room is already occupied">
-                <div class="trans-lbl">
-                  Occupied Turn-On
-                  <sol-help text="Occupied threshold turn-on: Triggered while a room is already occupied and light demand crosses above zero due to falling outdoor daylight, an approaching storm, or dusk. A smooth, gentle rise (default 300s) to avoid startling occupants already seated in the room."></sol-help>
-                </div>
+              <div class="trans-row">
+                <div class="trans-lbl">Occupied Turn-On</div>
                 <div class="trans-dots"></div>
-                <div class="trans-path">Occupied L0 → UP L*</div>
+                <div class="trans-path">Occupied L0 -&gt; L1</div>
                 <input
                   type="number"
                   step="0.5"
                   class="num-input"
                   style="width: 62px;"
-                  .value="${String(house.transition_up_occupied_on_s ?? 300.0)}"
-                  @change="${(e: Event) => {
-                    setHouse(this.hass, { transition_up_occupied_on_s: parseFloat((e.target as HTMLInputElement).value) });
-                  }}"
+                  .value=${String(house.transition_up_occupied_on_s ?? 300.0)}
+                  @change=${(e: Event) =>
+                    setHouse(this.hass, { transition_up_occupied_on_s: parseFloat((e.target as HTMLInputElement).value) })}
                 />
               </div>
-              <div class="trans-row" title="Clear → L3 • Dusk gate opens empty room: gentle wake to resting ambience floor (L3)">
-                <div class="trans-lbl">
-                  Ambience Wake
-                  <sol-help text="Ambience floor wake: Triggered when the dusk gate opens in an unoccupied room. Gently illuminates fixtures from dark to their resting background glow (L3) so the home feels warm and lived-in without requiring motion."></sol-help>
-                </div>
+              <div class="trans-row">
+                <div class="trans-lbl">Ambience Wake</div>
                 <div class="trans-dots"></div>
-                <div class="trans-path">Clear → L3</div>
+                <div class="trans-path">Clear -&gt; L3</div>
                 <input
                   type="number"
                   step="0.5"
                   class="num-input"
                   style="width: 62px;"
-                  .value="${String(house.transition_up_ambience_s ?? house.transition_wake_l3_s ?? 10.0)}"
-                  @change="${(e: Event) => {
-                    setHouse(this.hass, { transition_up_ambience_s: parseFloat((e.target as HTMLInputElement).value) });
-                  }}"
+                  .value=${String(house.transition_up_ambience_s ?? 10.0)}
+                  @change=${(e: Event) =>
+                    setHouse(this.hass, { transition_up_ambience_s: parseFloat((e.target as HTMLInputElement).value) })}
                 />
               </div>
             </div>
 
-            <!-- Down Group -->
             <div class="trans-grp">
               <div class="grp-lbl">Down</div>
-              <div class="trans-row" title="L1 → L2 • Zone clear: smooth warning transition to diminished level (L2)">
-                <div class="trans-lbl">
-                  Diminish
-                  <sol-help text="Occupancy dwell warning: Triggered when presence clears in a zone configured with a diminish offset (e.g. kitchen). Smoothly steps brightness down to the diminished level (L2) as an unobtrusive visual warning that presence has ended."></sol-help>
-                </div>
+              <div class="trans-row">
+                <div class="trans-lbl">Diminish</div>
                 <div class="trans-dots"></div>
-                <div class="trans-path">L1 → L2</div>
+                <div class="trans-path">L1 -&gt; L2</div>
                 <input
                   type="number"
                   step="0.5"
                   class="num-input"
                   style="width: 62px;"
-                  .value="${String(house.transition_down_diminish_s ?? house.transition_diminish_l2_s ?? 5.0)}"
-                  @change="${(e: Event) => {
-                    setHouse(this.hass, { transition_down_diminish_s: parseFloat((e.target as HTMLInputElement).value) });
-                  }}"
+                  .value=${String(house.transition_down_diminish_s ?? 5.0)}
+                  @change=${(e: Event) =>
+                    setHouse(this.hass, { transition_down_diminish_s: parseFloat((e.target as HTMLInputElement).value) })}
                 />
               </div>
-              <div class="trans-row" title="L2 → L3 • Dwell expires: soft step down to resting ambience floor (L3)">
-                <div class="trans-lbl">
-                  Ambience Settle
-                  <sol-help text="Post-diminish ambient settle: Triggered after the dwell timer expires in an empty room where background ambience is enabled. Softly steps down to the resting floor level (L3)."></sol-help>
-                </div>
+              <div class="trans-row">
+                <div class="trans-lbl">Ambience Settle</div>
                 <div class="trans-dots"></div>
-                <div class="trans-path">L2 → L3</div>
+                <div class="trans-path">L2 -&gt; L3</div>
                 <input
                   type="number"
                   step="0.5"
                   class="num-input"
                   style="width: 62px;"
-                  .value="${String(house.transition_down_ambience_s ?? house.transition_clear_to_l3_s ?? 5.0)}"
-                  @change="${(e: Event) => {
-                    setHouse(this.hass, { transition_down_ambience_s: parseFloat((e.target as HTMLInputElement).value) });
-                  }}"
+                  .value=${String(house.transition_down_ambience_s ?? 5.0)}
+                  @change=${(e: Event) =>
+                    setHouse(this.hass, { transition_down_ambience_s: parseFloat((e.target as HTMLInputElement).value) })}
                 />
               </div>
-              <div class="trans-row" title="Occupied L* → Down L0 • Room clears, daylight increases, or sleep mode: graceful shutoff">
-                <div class="trans-lbl">
-                  Environmental / Off
-                  <sol-help text="Full shutoff: Triggered when an unoccupied room clears all timers, daylight increases above demand while occupied, or sleep mode engages. Graceful fade to dark (L0)."></sol-help>
-                </div>
+              <div class="trans-row">
+                <div class="trans-lbl">Environmental / Off</div>
                 <div class="trans-dots"></div>
-                <div class="trans-path">Occupied L* → Down L0</div>
+                <div class="trans-path">L* -&gt; L0</div>
                 <input
                   type="number"
                   step="0.5"
                   class="num-input"
                   style="width: 62px;"
-                  .value="${String(house.transition_down_off_s ?? house.transition_clear_to_off_s ?? 4.0)}"
-                  @change="${(e: Event) => {
-                    setHouse(this.hass, { transition_down_off_s: parseFloat((e.target as HTMLInputElement).value) });
-                  }}"
+                  .value=${String(house.transition_down_off_s ?? 4.0)}
+                  @change=${(e: Event) =>
+                    setHouse(this.hass, { transition_down_off_s: parseFloat((e.target as HTMLInputElement).value) })}
                 />
               </div>
             </div>
 
-            <!-- Continuous & Special -->
             <div class="trans-grp">
-              <div class="grp-lbl">Continuous &amp; special</div>
-              <div class="trans-row" title="Update L1 • Continuous background glide as solar elevation and lux shift">
-                <div class="trans-lbl">
-                  Continuous Tracking
-                  <sol-help text="Continuous tracking: Hardware transition applied during steady-state background updates. Glides brightness and colour temperature imperceptibly as daylight changes or clouds pass."></sol-help>
-                </div>
+              <div class="grp-lbl">Continuous &amp; Special</div>
+              <div class="trans-row">
+                <div class="trans-lbl">Continuous Tracking</div>
                 <div class="trans-dots"></div>
                 <div class="trans-path">Update L1</div>
                 <input
@@ -1598,17 +642,13 @@ export class SolTabSettings extends LitElement {
                   step="0.5"
                   class="num-input"
                   style="width: 62px;"
-                  .value="${String(house.transition_automatic_s ?? house.transition_tracking_s ?? 15.0)}"
-                  @change="${(e: Event) => {
-                    setHouse(this.hass, { transition_automatic_s: parseFloat((e.target as HTMLInputElement).value) });
-                  }}"
+                  .value=${String(house.transition_automatic_s ?? 15.0)}
+                  @change=${(e: Event) =>
+                    setHouse(this.hass, { transition_automatic_s: parseFloat((e.target as HTMLInputElement).value) })}
                 />
               </div>
-              <div class="trans-row" title="UI Drag • Live slider adjustments and tuning response">
-                <div class="trans-lbl">
-                  Manual
-                  <sol-help text="Interactive preview: High-speed hardware transition used while dragging sliders or tuning curves in the Solace panel. Delivers snappy, near-instant visual feedback."></sol-help>
-                </div>
+              <div class="trans-row">
+                <div class="trans-lbl">Manual Drag</div>
                 <div class="trans-dots"></div>
                 <div class="trans-path">UI Drag</div>
                 <input
@@ -1616,25 +656,29 @@ export class SolTabSettings extends LitElement {
                   step="0.05"
                   class="num-input"
                   style="width: 62px;"
-                  .value="${String(house.transition_manual_s ?? house.transition_manual_drag_s ?? 0.5)}"
-                  @change="${(e: Event) => {
-                    setHouse(this.hass, { transition_manual_s: parseFloat((e.target as HTMLInputElement).value) });
-                  }}"
+                  .value=${String(house.transition_manual_s ?? 0.5)}
+                  @change=${(e: Event) =>
+                    setHouse(this.hass, { transition_manual_s: parseFloat((e.target as HTMLInputElement).value) })}
                 />
               </div>
-              <div class="trans-row" title="Special → L1S • Special modes (bedroom morning sunrise &amp; bedtime sunset ramps)">
-                <div class="trans-lbl">
-                  Special Mode
-                  <sol-help text="Special Mode (L1S): While in special mode (bedroom virtual sunrise and bedtime wind-down sunset), values work smoothly along predicted timelines without cancelling on toilet trips, using L1S in that room instead of L1."></sol-help>
-                </div>
+              <div class="trans-row">
+                <div class="trans-lbl">Special Mode</div>
                 <div class="trans-dots"></div>
-                <div class="trans-path">Special → L1S</div>
-                <div style="font-size: 11px; color: var(--sol-blue); font-weight: 500; padding: 4px 8px; background: rgba(59, 130, 246, 0.1); border-radius: 4px;">Predictive</div>
+                <div class="trans-path">Sunrise / Sunset</div>
+                <div style="font-size: 11px; color: var(--sol-blue); font-weight: 500; padding: 4px 8px; background: rgba(59, 130, 246, 0.1); border-radius: 4px;">
+                  Predictive
+                </div>
               </div>
             </div>
           </div>
         </div>
       </div>
     `;
+  }
+}
+
+declare global {
+  interface HTMLElementTagNameMap {
+    "sol-tab-settings": SolTabSettings;
   }
 }

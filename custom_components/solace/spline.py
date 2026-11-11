@@ -9,6 +9,7 @@ or negative spikes between nodes).
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Sequence
 
@@ -22,17 +23,23 @@ class SplinePoint:
 
 
 class MonotoneCubicSpline:
-    """Evaluates a smooth curve through control points using Fritsch-Carlson interpolation."""
+    """Evaluates a smooth curve through control points using Fritsch-Butland / Brodlie interpolation."""
 
     def __init__(
         self,
         points: Sequence[SplinePoint | tuple[float, float]],
         periodic: bool = False,
+        log_x: bool = False,
     ) -> None:
+        self._log_x = log_x
         raw_pts = [
-            (p.x, p.y) if isinstance(p, SplinePoint) else (float(p[0]), float(p[1]))
+            (float(p.x), float(p.y))
+            if hasattr(p, "x") and hasattr(p, "y")
+            else (float(p[0]), float(p[1]))
             for p in points
         ]
+        if log_x:
+            raw_pts = [(math.log10(1.0 + max(0.0, px)), py) for px, py in raw_pts]
         # Sort by x coordinate and deduplicate identical x values
         sorted_pts = sorted(raw_pts, key=lambda pt: pt[0])
         deduped: list[tuple[float, float]] = []
@@ -64,16 +71,21 @@ class MonotoneCubicSpline:
         dy = [y[k + 1] - y[k] for k in range(self._n - 1)]
         deltas = [dy[k] / dx[k] if dx[k] > 0 else 0.0 for k in range(self._n - 1)]
 
-        # 2. Initial tangents via standard finite differences
+        # 2. Brodlie / Fritsch-Butland weighted harmonic mean tangents (smooth on uneven intervals)
         m = [0.0] * self._n
         m[0] = deltas[0]
         m[-1] = deltas[-1]
         for k in range(1, self._n - 1):
-            if deltas[k - 1] * deltas[k] <= 0:
+            d0 = deltas[k - 1]
+            d1 = deltas[k]
+            if d0 * d1 <= 0:
                 m[k] = 0.0
             else:
-                # Weighted average based on interval widths
-                m[k] = (deltas[k - 1] + deltas[k]) / 2.0
+                h0 = dx[k - 1]
+                h1 = dx[k]
+                w0 = 2.0 * h1 + h0
+                w1 = h1 + 2.0 * h0
+                m[k] = (w0 + w1) / (w0 / d0 + w1 / d1)
 
         # 3. Fritsch-Carlson monotonicity condition
         for k in range(self._n - 1):
@@ -105,7 +117,9 @@ class MonotoneCubicSpline:
         if self._n == 1:
             return self._pts[0][1]
 
-        if self._periodic:
+        if self._log_x:
+            x_val = math.log10(1.0 + max(0.0, x_val))
+        elif self._periodic:
             x_val = ((x_val % 24.0) + 24.0) % 24.0
 
         x = [p[0] for p in self._pts]

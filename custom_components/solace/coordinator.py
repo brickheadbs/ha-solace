@@ -16,6 +16,7 @@ absolutes.
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from typing import Any
@@ -65,6 +66,7 @@ from .const import (
 )
 from .engine import (
     ambience_threshold,
+    apply_clamp,
     compute_state_table,
     debounce_ambience,
     demand,
@@ -99,6 +101,7 @@ from .models import (
     StateTier,
     ZoneSettings,
 )
+from .music import SolaceMusicManager
 from .remotes import RemoteDispatcher
 from .solar import ClearSkySolarModel
 from .spline import MonotoneCubicSpline
@@ -159,10 +162,10 @@ def _parse_spline_points(
 ) -> tuple[SplinePoint, ...]:
     if not raw_list:
         return ()
-    out: list[SplinePoint] = []
+    parsed_xy: list[tuple[float, float]] = []
     for p in raw_list:
         if isinstance(p, SplinePoint):
-            out.append(p)
+            parsed_xy.append((p.x, p.y))
         elif isinstance(p, dict):
             x = 0.0
             for k in x_keys:
@@ -174,12 +177,14 @@ def _parse_spline_points(
                 if k in p:
                     y = float(p[k])
                     break
-            if y_scale != 1.0 and y > 1.0:
-                y = y * y_scale
-            out.append(SplinePoint(x=x, y=y))
+            parsed_xy.append((x, y))
         elif isinstance(p, (list, tuple)) and len(p) >= 2:
-            out.append(SplinePoint(x=float(p[0]), y=float(p[1])))
-    return tuple(out)
+            parsed_xy.append((float(p[0]), float(p[1])))
+    scale_all = y_scale != 1.0 and any(y > 1.0 for _, y in parsed_xy)
+    return tuple(
+        SplinePoint(x=x, y=(y * y_scale if scale_all else y))
+        for x, y in parsed_xy
+    )
 
 
 @dataclass
@@ -231,11 +236,13 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         )
         self.writer = LightWriter(hass)
         self.remotes = RemoteDispatcher(self)
+        self.music = SolaceMusicManager(hass, self.async_update_listeners)
         self.rooms: dict[str, RoomState] = {}
         self._store: Store = Store(hass, STORAGE_VERSION, STORAGE_KEY)
         self._lux_history: list[float] = []
         self._last_good_lux: float | None = None
         self._first_lux_reported = False
+        self._dnd_live_seen: set[str] = set()
         self._startup_time = hass.loop.time()
         self._lux_warned = False
         self._night_latched = False
@@ -255,6 +262,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         self._last_demand_filter_time: float | None = None
         self._hourly_cloud_forecast: list[dict[str, Any]] = []
         self._last_forecast_refresh: float = 0.0
+        self._card_order: dict[str, list[str]] = {}
 
     # ------------------------------------------------------------------ settings
 
@@ -293,7 +301,6 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
             "lux_history_samples",
             "fallback_min_kelvin",
             "fallback_max_kelvin",
-            "family_cct_max_kelvin",
             "family_rgb_max_kelvin",
             "demand_floor_level",
             "colour_step_mired_smooth",
@@ -310,7 +317,6 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         fields["day_kelvin"] = int(fields.get("day_kelvin", 4000))
         fields["night_kelvin"] = int(fields.get("night_kelvin", 2200))
         fields["colour_trim_kelvin"] = int(fields.get("colour_trim_kelvin", 0))
-        fields["colour_step_mired"] = int(fields.get("colour_step_mired", 5))
         fields["transition_up_occupancy_s"] = float(fields.get("transition_up_occupancy_s", fields.get("transition_turn_on_l1_s", 2.0)))
         fields["transition_up_occupied_on_s"] = float(fields.get("transition_up_occupied_on_s", 5.0))
         fields["transition_up_ambience_s"] = float(fields.get("transition_up_ambience_s", fields.get("transition_wake_l3_s", 10.0)))
@@ -338,13 +344,23 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
 
     def room_settings(self, subentry: ConfigSubentry) -> RoomSettings:
         data = {**ROOM_DEFAULTS, **subentry.data}
+        if "threshold_stops" in subentry.data:
+            threshold_stops = float(subentry.data["threshold_stops"])
+        elif "daylight_pct" in subentry.data and float(subentry.data["daylight_pct"]) != 100.0:
+            pct = max(0.01, min(8.0, float(subentry.data["daylight_pct"]) / 100.0))
+            threshold_stops = round(-math.log2(pct), 2)
+        else:
+            threshold_stops = float(data.get("threshold_stops", 0.0))
         return RoomSettings(
             name=subentry.title,
             bias_stops=float(data.get("bias_stops", 0.0)),
+            threshold_stops=threshold_stops,
             zone_bias_stops=float(data.get("zone_bias_stops", 0.0)),
             diminish_stops=float(data.get("diminish_stops", 0.0)),
             diminish_pct=float(data.get("diminish_pct", 40.0 if data.get("diminish_stops", 0.0) <= 0 and "diminish_pct" not in data else data.get("diminish_pct", 0.0))),
             ambience_level=int(data.get("ambience_level", 0)),
+            occupied_min=int(data.get("occupied_min", 0)),
+            occupied_max=int(data.get("occupied_max", 254)),
             night_off=bool(data.get("night_off", False)) or ("living" in subentry.title.lower() and self._living_guest_mode()),
             manual_hold_minutes=float(data.get("manual_hold_minutes", 30.0)),
             manual_mode=bool(data.get("manual_mode", False)),
@@ -365,13 +381,12 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         )
 
     def light_settings(self, entity_id: str, subentry: ConfigSubentry) -> LightSettings:
-        """Per-light settings, with the hardware facts read from the live entity.
+        """Per-light hardware facts read from the live entity plus persisted per-light overrides.
 
-        Kelvin limits are **never guessed** — some bulbs here stop at 4000 K and others
-        floor at 2702 K, and an out-of-range request is accepted, pinned, and logged as
-        a success.
+        Kelvin limits are **never guessed** — Aqara CCT fixtures floor at 2702 K while RGB
+        reaches 2000 K, and an out-of-range request is accepted, pinned, and logged as a
+        success.
         """
-        overrides = (subentry.data.get(CONF_PER_LIGHT) or {}).get(entity_id, {})
         state = self.hass.states.get(entity_id)
         house = self.house
         min_kelvin = house.fallback_min_kelvin
@@ -382,15 +397,17 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
             max_kelvin = int(state.attributes.get("max_color_temp_kelvin") or max_kelvin)
             family = infer_family(
                 state,
-                cct_max_kelvin=house.family_cct_max_kelvin,
                 rgb_max_kelvin=house.family_rgb_max_kelvin,
             )
+        overrides = (subentry.data.get(CONF_PER_LIGHT) or {}).get(entity_id, {})
+        clamp_min_raw = overrides.get("clamp_min")
+        clamp_max_raw = overrides.get("clamp_max")
         return LightSettings(
             entity_id=entity_id,
             family=family or LightSettings().family,
             bias_stops=float(overrides.get("bias_stops", 0.0)),
-            clamp_min=int(overrides.get("clamp_min", 0)),
-            clamp_max=int(overrides.get("clamp_max", 254)),
+            clamp_min=int(clamp_min_raw) if clamp_min_raw is not None else 0,
+            clamp_max=int(clamp_max_raw) if clamp_max_raw is not None else 254,
             min_kelvin=min_kelvin,
             max_kelvin=max_kelvin,
         )
@@ -399,6 +416,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         return [
             sub
             for sub in self.config_entry.subentries.values()
+            for _ in (0,)
             if sub.subentry_type == SUBENTRY_TYPE_ROOM
         ]
 
@@ -406,6 +424,9 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
 
     async def async_prepare(self) -> None:
         """Restore persisted manual state and wire up the listeners."""
+        from . import websocket_api as _ws_mod
+        _ws_mod.async_register(self.hass)
+        await self.music.async_prepare()
         await self._async_restore()
         self._register_listeners()
 
@@ -433,6 +454,13 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                 _LOGGER.info("Solace: restored last known good lux (%.1f lx)", self._last_good_lux)
             except (TypeError, ValueError):
                 pass
+        saved_order = stored.get("_card_order")
+        if isinstance(saved_order, dict):
+            self._card_order = {
+                str(tab): [str(item) for item in order if isinstance(item, str)]
+                for tab, order in saved_order.items()
+                if isinstance(order, list)
+            }
         for subentry in self._subentries():
             saved = stored.get(subentry.subentry_id, {})
             self.rooms[subentry.subentry_id] = RoomState(
@@ -482,6 +510,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
             "input_boolean.work_mode",
             "input_boolean.living_guest_mode",
             "input_boolean.ambient_gate",
+            "sun.sun",
             "sensor.pixel_8a_do_not_disturb_sensor",
             "binary_sensor.google_pixel_watch_2_bedtime_mode",
             "sensor.google_pixel_watch_2_do_not_disturb_sensor",
@@ -509,6 +538,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
     @callback
     def async_shutdown_listeners(self) -> None:
         self.remotes.async_unregister()
+        self.music.async_shutdown()
         while self._unsubscribes:
             self._unsubscribes.pop()()
 
@@ -516,6 +546,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         payload: dict[str, Any] = {
             "_night_latched": self._night_latched,
             "_last_good_lux": self._last_good_lux,
+            "_card_order": self._card_order,
         }
         for room in self.rooms.values():
             payload[room.subentry_id] = {
@@ -550,30 +581,53 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
 
         self._update_night_latch(asleep, lux, house)
 
+        gate_state = self.hass.states.get("input_boolean.ambient_gate")
+        if gate_state is not None and gate_state.state in (STATE_ON, "off"):
+            self._gate_override = (gate_state.state == STATE_ON) and not asleep
+
         # Update room presence states first so dwell-based special modes have fresh data.
+        now_ts = now.timestamp()
+        away = self._away()
         for subentry in self._subentries():
             room = self.rooms.setdefault(
                 subentry.subentry_id,
                 RoomState(subentry_id=subentry.subentry_id, name=subentry.title),
             )
-            is_occupied = self._any_on(subentry.data.get(CONF_PRESENCE), default=True)
+            raw_occupied = self._any_on(subentry.data.get(CONF_PRESENCE), default=True)
+            is_hallway = "hallway" in subentry.title.lower() or "stair" in subentry.title.lower()
+            if raw_occupied:
+                self._last_presence[subentry.subentry_id] = now_ts
+                is_occupied = True
+            else:
+                last_occ = self._last_presence.get(subentry.subentry_id, 0.0)
+                hold_s = 0.0 if (is_hallway or asleep or self._night_active() or away) else 90.0
+                is_occupied = (now_ts - last_occ) < hold_s if last_occ > 0 else False
+
             if is_occupied:
                 if not room.occupied:
-                    room.occupied_since = now.timestamp()
+                    room.occupied_since = now_ts
                     room.fresh_occupancy = True
                 else:
                     room.fresh_occupancy = False
                 room.unoccupied_since = None
-                self._last_presence[subentry.subentry_id] = now.timestamp()
             else:
                 if room.occupied:
-                    room.unoccupied_since = now.timestamp()
+                    room.unoccupied_since = now_ts
                 room.occupied_since = None
                 room.fresh_occupancy = False
             room.occupied = is_occupied
 
-        away = self._away()
         sunrise_progress = self._sunrise_progress(house)
+        if (
+            sunrise_progress is not None
+            and sunrise_progress >= 0.995
+            and self._active_sunrise_end is not None
+        ):
+            self.hass.async_create_task(
+                self.music.async_trigger_wakeup(
+                    anchor_iso=self._active_sunrise_end.isoformat()
+                )
+            )
         sunset_progress = self._sunset_progress(clock_hour, house)
         bedtime_dwell_active = self._bedtime_dwell_active(clock_hour, house)
 
@@ -643,10 +697,14 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                 subentry.data.get(CONF_NEAR_PRESENCE), default=True
             )
 
-            if self._gate_override is not None:
+            is_stairway = "stair" in subentry.title.lower() or "stair" in settings.name.lower()
+            room_lux = max(0.0, lux / (2.0 ** settings.threshold_stops))
+            if is_stairway:
+                room.ambience_open = False
+            elif self._gate_override is not None:
                 room.ambience_open = self._gate_override
             else:
-                raw_gate = ambience_threshold(lux, room.ambience_open, house)
+                raw_gate = ambience_threshold(room_lux, room.ambience_open, house)
                 lux_gate, room.ambience_pending_since = debounce_ambience(
                     raw_gate, room.ambience_open, loop_now, room.ambience_pending_since, house
                 )
@@ -829,15 +887,24 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         room.last_source[entity_id] = solution.source
 
         # Manual wins: compute and display, but never write.
-        if manual or not solution.should_write:
+        if manual:
+            return
+        has_active_or_pending_on = (
+            current > 0
+            or self.writer.get_in_flight_brightness(entity_id) is not None
+            or (room.last_written.get(entity_id) or 0) > 0
+        )
+        if not solution.should_write and not (solution.level <= 0 and has_active_or_pending_on):
             return
 
         if solution.level <= 0:
-            if current > 0:
+            if has_active_or_pending_on:
                 # Cold boot startup hold: suppress turning off lights that are already on
                 # during the initial startup window (60s) if the lux sensor hasn't reported a live reading yet.
                 if (
-                    not self._first_lux_reported
+                    self.hass.states.get(self._lux_entity()) is not None
+                    and not self._first_lux_reported
+                    and not asleep
                     and (self.hass.loop.time() - self._startup_time) < 60.0
                 ):
                     _LOGGER.debug(
@@ -926,6 +993,8 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
 
     async def _async_colour_tick(self, _now: Any) -> None:
         """Advance colour smoothly toward the projected 24h curve target."""
+        if self._asleep() or self._night_active() or self._away():
+            return
         house = self.house
         now = dt_util.now()
         clock_hour = now.hour + now.minute / 60.0
@@ -941,6 +1010,9 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
             if room is None:
                 continue
             for entity_id in subentry.data.get(CONF_LIGHTS, []):
+                sol = room.solutions.get(entity_id)
+                if sol is not None and sol.level <= 0:
+                    continue
                 state = self.hass.states.get(entity_id)
                 if state is None or state.state != STATE_ON:
                     continue  # an off bulb rejects colour; it gets it on wake instead
@@ -979,7 +1051,6 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         return fade_profile(
             family,
             smooth_step_mired=house.colour_step_mired_smooth,
-            stepped_step_mired=house.colour_step_mired,
             step_transition_s=house.colour_step_transition_s,
             catch_up_steps=house.colour_catch_up_steps,
             r_crit=house.colour_rate_floor,
@@ -1038,36 +1109,74 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
 
         now = dt_util.utcnow()
 
-        # If sunrise is already anchored, continue the timeline even if alarm dismisses / changes during toilet trips
+        # If sunrise is already anchored, continue the timeline even if alarm dismisses / changes during toilet trips,
+        # and hold at the top of the curve (1.0) for 15 minutes after the target wake time so sleep/DND never slams lights to 0 at T+1s.
         if self._active_sunrise_start is not None and self._active_sunrise_end is not None:
             if now <= self._active_sunrise_end:
                 total = (self._active_sunrise_end - self._active_sunrise_start).total_seconds()
                 elapsed = (now - self._active_sunrise_start).total_seconds()
                 return max(0.0, min(1.0, elapsed / total if total > 0 else 1.0))
+            if now <= self._active_sunrise_end + timedelta(minutes=15) and (self._asleep() or self._night_active()):
+                return 1.0
             # Completed naturally
             self._active_sunrise_start = None
             self._active_sunrise_end = None
 
+        candidates: list[datetime] = []
         entity_id = self.config_entry.options.get(
             CONF_ALARM_ENTITY
         ) or self.config_entry.data.get(CONF_ALARM_ENTITY)
-        if not entity_id:
-            return None
-        state = self.hass.states.get(entity_id)
-        if state is None or state.state in ("unknown", "unavailable"):
-            return None
-        alarm = dt_util.parse_datetime(state.state)
-        if alarm is None:
+        if entity_id:
+            state = self.hass.states.get(entity_id)
+            if state is not None and state.state not in ("unknown", "unavailable", ""):
+                parsed = dt_util.parse_datetime(state.state)
+                if parsed is None and ":" in state.state:
+                    t = dt_util.parse_time(state.state)
+                    if t is not None:
+                        local_now = dt_util.now()
+                        candidate = local_now.replace(hour=t.hour, minute=t.minute, second=t.second, microsecond=0)
+                        if candidate < local_now - timedelta(minutes=15):
+                            candidate += timedelta(days=1)
+                        parsed = dt_util.as_utc(candidate)
+                if parsed is not None:
+                    candidates.append(parsed)
+
+        if self.music.wake_time_enabled and self.music.wake_target_time:
+            t = dt_util.parse_time(self.music.wake_target_time)
+            if t is not None:
+                local_now = dt_util.now()
+                candidate = local_now.replace(hour=t.hour, minute=t.minute, second=t.second, microsecond=0)
+                if candidate < local_now - timedelta(minutes=15):
+                    candidate += timedelta(days=1)
+                candidates.append(dt_util.as_utc(candidate))
+
+        wake_dt = self.hass.states.get("input_datetime.solace_wake_time")
+        wake_en = self.hass.states.get("input_boolean.solace_wake_enabled")
+        if (
+            wake_dt is not None
+            and wake_dt.state not in ("unknown", "unavailable", "")
+            and (wake_en is None or wake_en.state == STATE_ON)
+        ):
+            t = dt_util.parse_time(wake_dt.state)
+            if t is not None:
+                local_now = dt_util.now()
+                candidate = local_now.replace(hour=t.hour, minute=t.minute, second=t.second, microsecond=0)
+                if candidate < local_now - timedelta(minutes=15):
+                    candidate += timedelta(days=1)
+                candidates.append(dt_util.as_utc(candidate))
+
+        if not candidates:
             return None
 
         fade_window = timedelta(minutes=house.sunrise_fade_minutes)
-        start = alarm - fade_window
-        if start <= now <= alarm:
-            self._active_sunrise_start = start
-            self._active_sunrise_end = alarm
-            total = fade_window.total_seconds()
-            elapsed = (now - start).total_seconds()
-            return max(0.0, min(1.0, elapsed / total if total > 0 else 1.0))
+        for alarm in sorted(candidates):
+            start = alarm - fade_window
+            if start <= now <= alarm:
+                self._active_sunrise_start = start
+                self._active_sunrise_end = alarm
+                total = fade_window.total_seconds()
+                elapsed = (now - start).total_seconds()
+                return max(0.0, min(1.0, elapsed / total if total > 0 else 1.0))
         return None
 
     def _sunset_progress(self, clock_hour: float, house: HouseSettings) -> float | None:
@@ -1236,7 +1345,15 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         if not self._night_latched:
             return
 
-        if unlatch:
+        wifi = self.hass.states.get("sensor.pixel_8a_wi_fi_connection")
+        stale_phone_boot = (
+            "sensor.pixel_8a_do_not_disturb_sensor" not in self._dnd_live_seen
+            and wifi is not None
+            and wifi.state in ("<not connected>", "unknown", "unavailable")
+            and not self._watch_bedtime()
+            and not self._manual_sleep()
+        )
+        if unlatch or stale_phone_boot:
             _LOGGER.debug("Solace: leaving night mode (sunrise / alarm / dawn lux %s)", lux)
             self._night_latched = False
             self._clear_sleep_toggle()
@@ -1287,25 +1404,52 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         dusk = self._dusk_hour()
         for subentry in self._subentries():
             room_settings = self.room_settings(subentry)
+            room_eff_lux = max(0.0, lux / (2.0 ** room_settings.threshold_stops))
+            room_master = (
+                master
+                if abs(room_settings.threshold_stops) <= 1e-9
+                else solve_master(
+                    room_eff_lux,
+                    clock_hour,
+                    house,
+                    cloud_coverage=cloud_coverage,
+                )
+            )
             zone_for = {
                 light_id: zone
                 for zone in room_settings.zones
                 for light_id in zone.lights
             }
             room_state = self.rooms.get(subentry.subentry_id)
-            ambience_open = room_state.ambience_open if room_state is not None else self._gate_open()
+            is_stairway = "stair" in subentry.title.lower() or "stair" in room_settings.name.lower()
+            ambience_open = False if is_stairway else (room_state.ambience_open if room_state is not None else self._gate_open())
             fixture_states: dict[str, FixtureStandbyState] = {}
             for entity_id in subentry.data.get(CONF_LIGHTS, []):
                 light = self.light_settings(entity_id, subentry)
                 zone = zone_for.get(entity_id)
                 table = compute_state_table(
-                    master, house, room_settings, light, clock_hour=clock_hour, zone=zone
+                    room_master,
+                    house,
+                    room_settings,
+                    light,
+                    clock_hour=clock_hour,
+                    zone=zone,
+                    effective_lux=room_eff_lux,
+                    cloud_coverage=cloud_coverage,
                 )
                 wake_colour = resolve_colour(clock_hour, dusk, house, light).kelvin
 
-                cutoff = 0 if ambience_open else max(house.min_cutoff, light.clamp_min)
-                l1_level = 0 if 0 < table.l1 < cutoff else table.l1
-                l2_level = 0 if 0 < table.l2 < cutoff else table.l2
+                cutoff = 254 if house.min_cutoff >= 254 else (0 if ambience_open else max(house.min_cutoff, light.clamp_min))
+                l1_level = 0 if (0 < table.l1 <= cutoff if cutoff >= 254 else 0 < table.l1 < cutoff) else table.l1
+                l2_level = 0 if (0 < table.l2 <= cutoff if cutoff >= 254 else 0 < table.l2 < cutoff) else table.l2
+                l1s_level = table.l1s
+
+                occ_min = max(0, min(254, min(room_settings.occupied_min, room_settings.occupied_max)))
+                occ_max = max(0, min(254, max(room_settings.occupied_min, room_settings.occupied_max)))
+                if occ_min > 0 or occ_max < 254:
+                    l1_level = apply_clamp(max(occ_min, min(occ_max, l1_level)), light)
+                    l2_level = apply_clamp(max(occ_min, min(occ_max, l2_level)), light)
+                    l1s_level = apply_clamp(min(occ_max, l1s_level), light)
 
                 l0 = StandbyTarget(
                     level=0,
@@ -1328,7 +1472,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                     transition_s=house.transition_up_ambience_s,
                 )
                 l1s = StandbyTarget(
-                    level=table.l1s,
+                    level=l1s_level,
                     kelvin=house.night_kelvin,
                     transition_s=house.transition_up_occupancy_s,
                 )
@@ -1356,7 +1500,17 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                 continue
 
             settings = self.room_settings(subentry)
-            if room.occupied or room.is_manual(settings.manual_hold_minutes, now_ts):
+            is_bedroom_off = (
+                settings.night_off
+                or "bedroom" in subentry.title.lower()
+                or "bedroom" in settings.name.lower()
+            )
+            if (
+                room.occupied
+                or room.is_manual(settings.manual_hold_minutes, now_ts)
+                or self._away()
+                or (self._asleep() and is_bedroom_off)
+            ):
                 continue
 
             room.occupied = True
@@ -1400,9 +1554,37 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
             and entity_id
         ):
             self._handle_fast_path_presence(entity_id)
+        elif (
+            old_state is not None
+            and old_state.state == STATE_ON
+            and (new_state is None or new_state.state != STATE_ON)
+            and entity_id
+        ):
+            now_ts = dt_util.utcnow().timestamp()
+            for subentry in self._subentries():
+                presence_entities = subentry.data.get(CONF_PRESENCE)
+                if (isinstance(presence_entities, str) and presence_entities == entity_id) or (
+                    isinstance(presence_entities, (list, tuple)) and entity_id in presence_entities
+                ):
+                    self._last_presence[subentry.subentry_id] = now_ts
 
         if entity_id == "input_boolean.ambient_gate" and new_state is not None:
             self._gate_override = (new_state.state == STATE_ON)
+
+        if (
+            entity_id
+            and old_state is not None
+            and new_state is not None
+            and old_state.state not in ("unknown", "unavailable")
+            and new_state.state not in ("unknown", "unavailable")
+            and old_state.state != new_state.state
+        ):
+            self._dnd_live_seen.add(entity_id)
+            if entity_id in (
+                "input_boolean.solace_sleep",
+                "sensor.pixel_8a_do_not_disturb_sensor",
+            ) and new_state.state == "off":
+                self._night_latched = False
 
         self.hass.async_create_task(self.async_refresh())
 
@@ -1529,6 +1711,13 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         for entity_id in candidates:
             state = self.hass.states.get(entity_id)
             if state is not None and state.state not in ("unknown", "unavailable"):
+                if (
+                    entity_id == "sensor.pixel_8a_do_not_disturb_sensor"
+                    and entity_id not in self._dnd_live_seen
+                ):
+                    wifi = self.hass.states.get("sensor.pixel_8a_wi_fi_connection")
+                    if wifi is None or wifi.state in ("<not connected>", "unknown", "unavailable"):
+                        continue
                 if state.state in sleep_states:
                     return True
         return False
@@ -1674,7 +1863,14 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         anyone_home = any(
             self._any_on(sub.data.get(CONF_PRESENCE), default=True) for sub in self._subentries()
         )
-        if volatility > house.lux_volatility_lx:
+        any_lit = any(
+            sol.level > 0
+            for room in self.rooms.values()
+            for sol in room.solutions.values()
+        )
+        if self._away() or self._asleep() or (not any_lit and not anyone_home):
+            seconds = house.update_interval_max_s
+        elif volatility > house.lux_volatility_lx and any_lit:
             seconds = house.update_interval_min_s
         elif anyone_home:
             seconds = house.update_interval_home_s

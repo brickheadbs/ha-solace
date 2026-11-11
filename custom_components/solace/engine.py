@@ -100,7 +100,7 @@ def demand(
         curve = curve_or_house
 
     if curve:
-        return _clamp01(MonotoneCubicSpline(curve).evaluate(max(0.0, lux)))
+        return _clamp01(MonotoneCubicSpline(curve, log_x=True).evaluate(max(0.0, lux)))
     return 0.0
 
 
@@ -255,6 +255,45 @@ def solve_master(
 # --------------------------------------------------------------------------------
 
 
+def _biased_l1_raw(
+    master: MasterOutput,
+    house: HouseSettings,
+    total_stops: float,
+    clock_hour: float,
+    effective_lux: float | None = None,
+    cloud_coverage: float | None = None,
+) -> tuple[int, float]:
+    """Apply EV stops using the Exposure Envelope.
+
+    - Gain scaling (`base_lvl * 2^stops`) scales output across all 24h schedules,
+      including evening/night schedules where `time_brightness_level < 254`.
+    - Positive EV stops (`total_stops > 0`) also evaluate demand at `effective_lux / 2^stops`
+      and take the upper envelope `max(gain_lvl, thresh_lvl)`, so brightening a room that
+      sits just above the turn-on lux threshold turns the lights on sooner without
+      double-counting mid-slope gain.
+    """
+    base_lvl = master.demand * master.time_brightness_level
+    gain_lvl = base_lvl * (2.0 ** total_stops)
+    raw_val = gain_lvl
+    fraction = clip_to_full(master.demand, total_stops)
+
+    if total_stops > 1e-9 and effective_lux is not None:
+        shifted_master = solve_master(
+            effective_lux / (2.0 ** total_stops),
+            clock_hour,
+            house,
+            cloud_coverage=cloud_coverage,
+        )
+        thresh_lvl = shifted_master.demand * master.time_brightness_level
+        if thresh_lvl > raw_val:
+            raw_val = thresh_lvl
+        if shifted_master.demand > fraction:
+            fraction = shifted_master.demand
+
+    raw_int = int(round(max(0.0, min(float(MAX_LEVEL), raw_val))))
+    return raw_int, _clamp01(fraction)
+
+
 def compute_state_table(
     master: MasterOutput,
     house: HouseSettings,
@@ -262,6 +301,8 @@ def compute_state_table(
     light: LightSettings,
     clock_hour: float = 14.0,
     zone: ZoneSettings | None = None,
+    effective_lux: float | None = None,
+    cloud_coverage: float | None = None,
 ) -> StateTable:
     """Compute the pre-calculated state table (L1, L2, L3, Ls) for one fixture."""
     zone_stops = zone.bias_stops if zone is not None else room.zone_bias_stops
@@ -273,15 +314,19 @@ def compute_state_table(
         + light.bias_stops
     )
 
-    # L1: Occupancy active level (Master Target adjusted by stops bias)
+    # L1: Occupancy active level (Master Target adjusted by Exposure Envelope stops bias)
     #
-    # ⚠️ NO CUT OFF HERE. Cut Offs are armed/disarmed by the ambience gate, and that gate is
+    # NO CUT OFF HERE. Cut Offs are armed/disarmed by the ambience gate, and that gate is
     # not known at state-table time — it is applied in `solve` step 7, which owns the whole
-    # rule. Applying it a second time here, unguarded, zeroed L1 whenever the evening curve
-    # dipped below a fixture's cut, so six lights could never rise above the ambience floor
-    # after dusk. Clamps are always on; Cut Offs are not.
-    raw_l1_fraction = clip_to_full(master.demand, total_stops)
-    raw_l1 = int(round(raw_l1_fraction * master.time_brightness_level))
+    # rule. Clamps are always on; Cut Offs are not.
+    raw_l1, _ = _biased_l1_raw(
+        master,
+        house,
+        total_stops,
+        clock_hour,
+        effective_lux=effective_lux,
+        cloud_coverage=cloud_coverage,
+    )
     l1 = apply_clamp(raw_l1, light)
 
     # L2: Diminished subzone level (Stops below L1 preferred)
@@ -296,12 +341,15 @@ def compute_state_table(
         raw_l2 = l1
     l2 = apply_clamp(raw_l2, light)  # Cut Off deferred to step 7, as for L1 above.
 
-    # L3: Ambience resting floor (cutoffs disabled, max clamp preserved)
-    ambience_raw = room.ambience_level or house.ambience_level
+    # L3: Ambience resting floor (cutoffs disabled, max clamp preserved).
+    # Stairway is excluded from ambient lighting (occupied-only area).
+    is_stairway = "stair" in room.name.lower()
+    ambience_raw = 0 if is_stairway else (room.ambience_level or house.ambience_level)
     l3 = apply_clamp(ambience_raw, light) if ambience_raw > 0 else 0
 
-    # L1S: special-slot level (cutoffs disabled, max clamp preserved). The night
-    # provider is the only binder today; the morning ramp will use the same slot.
+    # L1S: special-slot level (cutoffs disabled, max clamp preserved).
+    # Sleep forced-off is gated by `data.asleep` in `solve` so getting out of bed during
+    # latched Night Mode (`asleep=False, night_active=True`) relights at `night_level`.
     l1s = apply_clamp(house.night_level, light)
 
     return StateTable(
@@ -328,13 +376,18 @@ def solve(
     """Run Master Processing and Post Processing for one light."""
     trace: list[tuple[str, object]] = []
 
+    effective_lux = max(0.0, data.lux / (2.0 ** room.threshold_stops))
+    if abs(room.threshold_stops) > 1e-9:
+        trace.append(("threshold_stops", room.threshold_stops))
+        trace.append(("effective_lux", round(effective_lux, 2)))
+
     # 1. Master Processing
     master = solve_master(
-        data.lux,
+        effective_lux,
         data.clock_hour,
         house,
         cloud_coverage=data.cloud_coverage,
-        demand_override=data.demand_override,
+        demand_override=data.demand_override if abs(room.threshold_stops) <= 1e-9 else None,
     )
     trace.extend(master.trace)
 
@@ -342,7 +395,7 @@ def solve(
     ambience_open = (
         data.ambience_resolved
         if data.ambience_resolved is not None
-        else ambience_threshold(data.lux, data.ambience_open, house)
+        else ambience_threshold(effective_lux, data.ambience_open, house)
     )
     trace.append(("ambience_open", ambience_open))
 
@@ -357,7 +410,14 @@ def solve(
 
     # 4. State Table
     state_table = compute_state_table(
-        master, house, room, light, clock_hour=data.clock_hour, zone=zone
+        master,
+        house,
+        room,
+        light,
+        clock_hour=data.clock_hour,
+        zone=zone,
+        effective_lux=effective_lux,
+        cloud_coverage=data.cloud_coverage,
     )
     trace.append(("state_l1", state_table.l1))
     trace.append(("state_l2", state_table.l2))
@@ -372,8 +432,14 @@ def solve(
         + zone_stops
         + light.bias_stops
     )
-    raw_l1_fraction = clip_to_full(master.demand, total_stops)
-    raw_l1 = int(round(raw_l1_fraction * master.time_brightness_level))
+    raw_l1, effective_fraction = _biased_l1_raw(
+        master,
+        house,
+        total_stops,
+        data.clock_hour,
+        effective_lux=effective_lux,
+        cloud_coverage=data.cloud_coverage,
+    )
     trace.append(("level_raw", raw_l1))
 
     # 5. State Selection
@@ -386,7 +452,7 @@ def solve(
         source = "away"
         trace.append(("away", True))
 
-    # B. VIRTUAL SUNRISE: Artificial dawn goes on TOP of sleep mode to gently wake
+    # B. VIRTUAL SUNRISE: Artificial dawn goes on TOP of sleep mode to gently wake, capped by demand L1
     elif mode is Mode.SUNRISE:
         if room.sunrise_enabled or room.night_off or "bedroom" in room.name.lower():
             progress_pct = max(0.0, min(100.0, (data.sunrise_progress or 0.0) * 100.0))
@@ -401,25 +467,30 @@ def solve(
             source = "sunrise"
             trace.append(("sunrise_other_room", level))
 
-    # C. BEDROOM SLEEP OVERRIDE: Forced OFF across normal modes in bedroom
+    # C. BEDROOM SLEEP OVERRIDE: Forced OFF while actively asleep in bedroom / night_off rooms
     elif (room.night_off or "bedroom" in room.name.lower()) and data.asleep:
         level = 0
         source = "sleep"
         trace.append(("bedroom_sleep_forced_off", True))
 
-    # D. VIRTUAL SUNSET: Bedtime fade (bedroom only)
+    # D. VIRTUAL SUNSET: Bedtime fade (bedroom only, only while occupied)
     elif mode is Mode.SUNSET:
         if room.sunset_enabled or room.night_off or "bedroom" in room.name.lower():
-            progress_pct = max(0.0, min(100.0, (data.sunset_progress or 0.0) * 100.0))
-            sunset_spline = MonotoneCubicSpline(house.sunset_curve)
-            curve_raw = sunset_spline(progress_pct)
-            default_floor = AQARA_MIN_LEVEL if light.family in (Family.AQARA_RGB, Family.AQARA_CCT) else 1
-            low_level = int(house.sunset_curve[-1].y) if (house.sunset_curve and house.sunset_curve[-1].y > 0) else default_floor
-            target_level = min(int(round(curve_raw)), state_table.l1)
-            target_level = max(low_level, target_level)
-            level = apply_clamp(max(0, target_level), light)
-            source = "sunset"
-            trace.append(("virtual_sunset", level))
+            if not data.occupied:
+                level = 0
+                source = "off"
+                trace.append(("sunset_unoccupied", True))
+            else:
+                progress_pct = max(0.0, min(100.0, (data.sunset_progress or 0.0) * 100.0))
+                sunset_spline = MonotoneCubicSpline(house.sunset_curve)
+                curve_raw = sunset_spline(progress_pct)
+                default_floor = AQARA_MIN_LEVEL if light.family in (Family.AQARA_RGB, Family.AQARA_CCT) else 1
+                low_level = int(house.sunset_curve[-1].y) if (house.sunset_curve and house.sunset_curve[-1].y > 0) else default_floor
+                target_level = min(int(round(curve_raw)), state_table.l1)
+                target_level = max(low_level, target_level)
+                level = apply_clamp(max(0, target_level), light)
+                source = "sunset"
+                trace.append(("virtual_sunset", level))
         else:
             if data.occupied:
                 level = state_table.l1s if data.night_active else state_table.l1
@@ -429,14 +500,15 @@ def solve(
                 source = "ambience" if level > 0 else "off"
             trace.append(("sunset_other_room", level))
 
-    # E. NIGHT MODE
+    # E. NIGHT MODE (asleep=False or non-bedroom room; bedroom while asleep was caught in Branch C)
     elif mode is Mode.NIGHT:
         if data.occupied:
             level = state_table.l1s
             source = "night"
             trace.append(("night_override", level))
         else:
-            if house.ambience_ignores_occupancy and ambience_open and not data.asleep and state_table.l3 > 0:
+            is_bedroom_off = room.night_off or "bedroom" in room.name.lower()
+            if not is_bedroom_off and house.ambience_ignores_occupancy and ambience_open and not data.asleep and state_table.l3 > 0:
                 level = state_table.l3
                 source = "ambience"
                 trace.append(("ambience_replaces_off", level))
@@ -496,11 +568,36 @@ def solve(
     # test_the_cutoff_drops_out_below_the_threshold_but_zero_is_still_off.
     l3_armed = ambience_open
     ls_armed = mode is Mode.NIGHT
-    cutoff = 0 if (l3_armed or ls_armed or data.bedtime_dwell_active or source in ("ambience", "night", "sunrise", "sunset", "bedtime_dwell")) else max(house.min_cutoff, light.clamp_min)
+    if house.min_cutoff >= MAX_LEVEL and source == "demand":
+        cutoff = MAX_LEVEL
+    else:
+        cutoff = 0 if (l3_armed or ls_armed or data.bedtime_dwell_active or source in ("ambience", "night", "sunrise", "sunset", "bedtime_dwell")) else max(house.min_cutoff, light.clamp_min)
     trace.append(("cutoff_armed", cutoff > 0))
-    if 0 < level < cutoff and mode not in (Mode.AWAY, Mode.SUNRISE, Mode.SUNSET, Mode.NIGHT):
+    if (0 < level <= cutoff if cutoff >= MAX_LEVEL else 0 < level < cutoff) and mode not in (Mode.AWAY, Mode.SUNRISE, Mode.SUNSET, Mode.NIGHT):
         level = 0
         trace.append(("below_cutoff", cutoff))
+
+    # 7b. Room Occupied Minimum / Maximum Bounds
+    # Rooms without windows (e.g. Stairway) can set an occupied floor and ceiling so the
+    # lights always turn on at >= occupied_min in Normal Mode (even in full daylight),
+    # follow Solace for any value in between, and cap at occupied_max.
+    # Night Mode, Sunrise, and Sunset are exempt from occupied_min so Night Mode stays at
+    # night_level instead of glaring at the daytime hallway floor.
+    occ_min = max(0, min(MAX_LEVEL, min(room.occupied_min, room.occupied_max)))
+    occ_max = max(0, min(MAX_LEVEL, max(room.occupied_min, room.occupied_max)))
+    if (
+        data.occupied
+        and mode is not Mode.AWAY
+        and not ((room.night_off or "bedroom" in room.name.lower()) and data.asleep)
+        and (occ_min > 0 or occ_max < MAX_LEVEL)
+    ):
+        if mode is Mode.NORMAL:
+            level = max(occ_min, min(occ_max, level))
+            if level > 0 and source in ("off", "demand"):
+                source = "demand"
+        else:
+            level = min(occ_max, level)
+        trace.append(("occupied_bounds", (occ_min, occ_max, level)))
 
     # 8. Manual Override
     if data.manual_level is not None:
@@ -528,6 +625,8 @@ def solve(
         source=source,
         last_source=data.last_source,
     )
+    if level == 0 and data.current_level > 0:
+        write = True
     trace.append(("should_write", write))
 
     return Solution(
@@ -537,7 +636,7 @@ def solve(
         ambience_open=ambience_open,
         demand=master.demand,
         stops=total_stops,
-        fraction=clip_to_full(master.demand, total_stops),
+        fraction=effective_fraction,
         source=source,
         state_table=state_table,
         trace=tuple(trace),

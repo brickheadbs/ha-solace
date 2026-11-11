@@ -1,18 +1,9 @@
 /**
  * The Solace panel root.
  *
- * Home Assistant hands a custom panel four properties — `hass`, `narrow`, `route` and
- * `panel` — and expects a custom element registered under the name given to
- * `panel_custom.async_register_panel`.
- *
- * Everything below the app bar is driven by one WebSocket subscription. There is no save
- * button, no confirmation toast and no dirty state: values commit as they move, and the
- * snapshot that comes back is the truth. The panel keeps a short-lived local echo only
- * so a slider thumb tracks the finger rather than the round trip.
- *
- * ⚠️ The designer-notes drawer from the prototype is **deliberately not here.** It is a
- * design artefact documenting unresolved engine questions, and the handoff says not to
- * ship it.
+ * Tabs:
+ *   Home | Lighting | Wake-up | Wind-down | Music | Engine | Help
+ * Plus a header "Reorder" lock/unlock button on Home and Lighting.
  */
 
 import { LitElement, css, html, nothing } from "lit";
@@ -21,22 +12,26 @@ import { customElement } from "./custom-element";
 import type { Hass, Snapshot } from "./api";
 import { subscribe } from "./api";
 import { kelvinToDerim } from "./derim";
-import "./tab-curves";
+import "./tab-engine";
+import "./tab-help";
 import "./tab-home";
 import "./tab-lighting";
-import "./tab-remotes";
-import "./tab-settings";
+import "./tab-music";
+import "./tab-wakeup";
+import "./tab-winddown";
 import { tokens } from "./tokens";
 import "./ui";
 
-type Tab = "home" | "lighting" | "curves" | "settings" | "remotes";
+type Tab = "home" | "lighting" | "wakeup" | "winddown" | "music" | "engine" | "help";
 
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: "home", label: "Home" },
   { id: "lighting", label: "Lighting" },
-  { id: "curves", label: "Master curves" },
-  { id: "settings", label: "Settings & modes" },
-  { id: "remotes", label: "Remotes" },
+  { id: "wakeup", label: "Wake-up" },
+  { id: "winddown", label: "Wind-down" },
+  { id: "music", label: "Music" },
+  { id: "engine", label: "Engine" },
+  { id: "help", label: "Help" },
 ];
 
 @customElement("solace-panel")
@@ -45,6 +40,7 @@ export class SolacePanel extends LitElement {
   @property({ type: Boolean }) narrow = false;
 
   @state() private tab: Tab = "home";
+  @state() private reorderMode = false;
   @state() private snap: Snapshot | null = null;
   @state() private error: string | null = null;
 
@@ -97,30 +93,45 @@ export class SolacePanel extends LitElement {
         padding: 5px 11px;
         white-space: nowrap;
       }
-      .dot {
-        width: 7px;
-        height: 7px;
-        border-radius: 50%;
-        background: var(--sol-green);
+      .reorder-toggle {
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        background: var(--sol-control);
+        color: var(--sol-text-2);
+        border-radius: 10px;
+        padding: 5px 11px;
+        font-family: inherit;
+        font-size: 12px;
+        font-weight: 500;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
       }
-      .dot.bad {
-        background: var(--error-color, #ef5350);
+      .reorder-toggle ha-icon {
+        --mdc-icon-size: 15px;
+      }
+      .reorder-toggle.active {
+        border-color: var(--sol-cyan);
+        background: rgba(86, 182, 194, 0.18);
+        color: var(--sol-cyan);
       }
       nav {
         display: flex;
         gap: 0;
         padding: 0 18px 12px;
+        overflow-x: auto;
       }
       nav button {
         all: unset;
         cursor: pointer;
-        font-size: 13.5px;
+        font-size: 13px;
         font-weight: 500;
         letter-spacing: 0.6px;
         text-transform: uppercase;
         color: var(--sol-text-3);
         padding: 4px 14px 8px;
         border-bottom: 2px solid transparent;
+        white-space: nowrap;
       }
       nav button[aria-selected="true"] {
         color: var(--sol-cyan);
@@ -299,11 +310,9 @@ export class SolacePanel extends LitElement {
             : nothing}
           <span class="status-item">
             <ha-icon icon="mdi:palette-outline"></ha-icon>
-            <strong>${w.kelvin} K</strong> (${derimVal} Ɯ)
+            <strong>${w.kelvin} K</strong> (${derimVal} M)
           </span>
-          <span class="status-item">
-            ${modeBadge}
-          </span>
+          <span class="status-item">${modeBadge}</span>
         </div>
         <div class="room-badges">
           ${this.snap.rooms.map((r) => {
@@ -317,54 +326,112 @@ export class SolacePanel extends LitElement {
     `;
   }
 
+  private renderRateBadge() {
+    const rateZone = this.hass?.states?.["sensor.electricity_rate_zone"]?.state ?? "";
+    if (!rateZone || rateZone === "unknown" || rateZone === "unavailable") {
+      return nothing;
+    }
+    const isPeak = rateZone.startsWith("Peak");
+    const isNight = rateZone.startsWith("Night");
+    const bg = isPeak
+      ? "rgba(239, 83, 80, 0.14)"
+      : isNight
+        ? "rgba(102, 187, 106, 0.14)"
+        : "var(--sol-control)";
+    const fg = isPeak ? "#ef9a9a" : isNight ? "#a5d6a7" : "var(--sol-text-2)";
+    const border = isPeak
+      ? "1px solid rgba(239, 83, 80, 0.32)"
+      : isNight
+        ? "1px solid rgba(102, 187, 106, 0.32)"
+        : "1px solid rgba(255, 255, 255, 0.08)";
+    const iconColor = isPeak ? "#ef5350" : isNight ? "#81c784" : "var(--sol-text-3)";
+
+    return html`
+      <span
+        class="pill"
+        style="background: ${bg}; color: ${fg}; border: ${border}; font-weight: 500;"
+        title="Electricity Tariff Rate Zone"
+      >
+        <ha-icon icon="mdi:lightning-bolt" style="--mdc-icon-size: 15px; color: ${iconColor};"></ha-icon>
+        ${rateZone}
+      </span>
+    `;
+  }
+
   private renderTab() {
     if (!this.snap) return nothing;
     switch (this.tab) {
       case "lighting":
-        return html`<sol-tab-lighting .hass=${this.hass} .snap=${this.snap}></sol-tab-lighting>`;
-      case "curves":
-        return html`<sol-tab-curves .hass=${this.hass} .snap=${this.snap}></sol-tab-curves>`;
-      case "settings":
-        return html`<sol-tab-settings .hass=${this.hass} .snap=${this.snap}></sol-tab-settings>`;
-      case "remotes":
-        return html`<sol-tab-remotes .hass=${this.hass} .snap=${this.snap}></sol-tab-remotes>`;
+        return html`<sol-tab-lighting
+          .hass=${this.hass}
+          .snap=${this.snap}
+          .reorderMode=${this.reorderMode}
+        ></sol-tab-lighting>`;
+      case "wakeup":
+        return html`<sol-tab-wakeup .hass=${this.hass} .snap=${this.snap}></sol-tab-wakeup>`;
+      case "winddown":
+        return html`<sol-tab-winddown .hass=${this.hass} .snap=${this.snap}></sol-tab-winddown>`;
+      case "music":
+        return html`<sol-tab-music .hass=${this.hass} .snap=${this.snap}></sol-tab-music>`;
+      case "engine":
+        return html`<sol-tab-engine .hass=${this.hass} .snap=${this.snap}></sol-tab-engine>`;
+      case "help":
+        return html`<sol-tab-help .hass=${this.hass} .snap=${this.snap}></sol-tab-help>`;
       default:
-        return html`<sol-tab-home .hass=${this.hass} .snap=${this.snap}></sol-tab-home>`;
+        return html`<sol-tab-home
+          .hass=${this.hass}
+          .snap=${this.snap}
+          .reorderMode=${this.reorderMode}
+        ></sol-tab-home>`;
     }
   }
 
   render() {
+    const canReorder = this.tab === "home" || this.tab === "lighting";
     return html`
       <header>
         <div class="bar">
           <ha-icon class="brand" icon="mdi:tune"></ha-icon>
-          <h1>Lighting Engine</h1>
+          <h1>Solace</h1>
+          ${canReorder
+            ? html`
+                <button
+                  class="reorder-toggle ${this.reorderMode ? "active" : ""}"
+                  @click=${() => (this.reorderMode = !this.reorderMode)}
+                  title="Drag or use arrows to reorder cards"
+                >
+                  <ha-icon icon=${this.reorderMode ? "mdi:check" : "mdi:drag"}></ha-icon>
+                  ${this.reorderMode ? "Done ordering" : "Reorder cards"}
+                </button>
+              `
+            : nothing}
+          ${this.renderRateBadge()}
         </div>
         <nav role="tablist">
           ${TABS.map(
             (t) => html`<button
               role="tab"
               aria-selected=${this.tab === t.id}
-              @click=${() => (this.tab = t.id)}
+              @click=${() => {
+                this.tab = t.id;
+                if (t.id !== "home" && t.id !== "lighting") this.reorderMode = false;
+              }}
             >
               ${t.label}
             </button>`
           )}
         </nav>
-        ${this.tab !== "home" ? this.renderStatusHeader() : nothing}
+        ${this.tab !== "home" && this.tab !== "help" ? this.renderStatusHeader() : nothing}
       </header>
       <main>
         ${this.snap
           ? this.renderTab()
           : html`<div class="placeholder">
               <ha-icon icon=${this.error ? "mdi:alert-circle-outline" : "mdi:progress-clock"}></ha-icon>
-              <p>
-                ${this.error ??
-                "Waiting for the engine…"}
-              </p>
+              <p>${this.error ?? "Waiting for the engine..."}</p>
               ${this.error
                 ? html`<p>
-                    Add the integration under <code>Settings → Devices &amp; services</code>, then
+                    Add the integration under <code>Settings -&gt; Devices &amp; services</code>, then
                     add a room for each zone you want Solace to drive.
                   </p>`
                 : nothing}

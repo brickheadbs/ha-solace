@@ -58,11 +58,10 @@ AQARA_MIN_LEVEL: int = 3
 
 
 class Family(str, Enum):
-    """Bulb families with distinct Zigbee hardware rate and serialisation capabilities."""
+    """Aqara bulb families discriminated by hardware Kelvin ceiling."""
 
     AQARA_RGB = "aqara_rgb"
     AQARA_CCT = "aqara_cct"
-    IKEA = "ikea"
 
 
 class Mode(str, Enum):
@@ -230,7 +229,6 @@ class HouseSettings:
     day_kelvin: int = 4000
     colour_heartbeat_s: float = 600.0
     colour_trim_kelvin: int = 0
-    colour_step_mired: int = 5
     colour_step_mired_smooth: int = 2
     colour_catch_up_steps: int = 3
     colour_step_transition_s: float = 4.0
@@ -247,7 +245,6 @@ class HouseSettings:
     lux_history_samples: int = 5
     fallback_min_kelvin: int = 2000
     fallback_max_kelvin: int = 9009
-    family_cct_max_kelvin: int = 4200
     family_rgb_max_kelvin: int = 7000
 
     # -- The 3 Bedroom Special Modes ----------------------------------------------
@@ -308,10 +305,13 @@ class RoomSettings:
 
     name: str = "Room"
     bias_stops: float = 0.0
+    threshold_stops: float = 0.0
     zone_bias_stops: float = 0.0
     diminish_stops: float = 0.0
     diminish_pct: float = 40.0
     ambience_level: int = 0
+    occupied_min: int = 0
+    occupied_max: int = 254
     night_off: bool = False
     manual_hold_minutes: float = 30.0
     manual_mode: bool = False

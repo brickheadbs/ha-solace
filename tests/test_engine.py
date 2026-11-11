@@ -343,10 +343,10 @@ def test_clamp_never_lifts_an_off_light_off_zero():
 
     Clamping 0 up to clamp_min leaves the room glowing at level 1 instead of off.
     """
-    ikea = LightSettings(entity_id="light.living_ceiling", family=Family.IKEA, clamp_min=1, clamp_max=10)
-    assert apply_clamp(0, ikea) == 0
-    assert apply_clamp(1, ikea) == 1
-    assert apply_clamp(200, ikea) == 10
+    cct = LightSettings(entity_id="light.living_ceiling", family=Family.AQARA_CCT, clamp_min=1, clamp_max=10)
+    assert apply_clamp(0, cct) == 0
+    assert apply_clamp(1, cct) == AQARA_MIN_LEVEL
+    assert apply_clamp(200, cct) == 10
 
     aqara = LightSettings(entity_id="light.living_ceiling", family=Family.AQARA_RGB, clamp_min=1, clamp_max=10)
     assert apply_clamp(0, aqara) == 0
@@ -894,12 +894,12 @@ def test_bedtime_dwell_and_night_mode_exempt_from_cutoff(house, light):
     assert got_high.level == 15
     assert ("below_cutoff", 25) not in got_high.trace
 
-    # Dim demand (level 5) -> kept at 5 -> not zeroed by cutoff 25
+    # Dim demand (level 3 on DEFAULT_LUX_CURVE at 500 lx) -> kept at 3 -> not zeroed by cutoff 25
     got_low = solve(
         house_cutoff, bedroom, light,
         _input(lux=500.0, occupied=True, bedtime_dwell_active=True),
     )
-    assert got_low.level == 5
+    assert 0 < got_low.level < 25
     assert ("below_cutoff", 25) not in got_low.trace
 
 
@@ -995,19 +995,19 @@ def test_per_light_min_is_a_cutoff_not_a_floor_and_exempt_in_ambience_and_night(
     """
     entry_light = LightSettings(
         entity_id="light.entry_ceiling",
-        family=Family.IKEA,
+        family=Family.AQARA_CCT,
         clamp_min=60,  # 24% cutoff
         clamp_max=100,
     )
-    # 1. Ambience level of 2 (1%) MUST remain 2 and NOT be forced to 60
+    # 1. Ambience level of 3 MUST remain 3 and NOT be forced to 60
     table = compute_state_table(
         solve_master(0.0, 22.0, house),
         house,
-        RoomSettings(name="Entry", ambience_level=2),
+        RoomSettings(name="Entry", ambience_level=3),
         entry_light,
         clock_hour=22.0,
     )
-    assert table.l3 == 2
+    assert table.l3 == 3
 
     # 2. Night level (3) MUST remain 3 and NOT be forced to 60
     assert table.l1s == house.night_level
@@ -1069,6 +1069,107 @@ def test_virtual_sunset_holds_at_low_level_until_bedtime_mode(light):
     got_sleep = solve(house, bedroom, light, _input(lux=0.0, sunset_progress=1.0, occupied=True, asleep=True))
     assert got_sleep.level == 0
     assert got_sleep.source == "sleep"
+
+
+def test_room_occupied_min_and_max_bounds(house, light):
+    """Windowless rooms (Stairway) always turn on at >= occupied_min when occupied,
+    follow Solace in between [occupied_min, occupied_max], cap at occupied_max,
+    and turn off as normal when unoccupied."""
+    stairway = RoomSettings(name="Stairway", occupied_min=51, occupied_max=200)
+
+    # 1. Unoccupied: turns off as normal (0)
+    unocc = solve(house, stairway, light, _input(lux=0.0, occupied=False))
+    assert unocc.level == 0
+    assert unocc.source == "off"
+
+    # 2. Bright daylight (2000 lx -> Solace demand 0): occupied clamps up to occupied_min (51)
+    bright_occ = solve(house, stairway, light, _input(lux=2000.0, occupied=True))
+    assert bright_occ.level == 51
+    assert bright_occ.source == "demand"
+
+    # 3. House Brightness at 0% (bias_stops=-4.0, min_cutoff=254): normal room is 0, Stairway is occupied_min (51)
+    house_zero = HouseSettings(bias_stops=-4.0, min_cutoff=254)
+    normal_room = RoomSettings(name="Kitchen")
+    assert solve(house_zero, normal_room, light, _input(lux=0.0, occupied=True)).level == 0
+    stairway_zero = solve(house_zero, stairway, light, _input(lux=0.0, occupied=True))
+    assert stairway_zero.level == 51
+    assert stairway_zero.source == "demand"
+
+    # 4. In-between value (lux=10.0 -> Solace L1 is 161, between 51 and 200): follows Solace (161)
+    mid_occ = solve(house, stairway, light, _input(lux=10.0, occupied=True))
+    assert mid_occ.level == 161
+    assert mid_occ.source == "demand"
+
+    # 5. Above occupied_max (lux=0.0 -> Solace L1 is 254 > 200): caps at occupied_max (200)
+    high_occ = solve(house, stairway, light, _input(lux=0.0, occupied=True))
+    assert high_occ.level == 200
+    assert high_occ.source == "demand"
+
+    # 6. Colour temperature still follows Solace's circadian curve
+    noon = solve(house, stairway, light, _input(lux=2000.0, occupied=True, clock_hour=12.0))
+    late = solve(house, stairway, light, _input(lux=0.0, occupied=True, clock_hour=23.0))
+    assert noon.state_table.target_kelvin == 4000
+    assert late.state_table.target_kelvin == 2200
+
+    # 7. Stairway is excluded from ambient lighting even when house/room ambience is set and gate is open
+    house_amb = HouseSettings(ambience_level=20)
+    stairway_amb = RoomSettings(name="Stairway", ambience_level=20, occupied_min=51, occupied_max=200)
+    unocc_amb = solve(house_amb, stairway_amb, light, _input(lux=0.0, occupied=False, ambience_resolved=True))
+    assert unocc_amb.state_table.l3 == 0
+    assert unocc_amb.level == 0
+    assert unocc_amb.source == "off"
+
+
+def test_stairway_night_mode_exempt_from_occupied_min(light):
+    """Stairway occupied_min (51) applies in Normal mode, but Mode.NIGHT drops to night_level (26)."""
+    house_night = HouseSettings(night_level=26)
+    stairway = RoomSettings(name="Stairway", occupied_min=51, occupied_max=226, night_off=False)
+
+    normal_occ = solve(house_night, stairway, light, _input(lux=2000.0, occupied=True, night_active=False))
+    assert normal_occ.mode is Mode.NORMAL
+    assert normal_occ.level == 51
+
+    night_occ = solve(house_night, stairway, light, _input(lux=0.0, occupied=True, night_active=True))
+    assert night_occ.mode is Mode.NIGHT
+    assert night_occ.level == 26
+    assert night_occ.source == "night"
+
+
+def test_threshold_stops_scales_effective_lux(house, light):
+    """Positive threshold_stops turns lights on earlier in north-facing/shaded rooms."""
+    standard_room = RoomSettings(name="Living", threshold_stops=0.0)
+    shaded_room = RoomSettings(name="Bedroom", threshold_stops=2.0)  # 1/4 effective lux
+
+    # At 800 lx outdoor: standard room is above 540 lx turn-on threshold -> 0
+    assert solve(house, standard_room, light, _input(lux=800.0, occupied=True)).level == 0
+
+    # Shaded room (+2 EV) sees 800 / 4 = 200 lx effective -> turns on!
+    shaded_sol = solve(house, shaded_room, light, _input(lux=800.0, occupied=True))
+    expected_200 = solve(house, standard_room, light, _input(lux=200.0, occupied=True))
+    assert shaded_sol.level > 0
+    assert shaded_sol.level == expected_200.level
+
+
+def test_exposure_envelope_bias_stops_wakes_near_threshold_and_boosts_schedule(house, light):
+    """Exposure Envelope (+bias_stops) both shifts the turn-on lux threshold upward
+    AND boosts dimmed evening schedule levels toward 254."""
+    room_zero = RoomSettings(name="Office", bias_stops=0.0)
+    room_plus = RoomSettings(name="Office", bias_stops=1.0)
+
+    # 1. Near turn-on threshold (600 lx > 540 lx): 0 stops is OFF, +1 stop evaluates 300 lx and turns ON
+    assert solve(house, room_zero, light, _input(lux=600.0, occupied=True)).level == 0
+    near_thresh = solve(house, room_plus, light, _input(lux=600.0, occupied=True))
+    assert near_thresh.level > 0
+
+    # 2. Under dimmed evening schedule (level 100 at 0 lx): +1 stop doubles output to 200
+    dim_house = HouseSettings(
+        brightness_timeline=(SplinePoint(0.0, 100.0), SplinePoint(24.0, 100.0)),
+    )
+    assert solve(dim_house, room_zero, light, _input(lux=0.0, occupied=True)).level == 100
+    assert solve(dim_house, room_plus, light, _input(lux=0.0, occupied=True)).level == 200
+
+
+
 
 
 

@@ -38,9 +38,9 @@ _LOGGER = logging.getLogger(__name__)
 
 
 def infer_family(
-    state, *, cct_max_kelvin: int = 4200, rgb_max_kelvin: int = 7000
+    state, *, rgb_max_kelvin: int = 7000
 ) -> Family:
-    """Infer the bulb family from what the registry actually reports.
+    """Infer the Aqara bulb family from what the registry reports.
 
     Read, never guessed — the max Kelvin is the discriminator and it comes straight off
     the live entity:
@@ -48,22 +48,14 @@ def infer_family(
     ==============  ====================
     max_color_temp  family
     ==============  ====================
-    4000 K          IKEA TRADFRI
     6535 K          Aqara CCT
     9009 K          Aqara RGB
     ==============  ====================
 
-    ⚠️ **No bulb counts here, deliberately.** This docstring used to carry "5 / 6 / 12",
-    and on 2026-08-13 a live registry probe made all three wrong (6 / 6 / 15 counting
-    group members individually). A count in a comment is a hardcoded fact about one
-    house at one moment, and the whole reason this function reads the registry is that
-    such facts rot — a note in this repo once "corrected" the IKEA count in the *wrong*
-    direction and ``living_sitting_ne`` kept getting missed as a result. The panel shows
-    the live count; nothing needs to remember it.
+    No bulb counts here, deliberately: the panel derives live family counts from the
+    registry so nothing in comments can drift out of date.
     """
     max_kelvin = state.attributes.get("max_color_temp_kelvin") or 0
-    if max_kelvin <= cct_max_kelvin:
-        return Family.IKEA
     if max_kelvin <= rgb_max_kelvin:
         return Family.AQARA_CCT
     return Family.AQARA_RGB
@@ -159,8 +151,6 @@ class LightWriter:
         """Brightness as **one long hardware transition** — the safe, free channel.
 
         Supports single entity or batched entity list (eliminating Zigbee queuing/popcorning).
-        Guards against IKEA TRADFRI reverse hazard: defers brightness writes while colour step
-        is in flight on non-concurrent fixtures.
         Acquires RampLock lease when is_acute=True.
         """
         entities = [entity_id] if isinstance(entity_id, str) else list(entity_id)
@@ -243,11 +233,9 @@ class LightWriter:
         if current_kelvin is None:
             return None
 
-        # A colour step FREEZES an in-flight brightness fade on IKEA if sent concurrently,
-        # and on every family it would have to carry a brightness to stay safe (see below) —
-        # which would truncate the fade it rode in on. So colour yields universally now, not
-        # just on the non-concurrent families. Under the tier model brightness writes are
-        # rare and short, so a deferred colour step simply lands on the next tick.
+        # A colour step carries brightness to stay safe against bare genOnOff jumps (see below) —
+        # which would truncate an in-flight brightness fade. So colour yields while a brightness
+        # ramp is running, landing cleanly on the next heartbeat.
         if self._is_busy(entity_id):
             _LOGGER.debug("%s: deferring colour step, brightness fade in flight", entity_id)
             return None

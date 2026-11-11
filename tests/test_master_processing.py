@@ -35,7 +35,7 @@ def kitchen() -> RoomSettings:
 def ceiling_light() -> LightSettings:
     return LightSettings(
         entity_id="light.living_ceiling",
-        family=Family.IKEA,
+        family=Family.AQARA_CCT,
         clamp_min=0,
         clamp_max=12,  # 5% hard glare clamp
     )

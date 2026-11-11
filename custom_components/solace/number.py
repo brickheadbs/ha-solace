@@ -61,6 +61,8 @@ class _SolaceNumberBase(NumberEntity):
         self._attr_native_step = setting.step
         self._attr_native_unit_of_measurement = setting.unit
         self._attr_icon = setting.icon
+        if setting.key in ("occupied_min", "occupied_max", "ambience_level"):
+            self._attr_mode = NumberMode.SLIDER
 
 
 class SolaceHouseNumber(SolaceEntity, _SolaceNumberBase):
@@ -115,6 +117,7 @@ class SolaceRoomNumber(SolaceRoomEntity, _SolaceNumberBase):
             subentry,
             data={**subentry.data, self._setting.key: value},
         )
+        self.coordinator.async_note_tuning()
         await self.coordinator.async_request_refresh()
 
 

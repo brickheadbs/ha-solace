@@ -18,14 +18,12 @@ ENTITY = "light.test"
 SMOOTH = fade_profile(
     Family.AQARA_RGB,
     smooth_step_mired=2,
-    stepped_step_mired=5,
     step_transition_s=4.0,
     catch_up_steps=3,
 )
-STEPPED = fade_profile(
-    Family.IKEA,
+SMOOTH_CCT = fade_profile(
+    Family.AQARA_CCT,
     smooth_step_mired=2,
-    stepped_step_mired=5,
     step_transition_s=4.0,
     catch_up_steps=3,
 )
@@ -94,30 +92,22 @@ async def test_a_move_above_tolerance_starts_transition(hass, sent):
     assert sent[0]["transition"] == 600.0
 
 
-# ------------------------------------------------------------------ serialisation (IKEA vs Aqara)
+# ------------------------------------------------------------------ brightness-fade protection
 
 
-async def test_the_serialised_family_defers_while_a_brightness_fade_runs(hass, sent):
-    """Measured: a concurrent colour step freezes in-flight brightness on IKEA."""
+async def test_aqara_cct_defers_while_a_brightness_fade_runs(hass, sent):
+    """Colour yields while an active brightness fade runs so carrying brightness never truncates the fade."""
     writer = LightWriter(hass)
     await writer.async_set_brightness(ENTITY, 200, 600)
     await hass.async_block_till_done()
     sent.clear()
 
-    assert await _step(hass, writer, STEPPED, 3000, 4000) is None
+    assert await _step(hass, writer, SMOOTH_CCT, 3000, 4000) is None
     assert sent == []
 
 
 async def test_colour_yields_to_brightness_on_every_family(hass, sent):
-    """Colour now yields universally, not just on the non-concurrent families.
-
-    Aqara *can* glide colour alongside a brightness fade — that measurement still stands.
-    It no longer may, for a different reason: a colour step has to carry a brightness to
-    avoid the bare ``state: ON`` fault, and writing that level mid-fade would truncate the
-    very fade it rode in on. Brightness is the channel Brandon asked to protect
-    (2026-09-13), so colour is the one that waits. Under the tier model brightness writes
-    are rare and short, so the deferred step lands on the next heartbeat.
-    """
+    """Colour yields universally across both Aqara families while brightness is in flight."""
     writer = LightWriter(hass)
     _lit(hass)
     await writer.async_set_brightness(ENTITY, 200, 600)
@@ -136,10 +126,9 @@ async def test_turning_off_clears_the_busy_window(hass, sent):
     await hass.async_block_till_done()
     sent.clear()
 
-    # The busy window is gone (an in-flight fade would return None for a different
-    # reason), so a lit bulb takes the step normally.
+    # The busy window is gone, so a lit bulb takes the step normally.
     _lit(hass)
-    assert await _step(hass, writer, STEPPED, 3000, 4000) == 4000
+    assert await _step(hass, writer, SMOOTH_CCT, 3000, 4000) == 4000
     assert len(sent) == 1
 
 
@@ -175,10 +164,10 @@ async def test_the_bulbs_own_kelvin_limits_still_win(hass, sent):
     """Out-of-range targets are clamped strictly per bulb capability."""
     writer = LightWriter(hass)
     _lit(hass)
-    ikea_light = _light(Family.IKEA, min_k=2202, max_k=4000)
-    result = await _step(hass, writer, STEPPED, 3000, 5600, light=ikea_light)
-    assert result == 4000
-    assert sent[0]["color_temp_kelvin"] == 4000
+    cct_light = _light(Family.AQARA_CCT, min_k=2702, max_k=6535)
+    result = await _step(hass, writer, SMOOTH_CCT, 3000, 7500, light=cct_light)
+    assert result == 6535
+    assert sent[0]["color_temp_kelvin"] == 6535
 
 
 async def test_an_unknown_current_colour_writes_nothing(hass, sent):
@@ -228,18 +217,16 @@ async def test_turn_off_clears_in_flight_brightness(hass):
 
 
 async def test_aqara_minimum_hardware_floor_in_writer(hass, sent):
-    """Writer clamps level 1..2 to AQARA_MIN_LEVEL for Aqara bulbs; allows level 1 for IKEA."""
+    """Writer clamps level 1..2 to AQARA_MIN_LEVEL for both Aqara RGB and CCT families."""
     from custom_components.solace.models import AQARA_MIN_LEVEL
 
     writer = LightWriter(hass)
-    # Aqara bulb commanded to level 1 gets clamped to AQARA_MIN_LEVEL
     await writer.async_set_brightness(ENTITY, 1, 10.0, family=Family.AQARA_RGB)
     await hass.async_block_till_done()
     assert len(sent) == 1
     assert sent[0]["brightness"] == AQARA_MIN_LEVEL
 
-    # IKEA bulb commanded to level 1 preserves level 1
-    await writer.async_set_brightness("light.ikea_test", 1, 10.0, family=Family.IKEA)
+    await writer.async_set_brightness("light.aqara_cct_test", 2, 10.0, family=Family.AQARA_CCT)
     await hass.async_block_till_done()
     assert len(sent) == 2
-    assert sent[1]["brightness"] == 1
+    assert sent[1]["brightness"] == AQARA_MIN_LEVEL

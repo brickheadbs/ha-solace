@@ -8,10 +8,11 @@ Settled decisions this implements (ha-lighting-system §2, do not re-litigate):
   **mireds**, plus a manual Kelvin trim.
 * **Sun *elevation* was tried and failed** — it sits flat all afternoon then collapses
   in 90 minutes. Anchor to dusk and the clock instead.
-* **Clamp per bulb, and surface the clamp.** A 5000 K request pins every IKEA-family
-  bulb at 4000 K. The bulb reports success either way — silence here is how "colour
-  doesn't work" happens. (How many that is, is read from the registry and shown in the
-  panel; it is deliberately not written down here, because it changes.)
+* **Clamp per bulb, and surface the clamp.** A 2200 K night request pins Aqara CCT
+  fixtures at 2702 K while Aqara RGB fixtures reach 2000 K. The bulb reports success
+  either way — silence here is how "colour doesn't work" happens. (How many that is, is
+  read from the registry and shown in the panel; it is deliberately not written down
+  here, because it changes.)
 """
 
 from __future__ import annotations
@@ -68,8 +69,8 @@ def clamp_kelvin(kelvin: int, light: LightSettings) -> tuple[int, bool]:
     and produces no log line, so the only way it stops being invisible is if we carry it
     up to the panel.
 
-    Broadcasting one Kelvin to mixed families is *safe* (measured: an IKEA pinned
-    5000 K → 4000 K and kept working, both Aqara families took it exactly) — but the
+    Broadcasting one Kelvin to mixed Aqara families is *safe* (an Aqara CCT pins
+    2200 K -> 2702 K and keeps working while Aqara RGB takes 2200 K exactly) — but the
     families then **visually diverge**, which is the thing worth showing.
     """
     clamped = max(light.min_kelvin, min(light.max_kelvin, kelvin))

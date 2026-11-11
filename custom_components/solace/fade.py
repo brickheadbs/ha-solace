@@ -30,8 +30,8 @@ Two consequences that kill the obvious designs:
 2. **A stepped glide must use a SHORT fade then HOLD.** R is computed from the
    **transition time**, never the hold interval::
 
-       ✅ {"color_temp": +5, "transition": 4}    R = 1.25    verified, 18+ steps clean
-       ❌ {"color_temp": +5, "transition": 60}   R = 0.083   underflows
+       PASS {"color_temp": +5, "transition": 4}    R = 1.25    verified, 18+ steps clean
+       FAIL {"color_temp": +5, "transition": 60}   R = 0.083   underflows
 
    Getting that wrong makes a correct design look broken.
 
@@ -47,10 +47,10 @@ Channel          Mechanism
                  window. A stalled step is cheap to detect and fix.
 ===============  ==========================================================
 
-🔴 **IKEA is the exception.** A concurrent colour step **froze an in-flight brightness
-fade at 84 for 420 s**, against a clean same-family control that tracked perfectly. On
-that family the two channels must be serialised — see ``may_run_concurrently``, and
-``fade_profile`` for what serialising costs and how the step size pays for it.
+Both installed Aqara families (RGB and CCT) support concurrent brightness and colour
+transitions in hardware; ``LightWriter`` still yields colour steps while a brightness
+fade is in flight so carrying ``brightness`` on a colour payload never truncates an
+active brightness ramp.
 """
 
 from __future__ import annotations
@@ -154,13 +154,10 @@ def dynamic_colour_transition_s(
     """Calculate a smooth hardware colour transition duration that guarantees R >= R_crit * safety.
 
     R = delta / T >= R_safe => T <= delta / R_safe.
-    Allows Aqara and compatible fixtures to glide smoothly (up to 60s) rather than jump in 4s.
-    On IKEA TRADFRI, keeps transitions at DEFAULT_STEP_TRANSITION_S (4s) to minimise collision windows.
+    Allows Aqara fixtures to glide smoothly (up to 60s) rather than jump in 4s.
     """
     delta = abs(delta_mired)
     if delta <= 0:
-        return DEFAULT_STEP_TRANSITION_S
-    if family == Family.IKEA:
         return DEFAULT_STEP_TRANSITION_S
     r_safe = max(r_crit * safety, 0.01)
     t_max = delta / r_safe
@@ -342,20 +339,7 @@ def plan_brightness(
 
 @dataclass(frozen=True, slots=True)
 class FadeProfile:
-    """How one bulb family walks the colour curve.
-
-    Two families sharing one clock need different step sizes, and the reason is
-    **measured behaviour, not brand preference**:
-
-    * A family that may glide colour *while brightness is in flight* never skips a step.
-      It can be walked finely — many small moves — and the curve looks continuous.
-    * A family that must **serialise** skips every step that lands inside a brightness
-      fade. Walk it finely and it silently falls behind the curve, because it only ever
-      catches up one step per tick. Walk it coarsely, with a catch-up allowance, and it
-      tracks — visibly stepped, but correct.
-
-    Owner, 2026-08-13: *"take advantage of the aqara bulbs if needed. If Ikea bulbs
-    don't handle ramping well linear is fine for them."* That is what this encodes.
+    """How one Aqara bulb family walks the colour curve.
 
     ``step_mired`` does double duty as a **colour dead zone**: a move smaller than one
     step is not worth a radio write, so a family settles within one step of the curve
@@ -370,59 +354,38 @@ class FadeProfile:
     max_step_mired: int
     """The largest single move, used to catch up after skipped steps.
 
-    ⚠️ Catching up is **always safe**, and the reason is worth stating: ``R = Δ/T`` with
-    T fixed at the step fade, so a *bigger* Δ means a *higher* R — further from the
+    Catching up is **always safe**, and the reason is worth stating: ``R = delta/T`` with
+    T fixed at the step fade, so a *bigger* delta means a *higher* R — further from the
     underflow floor, never closer. The only thing bounding this is how large a colour
     jump is acceptable to the eye, which is why it is a setting.
     """
     concurrent: bool
     """May a colour step be sent while a brightness fade is running on this bulb?"""
     reason: str
-    """Why this shape. Surfaced in the panel — a stepped family looks like a bug unless
-    the reason is visible."""
+    """Why this shape. Surfaced in the panel."""
 
 
 def fade_profile(
     family: Family,
     *,
     smooth_step_mired: int,
-    stepped_step_mired: int,
     step_transition_s: float,
     catch_up_steps: int,
     r_crit: float = R_CRIT_COLOUR_MIRED_PER_S,
     safety: float = R_CRIT_SAFETY,
 ) -> FadeProfile:
-    """Pick the colour-walking strategy for one family.
-
-    The split is driven by :func:`may_run_concurrently` rather than by naming families
-    here, so a future measurement that moves a family across the concurrency line moves
-    its fade strategy with it automatically.
-
-    ⚠️ **This does not claim a per-family rate floor.** ``R_crit`` was measured on Aqara
-    CCT; Series 4 of ``docs/home-automation/ZIGBEE-FADE-LIMITS.md`` (per-family R_crit)
-    has never been run. Both families are therefore planned against the *same* floor, and
-    the step size is clamped up to :func:`min_safe_step_mired` for both.
-    """
+    """Pick the colour-walking strategy for one Aqara family."""
     concurrent = may_run_concurrently(family)
     floor = min_safe_step_mired(step_transition_s, r_crit, safety)
-    wanted = smooth_step_mired if concurrent else stepped_step_mired
+    wanted = smooth_step_mired
     step = max(int(wanted), floor)
     max_step = max(step, step * max(int(catch_up_steps), 1))
 
-    if concurrent:
-        reason = (
-            f"smooth: {step} mired every step, fading in {step_transition_s:g}s "
-            f"(R={step / max(step_transition_s, 0.001):.2f} vs a {r_crit * safety:.3f} "
-            "floor). Colour may glide during a brightness fade on this family, so no "
-            "step is ever skipped and the walk can be fine."
-        )
-    else:
-        reason = (
-            f"stepped: {step} mired at a time, up to {max_step} to catch up. Colour "
-            "steps freeze an in-flight brightness fade on this family, so steps are "
-            "skipped while one is running — a finer walk would fall behind the curve "
-            "instead of tracking it."
-        )
+    reason = (
+        f"smooth: {step} mired every step, fading in {step_transition_s:g}s "
+        f"(R={step / max(step_transition_s, 0.001):.2f} vs a {r_crit * safety:.3f} "
+        "floor). Aqara hardware supports smooth mired glides within the safe rate bound."
+    )
     if step > int(wanted):
         reason += (
             f" Raised from {int(wanted)} to {step}: below that a step underflows its "
@@ -440,19 +403,9 @@ def fade_profile(
 
 
 def may_run_concurrently(family: Family) -> bool:
-    """May a colour glide run on top of an in-flight brightness fade for this bulb?
+    """May a colour glide run on top of an in-flight brightness fade in hardware?
 
-    **No, on IKEA.** Measured 2026-08-12 with a clean same-family control:
-    ``Entry Ceiling`` running brightness 90→40 over 600 s *with* concurrent colour steps
-    **stalled at 84** — T+180/360/540/600 all 84 — while ``Entry Uplight`` doing
-    brightness alone over the same window hit 40→50→60→70 exactly at every sample. One
-    variable changed.
-
-    Yes on both Aqara families, verified in both directions including a 4-bulb RGB combo
-    that hit its brightness target exactly while colour stepped alongside.
-
-    ⚠️ The IKEA result is one controlled comparison. It is worth a confirming run before
-    it hardens into a design rule — but until then the safe default is to serialise,
-    because the failure is silent.
+    Yes on both Aqara families (RGB and CCT), verified in both directions including a
+    4-bulb RGB combo that hit its brightness target exactly while colour stepped alongside.
     """
-    return family is not Family.IKEA
+    return family in (Family.AQARA_RGB, Family.AQARA_CCT)

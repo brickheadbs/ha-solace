@@ -1154,77 +1154,33 @@ def test_interactive_preview_trailing_edge_flush() -> None:
     assert preview.last_dispatched_level == 135
 
 
-def test_ikea_bidirectional_channel_serialization() -> None:
-    """Test R2: IKEA bulbs defer colour steps during brightness glides AND defer brightness writes during colour steps."""
+def test_aqara_dual_channel_concurrency() -> None:
+    """Test R2: Both Aqara RGB and CCT families support concurrent dual-channel fades without hardware freeze."""
     coordinator = DualChannelHardwareCoordinator()
-    ikea_bulb = "light.ikea_tradfri_bulb"
-    aqara_bulb = "light.aqara_cct_bulb"
+    rgb_bulb = "light.aqara_rgb_bulb"
+    cct_bulb = "light.aqara_cct_bulb"
 
-    # 1. Forward Hazard: Start 300s brightness glide at t=0
     assert (
         coordinator.dispatch_brightness(
-            ikea_bulb, level=180, transition_s=300.0, now=0.0, family=Family.IKEA
+            rgb_bulb, level=180, transition_s=300.0, now=0.0, family=Family.AQARA_RGB
         )
         is True
     )
     assert (
         coordinator.dispatch_brightness(
-            aqara_bulb, level=180, transition_s=300.0, now=0.0, family=Family.AQARA_CCT
-        )
-        is True
-    )
-
-    # At t=10.0s, attempt colour step
-    # IKEA bulb MUST defer (brightness glide is active until t=300s)
-    assert (
-        coordinator.dispatch_colour(
-            ikea_bulb, target_kelvin=3000, transition_s=4.0, now=10.0, family=Family.IKEA
-        )
-        is False
-    )
-    # Aqara bulb CAN run concurrently
-    assert (
-        coordinator.dispatch_colour(
-            aqara_bulb, target_kelvin=3000, transition_s=4.0, now=10.0, family=Family.AQARA_CCT
-        )
-        is True
-    )
-
-    # 2. Reverse Hazard: At t=400s (brightness glide long finished)
-    # Start 4.0s colour step on IKEA bulb
-    assert (
-        coordinator.dispatch_colour(
-            ikea_bulb, target_kelvin=3200, transition_s=4.0, now=400.0, family=Family.IKEA
+            cct_bulb, level=180, transition_s=300.0, now=0.0, family=Family.AQARA_CCT
         )
         is True
     )
     assert (
         coordinator.dispatch_colour(
-            aqara_bulb, target_kelvin=3200, transition_s=4.0, now=400.0, family=Family.AQARA_CCT
+            rgb_bulb, target_kelvin=3000, transition_s=4.0, now=10.0, family=Family.AQARA_RGB
         )
         is True
     )
-
-    # At t=402.0s, acute brightness write arrives
-    # IKEA bulb MUST defer brightness (colour step active until t=404.0s)
     assert (
-        coordinator.dispatch_brightness(
-            ikea_bulb, level=220, transition_s=2.0, now=402.0, family=Family.IKEA
-        )
-        is False
-    )
-    # Aqara bulb CAN run concurrently
-    assert (
-        coordinator.dispatch_brightness(
-            aqara_bulb, level=220, transition_s=2.0, now=402.0, family=Family.AQARA_CCT
-        )
-        is True
-    )
-
-    # At t=405.0s, colour step is complete: IKEA bulb accepts brightness write
-    assert (
-        coordinator.dispatch_brightness(
-            ikea_bulb, level=220, transition_s=2.0, now=405.0, family=Family.IKEA
+        coordinator.dispatch_colour(
+            cct_bulb, target_kelvin=3000, transition_s=4.0, now=10.0, family=Family.AQARA_CCT
         )
         is True
     )
@@ -1241,7 +1197,7 @@ def run_all_tests() -> bool:
         ("Standby Cache & Batched Grouping (R1)", test_standby_cache_and_batching),
         ("Standby Cache: Atomic Snapshot Zero Torn Reads (R1)", test_standby_cache_atomic_snapshot_zero_torn_reads),
         ("Event Separation & RampLock Lease (R2)", test_event_separation_and_ramp_lock),
-        ("IKEA Dual-Channel Serialization Hazard (R2)", test_ikea_bidirectional_channel_serialization),
+        ("Aqara Dual-Channel Concurrency (R2)", test_aqara_dual_channel_concurrency),
         ("Asymmetric Filter: Storm Fast-Attack (R3)", test_asymmetric_filter_storm_attack),
         ("Asymmetric Filter: Sunbeam Spike Damping (R3)", test_asymmetric_filter_sunbeam_spike),
         ("Asymmetric Filter: Persistent Decay (R3)", test_asymmetric_filter_persistent_decay),

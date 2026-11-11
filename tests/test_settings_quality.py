@@ -32,7 +32,6 @@ BOOLEANS = {
 
 COUNTS = {
     "lux_history_samples",
-    "colour_step_mired",
     "colour_step_mired_smooth",
     "colour_catch_up_steps",
     "dead_zone",

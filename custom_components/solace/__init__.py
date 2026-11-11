@@ -12,7 +12,7 @@ import logging
 
 from homeassistant.core import HomeAssistant
 
-from . import panel, websocket_api
+from . import coordinator as _coord_mod, panel, websocket_api
 from .const import (
     CONF_LIGHTS,
     CONF_NEAR_PRESENCE,
@@ -26,13 +26,13 @@ _LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: SolaceConfigEntry) -> bool:
-    coordinator = SolaceCoordinator(hass, entry)
+    coordinator = _coord_mod.SolaceCoordinator(hass, entry)
     await coordinator.async_prepare()
     await coordinator.async_config_entry_first_refresh()
 
     # `entry.runtime_data`, not `hass.data[DOMAIN][entry.entry_id]` — the latter has been
     # legacy since 2025.1.
-    entry.runtime_data = SolaceData(coordinator=coordinator)
+    entry.runtime_data = _coord_mod.SolaceData(coordinator=coordinator)
 
     # Register teardown at setup time, while we still hold the handle.
     entry.async_on_unload(coordinator.async_shutdown_listeners)

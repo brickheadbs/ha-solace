@@ -427,7 +427,7 @@ export class SolTabCurves extends LitElement {
 
   private getSpline(key: CurveKey): MonotoneSpline {
     const nodes = this.getNodes(key);
-    return new MonotoneSpline(nodes, key !== "lux");
+    return new MonotoneSpline(nodes, key !== "lux", key === "lux");
   }
 
   private hitNode(key: CurveKey, px: number, py: number): number {
@@ -721,8 +721,8 @@ export class SolTabCurves extends LitElement {
     if (key === "lux") {
       const clearNodes = this.getLuxClearNodes();
       const cloudyNodes = this.getLuxCloudyNodes();
-      const clearSpline = new MonotoneSpline(clearNodes, false);
-      const cloudySpline = new MonotoneSpline(cloudyNodes, false);
+      const clearSpline = new MonotoneSpline(clearNodes, false, true);
+      const cloudySpline = new MonotoneSpline(cloudyNodes, false, true);
 
       const N = 240;
       let dClear = "";

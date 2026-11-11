@@ -71,7 +71,11 @@ LIGHT_KEYS = {"bias_stops", "clamp_min", "clamp_max"}
 
 @callback
 def async_register(hass: HomeAssistant) -> None:
-    """Register every command. Idempotent — HA tolerates a repeat registration."""
+    """Register every command. Replaces prior handlers on reload."""
+    handlers = hass.data.get(websocket_api.DOMAIN)
+    if isinstance(handlers, dict):
+        for cmd in [k for k in handlers if isinstance(k, str) and k.startswith("solace/")]:
+            handlers.pop(cmd, None)
     websocket_api.async_register_command(hass, ws_get)
     websocket_api.async_register_command(hass, ws_subscribe)
     websocket_api.async_register_command(hass, ws_set_house)
@@ -92,6 +96,12 @@ def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_set_zones)
     websocket_api.async_register_command(hass, ws_merge_areas)
     websocket_api.async_register_command(hass, ws_set_remotes)
+    websocket_api.async_register_command(hass, ws_music_play)
+    websocket_api.async_register_command(hass, ws_music_stop)
+    websocket_api.async_register_command(hass, ws_music_next)
+    websocket_api.async_register_command(hass, ws_music_prev)
+    websocket_api.async_register_command(hass, ws_music_config)
+    websocket_api.async_register_command(hass, ws_set_card_order)
 
 
 # ---------------------------------------------------------------------------- helpers
@@ -224,6 +234,7 @@ def _snapshot(hass: HomeAssistant, coordinator: SolaceCoordinator) -> dict[str, 
                 "name": subentry.title,
                 "settings": {
                     **{key: subentry.data.get(key, ROOM_DEFAULTS[key]) for key in ROOM_KEYS},
+                    "threshold_stops": settings.threshold_stops,
                     "night_off": bool(subentry.data.get("night_off", False)),
                 },
                 "presence": subentry.data.get(CONF_PRESENCE) or [],
@@ -316,6 +327,8 @@ def _snapshot(hass: HomeAssistant, coordinator: SolaceCoordinator) -> dict[str, 
             )
         },
         "remotes": coordinator.remotes.get_configured_remotes(),
+        "music": coordinator.music.snapshot(),
+        "card_order": dict(coordinator._card_order),  # noqa: SLF001
         "world": {
             "lux": coordinator._lux(),  # noqa: SLF001
             "cloud_coverage": coordinator._cloud_coverage(),  # noqa: SLF001
@@ -384,8 +397,7 @@ def _families_present(
     """Families actually installed, in a stable order, with their fade profile.
 
     Derived from the live lights rather than listed — the same reason ``infer_family``
-    reads the registry: a hand-maintained count of "5 IKEA bulbs" already went stale once
-    in this house and quietly excluded a bulb.
+    reads the registry so hardcoded family tallies can never drift out of date.
     """
     counts: dict[Family, int] = {}
     for room in rooms:
@@ -504,15 +516,17 @@ async def ws_set_lux_curve(hass: HomeAssistant, connection, msg: dict[str, Any])
     if entry is None:
         connection.send_error(msg["id"], "not_loaded", "Solace is not set up")
         return
+    raw_pts = msg["lux_curve"]
+    scale_all = any(float(p["demand_pct"]) > 1.0 for p in raw_pts)
     points = sorted(
         [
             {
                 "lux": float(p["lux"]),
                 "demand_pct": float(p["demand_pct"]) / 100.0
-                if float(p["demand_pct"]) > 1.0
+                if scale_all
                 else float(p["demand_pct"]),
             }
-            for p in msg["lux_curve"]
+            for p in raw_pts
         ],
         key=lambda p: p["lux"],
     )
@@ -536,15 +550,17 @@ async def ws_set_lux_cloudy_curve(hass: HomeAssistant, connection, msg: dict[str
     if entry is None:
         connection.send_error(msg["id"], "not_loaded", "Solace is not set up")
         return
+    raw_pts = msg["lux_cloudy_curve"]
+    scale_all = any(float(p["demand_pct"]) > 1.0 for p in raw_pts)
     points = sorted(
         [
             {
                 "lux": float(p["lux"]),
                 "demand_pct": float(p["demand_pct"]) / 100.0
-                if float(p["demand_pct"]) > 1.0
+                if scale_all
                 else float(p["demand_pct"]),
             }
-            for p in msg["lux_cloudy_curve"]
+            for p in raw_pts
         ],
         key=lambda p: p["lux"],
     )
@@ -730,7 +746,7 @@ async def ws_toggle_gate(hass: HomeAssistant, connection, msg: dict[str, Any]) -
     {
         vol.Required("type"): "solace/set_room",
         vol.Required("subentry_id"): cv.string,
-        vol.Required("values"): {cv.string: vol.Any(float, int, bool, str, None)},
+        vol.Required("values"): {cv.string: vol.Any(float, int, bool, str, list, None)},
     }
 )
 @websocket_api.async_response
@@ -743,13 +759,15 @@ async def ws_set_room(hass: HomeAssistant, connection, msg: dict[str, Any]) -> N
     if subentry is None:
         connection.send_error(msg["id"], "unknown_room", "no such room")
         return
-    unknown = set(msg["values"]) - ROOM_KEYS - {"night_off"}
+    unknown = set(msg["values"]) - ROOM_KEYS - {"night_off", CONF_PRESENCE, CONF_LIGHTS}
     if unknown:
         connection.send_error(msg["id"], "unknown_key", f"unknown settings: {sorted(unknown)}")
         return
     hass.config_entries.async_update_subentry(
         entry, subentry, data={**subentry.data, **msg["values"]}
     )
+    entry.runtime_data.coordinator.async_resubscribe()
+    entry.runtime_data.coordinator.async_note_tuning()
     await entry.runtime_data.coordinator.async_request_refresh()
     connection.send_result(msg["id"])
 
@@ -1026,3 +1044,126 @@ async def ws_set_remotes(hass: HomeAssistant, connection, msg: dict[str, Any]) -
     entry.runtime_data.coordinator.remotes.async_unregister()
     entry.runtime_data.coordinator.remotes.async_register()
     connection.send_result(msg["id"])
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "solace/music_play",
+        vol.Optional("playlist_id"): cv.string,
+        vol.Optional("track_index"): vol.Coerce(int),
+        vol.Optional("speaker_entity"): cv.string,
+        vol.Optional("volume_pct"): vol.Coerce(int),
+    }
+)
+@websocket_api.async_response
+async def ws_music_play(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    """Start or resume a playlist from 0:00 of the current (or specified) track."""
+    entry = _entry(hass)
+    if entry is None:
+        connection.send_error(msg["id"], "not_loaded", "Solace is not set up")
+        return
+    hass.async_create_task(
+        entry.runtime_data.coordinator.music.async_play(
+            playlist_id=msg.get("playlist_id"),
+            track_index=msg.get("track_index"),
+            speaker_entity=msg.get("speaker_entity"),
+            volume_pct=msg.get("volume_pct"),
+        )
+    )
+    connection.send_result(msg["id"])
+
+
+@websocket_api.websocket_command({vol.Required("type"): "solace/music_stop"})
+@websocket_api.async_response
+async def ws_music_stop(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    """Stop music playback while keeping current_index on the current track."""
+    entry = _entry(hass)
+    if entry is None:
+        connection.send_error(msg["id"], "not_loaded", "Solace is not set up")
+        return
+    await entry.runtime_data.coordinator.music.async_stop()
+    connection.send_result(msg["id"])
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "solace/music_next",
+        vol.Optional("playlist_id"): cv.string,
+    }
+)
+@websocket_api.async_response
+async def ws_music_next(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    """Advance to next track in playlist."""
+    entry = _entry(hass)
+    if entry is None:
+        connection.send_error(msg["id"], "not_loaded", "Solace is not set up")
+        return
+    hass.async_create_task(
+        entry.runtime_data.coordinator.music.async_next(playlist_id=msg.get("playlist_id"))
+    )
+    connection.send_result(msg["id"])
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "solace/music_prev",
+        vol.Optional("playlist_id"): cv.string,
+    }
+)
+@websocket_api.async_response
+async def ws_music_prev(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    """Step back to previous track in playlist."""
+    entry = _entry(hass)
+    if entry is None:
+        connection.send_error(msg["id"], "not_loaded", "Solace is not set up")
+        return
+    hass.async_create_task(
+        entry.runtime_data.coordinator.music.async_prev(playlist_id=msg.get("playlist_id"))
+    )
+    connection.send_result(msg["id"])
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "solace/music_config",
+        vol.Required("values"): {cv.string: vol.Any(float, int, str, bool, None)},
+    }
+)
+@websocket_api.async_response
+async def ws_music_config(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    """Update music or wake-up configuration settings."""
+    entry = _entry(hass)
+    if entry is None:
+        connection.send_error(msg["id"], "not_loaded", "Solace is not set up")
+        return
+    await entry.runtime_data.coordinator.music.async_update_config(msg["values"])
+    await entry.runtime_data.coordinator.async_request_refresh()
+    connection.send_result(msg["id"])
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "solace/set_card_order",
+        vol.Required("tab"): cv.string,
+        vol.Required("order"): [cv.string],
+    }
+)
+@websocket_api.async_response
+async def ws_set_card_order(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    """Persist custom drag-and-drop card ordering for a panel tab."""
+    entry = _entry(hass)
+    if entry is None:
+        connection.send_error(msg["id"], "not_loaded", "Solace is not set up")
+        return
+    coordinator = entry.runtime_data.coordinator
+    tab = str(msg["tab"]).strip()
+    deduped: list[str] = []
+    for item in msg["order"]:
+        s = str(item)
+        if s and s not in deduped:
+            deduped.append(s)
+    coordinator._card_order[tab] = deduped  # noqa: SLF001
+    await coordinator.async_persist()
+    coordinator.async_update_listeners()
+    connection.send_result(msg["id"], {"tab": tab, "order": deduped})
+

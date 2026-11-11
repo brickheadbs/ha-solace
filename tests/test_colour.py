@@ -48,17 +48,17 @@ def test_the_manual_trim_is_added_after_the_curve():
 # --------------------------------------------------------------------------------
 
 
-def test_ikea_bulbs_pin_at_4000k_and_say_so():
-    """Five bulbs stop at 4000 K. The bulb reports success either way — the only way
+def test_cct_bulbs_pin_at_ceiling_and_say_so():
+    """Aqara CCT stops at 6535 K. The bulb reports success either way — the only way
     the clamp stops being invisible is if we carry it up to the panel."""
-    ikea = LightSettings(
+    cct = LightSettings(
         entity_id="light.living_ceiling",
-        family=Family.IKEA,
-        min_kelvin=2202,
-        max_kelvin=4000,
+        family=Family.AQARA_CCT,
+        min_kelvin=2702,
+        max_kelvin=6535,
     )
-    kelvin, clamped = clamp_kelvin(5000, ikea)
-    assert kelvin == 4000
+    kelvin, clamped = clamp_kelvin(7500, cct)
+    assert kelvin == 6535
     assert clamped is True
 
 
@@ -78,9 +78,9 @@ def test_an_in_range_target_is_not_flagged_as_clamped():
 
 
 def test_resolve_colour_reports_both_what_was_asked_and_what_is_achievable(house):
-    ikea = LightSettings(family=Family.IKEA, min_kelvin=2202, max_kelvin=4000)
-    result = resolve_colour(clock_hour=0.0, dusk_hour=DUSK, house=house, light=ikea)
+    cct = LightSettings(family=Family.AQARA_CCT, min_kelvin=2702, max_kelvin=6535)
+    result = resolve_colour(clock_hour=0.0, dusk_hour=DUSK, house=house, light=cct)
     assert result.requested_kelvin == 2200
-    assert result.kelvin == 2202
-    assert result.mired == kelvin_to_mired(2202)
+    assert result.kelvin == 2702
+    assert result.mired == kelvin_to_mired(2702)
     assert result.was_clamped is True

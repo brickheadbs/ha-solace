@@ -1366,3 +1366,52 @@ async def test_sunset_window_trigger_timing_and_abandon_reset(
     assert p_shifted is None
     assert coordinator._active_sunset_started_at is None
 
+
+async def test_legacy_daylight_pct_migrates_to_threshold_stops(hass: HomeAssistant, world) -> None:
+    """Legacy subentries storing daylight_pct=25.0 migrate cleanly to threshold_stops=+2.0."""
+    from homeassistant.config_entries import ConfigSubentryData
+    from custom_components.solace.const import CONF_DND_ENTITY, CONF_LUX_SENSOR, SUBENTRY_TYPE_ROOM
+    from .conftest import DND
+
+    legacy_entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Solace",
+        unique_id="solace_legacy_daylight_pct",
+        data={CONF_LUX_SENSOR: LUX, CONF_DND_ENTITY: DND},
+        options={CONF_LUX_SENSOR: LUX, CONF_DND_ENTITY: DND},
+        subentries_data=[
+            ConfigSubentryData(
+                subentry_type=SUBENTRY_TYPE_ROOM,
+                title="North Bedroom",
+                unique_id=None,
+                data={"lights": [LIGHT], "daylight_pct": 25.0},
+            )
+        ],
+    )
+    legacy_entry.add_to_hass(hass)
+    world(lux=800.0, occupied=True)
+    assert await _setup(hass, legacy_entry)
+    coordinator = legacy_entry.runtime_data.coordinator
+    subentry = next(iter(coordinator._subentries()))
+    settings = coordinator.room_settings(subentry)
+    assert settings.threshold_stops == pytest.approx(2.0, abs=0.01)
+    # At 800 lx outdoor (above default 540 lx window), +2 EV maps effective lux to 200 lx,
+    # so North Bedroom computes positive daylight-deficit demand instead of 0%.
+    assert float(hass.states.get("sensor.north_bedroom_demand").state) > 0.0
+
+
+async def test_per_light_clamp_max_caps_output(hass: HomeAssistant, entry, world) -> None:
+    """Regression: CONF_PER_LIGHT clamp_max and bias_stops must reach light_settings()."""
+    from custom_components.solace.const import CONF_PER_LIGHT
+
+    subentry = next(iter(entry.subentries.values()))
+    hass.config_entries.async_update_subentry(
+        entry,
+        subentry,
+        data={**subentry.data, CONF_PER_LIGHT: {LIGHT: {"clamp_max": 80, "bias_stops": 0.5}}},
+    )
+    world(lux=0.0, occupied=True)
+    assert await _setup(hass, entry)
+    assert int(hass.states.get("sensor.kitchen_target_level").state) == 80
+
+

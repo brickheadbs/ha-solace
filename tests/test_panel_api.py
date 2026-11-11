@@ -325,3 +325,47 @@ async def test_ws_set_curve_timelines_persist_and_update(
     assert [p["lux"] for p in snap["lux_curve"]] == [0.0, 50.0, 2500.0]
     assert [p["hour"] for p in snap["brightness_timeline"]] == [7.0, 22.5]
     assert [p["hour"] for p in snap["colour_timeline"]] == [12.0, 23.0]
+
+
+async def test_ws_set_card_order_persists_across_reload(
+    hass: HomeAssistant, entry, hass_ws_client: WebSocketGenerator
+) -> None:
+    """Card ordering for Home and Lighting persists via Store across entry reloads."""
+    await _setup(hass, entry)
+    client = await hass_ws_client(hass)
+
+    await client.send_json(
+        {
+            "id": _id(),
+            "type": "solace/set_card_order",
+            "tab": "home",
+            "order": ["door", "light", "inside", "outside", "weather", "fridge", "running"],
+        }
+    )
+    assert (await client.receive_json())["success"]
+    await hass.async_block_till_done()
+
+    snap = await _get(client)
+    assert snap["card_order"]["home"] == [
+        "door",
+        "light",
+        "inside",
+        "outside",
+        "weather",
+        "fridge",
+        "running",
+    ]
+
+    await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    snap_after = await _get(await hass_ws_client(hass))
+    assert snap_after["card_order"]["home"] == [
+        "door",
+        "light",
+        "inside",
+        "outside",
+        "weather",
+        "fridge",
+        "running",
+    ]
+

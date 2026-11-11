@@ -173,15 +173,8 @@ def test_split_brightness_segments_are_monotonic_toward_the_target():
 
 
 # --------------------------------------------------------------------------------
-# The IKEA exception
+# Aqara dual-channel capability & fade profiles
 # --------------------------------------------------------------------------------
-
-
-def test_ikea_must_not_run_colour_and_brightness_concurrently():
-    """Measured: Entry Ceiling's brightness fade STALLED at 84 for 420 s with colour
-    steps alongside, while a same-family control doing brightness alone tracked
-    exactly."""
-    assert may_run_concurrently(Family.IKEA) is False
 
 
 def test_both_aqara_families_may_run_both_channels():
@@ -189,44 +182,30 @@ def test_both_aqara_families_may_run_both_channels():
     assert may_run_concurrently(Family.AQARA_RGB) is True
 
 
-# --------------------------------------------------------------------------------
-# Per-family fade profiles
-# --------------------------------------------------------------------------------
-
 PROFILE_KWARGS = dict(
     smooth_step_mired=2,
-    stepped_step_mired=5,
     step_transition_s=4.0,
     catch_up_steps=3,
 )
 
 
-def test_the_concurrent_families_walk_finer_than_the_serialised_one():
-    """The whole point of the split: Aqara glides, IKEA steps."""
-    smooth = fade_profile(Family.AQARA_RGB, **PROFILE_KWARGS)
-    stepped = fade_profile(Family.IKEA, **PROFILE_KWARGS)
-    assert smooth.step_mired < stepped.step_mired
-    assert smooth.concurrent is True
-    assert stepped.concurrent is False
-
-
-def test_the_split_follows_concurrency_not_a_hardcoded_family_list():
-    """A family's fade strategy must be derived from the measured concurrency result, so
-    that a future measurement moving a family across that line moves its strategy too."""
-    for family in Family:
-        profile = fade_profile(family, **PROFILE_KWARGS)
-        expected = 2 if may_run_concurrently(family) else 5
-        assert profile.step_mired == expected, family
+def test_both_aqara_families_use_smooth_profile():
+    rgb = fade_profile(Family.AQARA_RGB, **PROFILE_KWARGS)
+    cct = fade_profile(Family.AQARA_CCT, **PROFILE_KWARGS)
+    assert rgb.step_mired == 2
+    assert cct.step_mired == 2
+    assert rgb.concurrent is True
+    assert cct.concurrent is True
 
 
 def test_catch_up_is_a_multiple_of_the_step_and_never_smaller():
-    profile = fade_profile(Family.IKEA, **PROFILE_KWARGS)
+    profile = fade_profile(Family.AQARA_CCT, **PROFILE_KWARGS)
     assert profile.max_step_mired == profile.step_mired * 3
 
 
 def test_catching_up_is_always_safe_because_it_raises_the_rate():
-    """The property that makes catch-up sound rather than reckless: R = Δ/T with T fixed
-    at the step fade, so a bigger Δ moves *away* from the underflow floor."""
+    """The property that makes catch-up sound rather than reckless: R = delta/T with T fixed
+    at the step fade, so a bigger delta moves *away* from the underflow floor."""
     for family in Family:
         profile = fade_profile(family, **PROFILE_KWARGS)
         assert colour_transition_is_safe(profile.step_mired, profile.step_transition_s)
@@ -242,7 +221,6 @@ def test_a_step_too_small_for_its_own_fade_is_raised_not_sent():
     profile = fade_profile(
         Family.AQARA_RGB,
         smooth_step_mired=1,
-        stepped_step_mired=1,
         step_transition_s=30.0,
         catch_up_steps=1,
     )
@@ -259,7 +237,7 @@ def test_the_house_default_fade_does_not_constrain_smoothness():
 
 
 def test_every_profile_explains_itself():
-    """A stepped family looks like a bug in the panel unless the reason is visible."""
+    """Fade profile reason is surfaced in the panel."""
     for family in Family:
         profile = fade_profile(family, **PROFILE_KWARGS)
         assert len(profile.reason) > 40
@@ -270,12 +248,6 @@ def test_dynamic_colour_transition_s():
     from custom_components.solace.fade import (
         DEFAULT_STEP_TRANSITION_S,
         dynamic_colour_transition_s,
-    )
-
-    # IKEA TRADFRI always stays at DEFAULT_STEP_TRANSITION_S (4s) to minimise collision windows
-    assert (
-        dynamic_colour_transition_s(50.0, family=Family.IKEA)
-        == DEFAULT_STEP_TRANSITION_S
     )
 
     # Zero delta returns default

@@ -14,15 +14,20 @@ export class MonotoneSpline {
   private ms: number[] = [];
   private hs: number[] = [];
   private periodic: boolean;
+  private logX: boolean;
 
-  constructor(points: Point[], periodic = false) {
+  constructor(points: Point[], periodic = false, logX = false) {
     this.periodic = periodic;
+    this.logX = logX;
     this.build(points);
   }
 
   private build(rawPoints: Point[]): void {
     if (!rawPoints.length) return;
-    const sorted = [...rawPoints].sort((a, b) => a.x - b.x);
+    const mapped = this.logX
+      ? rawPoints.map((p) => ({ x: Math.log10(1 + Math.max(0, p.x)), y: p.y }))
+      : rawPoints;
+    const sorted = [...mapped].sort((a, b) => a.x - b.x);
     // Remove duplicate consecutive x
     const clean: Point[] = [];
     for (const p of sorted) {
@@ -64,10 +69,16 @@ export class MonotoneSpline {
     ms[n - 1] = deltas[n - 2];
 
     for (let i = 1; i < n - 1; i++) {
-      if (deltas[i - 1] * deltas[i] <= 0) {
+      const d0 = deltas[i - 1];
+      const d1 = deltas[i];
+      if (d0 * d1 <= 0) {
         ms[i] = 0;
       } else {
-        ms[i] = (deltas[i - 1] + deltas[i]) / 2;
+        const h0 = hs[i - 1];
+        const h1 = hs[i];
+        const w0 = 2 * h1 + h0;
+        const w1 = h1 + 2 * h0;
+        ms[i] = (w0 + w1) / (w0 / d0 + w1 / d1);
       }
     }
 
@@ -99,7 +110,9 @@ export class MonotoneSpline {
     if (this.xs.length === 1) return this.ys[0];
 
     let x = xVal;
-    if (this.periodic) {
+    if (this.logX) {
+      x = Math.log10(1 + Math.max(0, xVal));
+    } else if (this.periodic) {
       x = ((x % 24.0) + 24.0) % 24.0;
     }
 

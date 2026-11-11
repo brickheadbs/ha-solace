@@ -30,10 +30,8 @@ const HELP: Record<string, string> = {
     "Duration in minutes for the dusk circadian transition from day colour to night colour. Interpolated linearly in mired space (10^6 / K) to produce an optically uniform perceptual shift.",
   colour_trim_kelvin:
     "Real-time global colour temperature offset in Kelvin (±1000K). Dynamically shifts all active fixtures warmer (-) or cooler (+) without mutating baseline curve endpoints.",
-  colour_step_mired:
-    "Stepped bulb resolution in mireds. Used for legacy Zigbee fixtures that reject colour updates during active brightness fades. Dispatches larger, discrete mired jumps to avoid packet congestion and Zigbee buffer exhaustion.",
   colour_step_mired_smooth:
-    "Smooth bulb resolution in mireds. Used for advanced fixtures supporting simultaneous colour and brightness transitions. Allows tight, imperceptible incremental steps for seamless colour tracking.",
+    "Aqara bulb step resolution in mireds. Supports simultaneous colour and brightness transitions with tight, imperceptible incremental steps for seamless colour tracking.",
   colour_catch_up_steps:
     "Maximum allowed jump multiplier when a fixture has fallen behind the circadian curve (e.g. after being powered off at a wall switch). Bounded jump prevents jarring instant color flips while rapidly restoring curve alignment.",
   colour_step_transition_s:
@@ -41,7 +39,6 @@ const HELP: Record<string, string> = {
 };
 
 const FAMILY_NAMES: Record<string, string> = {
-  ikea: "IKEA TRÅDFRI",
   aqara_cct: "Aqara CCT",
   aqara_rgb: "Aqara RGB",
 };
@@ -509,13 +506,10 @@ export class SolTabColour extends LitElement {
       </div>
       <div class="sub">
         ${this.row("colour_step_mired_smooth", (v) => `${num(v)} mired`)}
-        ${this.row("colour_step_mired", (v) => `${num(v)} mired`)}
         ${this.row("colour_catch_up_steps", (v) => `up to ${num(v)} steps`)}
         ${this.row("colour_step_transition_s", (v) => `${num(v, 1)} s`)}
         <div class="caption">
-          The tick is paced for the finest family in the house. Coarser bulbs are not over-driven by
-          it — they simply decline the ticks where the curve has not moved far enough to be worth a
-          write.
+          All house fixtures run Aqara Zigbee firmware supporting smooth concurrent colour steps.
         </div>
       </div>
     </div>`;
@@ -588,7 +582,7 @@ export class SolTabColour extends LitElement {
               (l) => html`<div class="range-row ${l.kelvin < day ? "capped" : ""}">
                 <span class="n" title=${l.name}>${l.name}</span>
                 <span class="r tab-num">${num(l.min_kelvin)}–${num(l.max_kelvin)} K</span>
-                <span class="a tab-num">${num(l.kelvin)} K${l.kelvin_clamped ? " ⚑" : ""}</span>
+                <span class="a tab-num">${num(l.kelvin)} K${l.kelvin_clamped ? " (capped)" : ""}</span>
               </div>`
             )
           )}

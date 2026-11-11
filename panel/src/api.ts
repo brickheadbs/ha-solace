@@ -165,6 +165,54 @@ export interface ProgressPoint {
   level: number;
 }
 
+export interface MusicTrack {
+  index: number;
+  title: string;
+  artist: string;
+  cached?: boolean;
+}
+
+export interface MusicPlaylist {
+  id: string;
+  name: string;
+  description: string;
+  icon: string;
+  current_index: number;
+  track_count: number;
+  current_track: MusicTrack;
+  tracks: MusicTrack[];
+}
+
+export interface MusicSpeaker {
+  entity_id: string;
+  name: string;
+  available: boolean;
+  state: string;
+}
+
+export interface MusicSnapshot {
+  state: "stopped" | "buffering" | "playing";
+  error: string | null;
+  active_playlist_id: string;
+  active_playlist_name: string;
+  speaker_entity: string;
+  volume_pct: number;
+  wake_enabled: boolean;
+  wake_playlist_id: string;
+  wake_speaker_entity: string;
+  wake_volume_pct: number;
+  wake_time_enabled: boolean;
+  wake_target_time: string;
+  current_track: {
+    index: number;
+    total: number;
+    title: string;
+    artist: string;
+  };
+  speakers: MusicSpeaker[];
+  playlists: MusicPlaylist[];
+}
+
 export interface Snapshot {
   entry_id: string;
   house: Record<string, number>;
@@ -179,6 +227,8 @@ export interface Snapshot {
   room_schema: Schema[];
   links: Record<string, string | null>;
   remotes?: RemoteRow[];
+  music?: MusicSnapshot;
+  card_order?: Record<string, string[]>;
   world: World;
   /** Present only when at least one light is configured. */
   fade?: { interval_s: number; families: FamilyFade[] };
@@ -323,5 +373,56 @@ export const setSunsetCurve = (hass: Hass, sunset_curve: ProgressPoint[]) =>
     type: "solace/set_sunset_curve",
     sunset_curve,
   });
+
+export const musicPlay = (
+  hass: Hass,
+  opts?: {
+    playlist_id?: string;
+    track_index?: number;
+    speaker_entity?: string;
+    volume_pct?: number;
+  }
+) =>
+  hass.connection.sendMessagePromise({
+    type: "solace/music_play",
+    ...(opts ?? {}),
+  });
+
+export const musicStop = (hass: Hass) =>
+  hass.connection.sendMessagePromise({ type: "solace/music_stop" });
+
+export const musicNext = (hass: Hass, playlist_id?: string) =>
+  hass.connection.sendMessagePromise({
+    type: "solace/music_next",
+    ...(playlist_id ? { playlist_id } : {}),
+  });
+
+export const musicPrev = (hass: Hass, playlist_id?: string) =>
+  hass.connection.sendMessagePromise({
+    type: "solace/music_prev",
+    ...(playlist_id ? { playlist_id } : {}),
+  });
+
+export const musicConfig = (
+  hass: Hass,
+  values: Record<string, string | number | boolean | null>
+) =>
+  hass.connection.sendMessagePromise({
+    type: "solace/music_config",
+    values,
+  });
+
+export const setCardOrder = (
+  hass: Hass,
+  tab: "home" | "lighting",
+  order: string[]
+) =>
+  hass.connection.sendMessagePromise({
+    type: "solace/set_card_order",
+    tab,
+    order,
+  });
+
+
 
 
