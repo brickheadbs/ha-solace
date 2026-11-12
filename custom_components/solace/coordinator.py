@@ -1623,6 +1623,8 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                 "sensor.pixel_8a_do_not_disturb_sensor",
             ) and new_state.state == "off":
                 self._night_latched = False
+            if entity_id == "input_boolean.work_mode" and new_state.state == "on":
+                self.hass.async_create_task(self._async_colour_tick(None))
 
         self.hass.async_create_task(self.async_refresh())
 
