@@ -72,7 +72,7 @@ DEFAULT_REMOTES: list[dict[str, Any]] = [
     {
         "remote_id": "living_office_control",
         "name": "Living Office Control",
-        "room_name": "Living",
+        "room_name": "Bedroom",
         "action_entity": "event.living_office_control_action",
         "button_on": "resume_auto",
         "button_off": "turn_off",
@@ -88,9 +88,15 @@ DEFAULT_REMOTES: list[dict[str, Any]] = [
 ]
 
 
-# The office fixtures Work Mode drives (mirrors the list in coordinator._async_apply_light).
+# The bedroom office fixtures Work Mode drives (mirrors the list in coordinator._async_apply_light).
 WORK_MODE_LIGHTS = frozenset(
-    ("light.living_office_desk_lamp", "light.living_office_e", "light.living_office_w")
+    (
+        "light.bedroom_desk_left",
+        "light.bedroom_desk_right",
+        "light.bedroom_counter",
+        "light.bedroom_wardrobe",
+        "light.bedroom_glass_lamp",
+    )
 )
 RESUME_ACTIONS = frozenset(("resume_auto", "auto", "turn_on"))
 

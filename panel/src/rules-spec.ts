@@ -210,9 +210,9 @@ export const PRIORITY_LADDER: readonly PriorityRule[] = [
   },
   {
     rank: 3,
-    mode: "Work Mode (Office)",
-    trigger: "input_boolean.work_mode == ON (Sonoff hold or UI toggle)",
-    outputRule: "Office desk/backlight/corner fixtures lock to fixed task levels while Living Office is occupied.",
+    mode: "Work Mode (Bedroom Office)",
+    trigger: "input_boolean.work_mode == ON (Sonoff button or UI toggle)",
+    outputRule: "Bedroom desk bias (left & corner-compensated right), counter fill, and wardrobe fill lock to calibrated D65 (6500K) levels while Bedroom is occupied; glass lamp forced OFF (0).",
     releaseRule: "5 min unoccupied debounce pauses lights; Sleep/Night mode auto-clears switch overnight.",
   },
   {

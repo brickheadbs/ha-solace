@@ -380,6 +380,12 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
             ),
         )
 
+    def is_manual(self, subentry: ConfigSubentry, room: RoomRuntime) -> bool:
+        """Check if a room is currently in manual hold."""
+        settings = self.room_settings(subentry)
+        now_ts = dt_util.utcnow().timestamp()
+        return room.is_manual(settings.manual_hold_minutes, now_ts)
+
     def light_settings(self, entity_id: str, subentry: ConfigSubentry) -> LightSettings:
         """Per-light hardware facts read from the live entity plus persisted per-light overrides.
 
@@ -842,18 +848,23 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         # an hour and a half, because the forced write meant the "nothing changed" test never
         # ran. Every other room was silent. A value provider must never also be a write forcer.
         if self._work_mode() and entity_id in (
-            "light.living_office_desk_lamp",
-            "light.living_office_e",
-            "light.living_office_w",
+            "light.bedroom_desk_left",
+            "light.bedroom_desk_right",
+            "light.bedroom_counter",
+            "light.bedroom_wardrobe",
+            "light.bedroom_glass_lamp",
         ):
             last_occ = self._last_presence.get(subentry.subentry_id, 0.0)
             now_ts = dt_util.utcnow().timestamp()
             elapsed = (now_ts - last_occ) if last_occ > 0 else 999999.0
             debounce_s = float(house.work_mode_debounce_minutes) * 60.0
-            if occupied or elapsed < debounce_s:
-                if entity_id == "light.living_office_desk_lamp":
+            if (occupied or elapsed < debounce_s) and entity_id != "light.bedroom_glass_lamp":
+                if entity_id == "light.bedroom_desk_left":
                     work_target = house.work_mode_desk_level
-                elif entity_id == "light.living_office_e":
+                elif entity_id == "light.bedroom_desk_right":
+                    # Apply -0.30 EV corner-reflection compensation (78/86 = 0.907x slider)
+                    work_target = round(float(house.work_mode_desk_level) * (78.0 / 86.0))
+                elif entity_id == "light.bedroom_counter":
                     work_target = house.work_mode_backlight_level
                 else:
                     work_target = house.work_mode_corner_level
@@ -987,9 +998,14 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         # has to ride in the same turn-on, and only then.
         wake_kelvin = None
         if was_off:
-            wake_kelvin = resolve_colour(
-                clock_hour, self._dusk_hour(), house, light
-            ).kelvin
+            if solution.source == "work":
+                wake_kelvin = 6500
+            else:
+                wake_kelvin = resolve_colour(
+                    clock_hour, self._dusk_hour(), house, light
+                ).kelvin
+        elif solution.source == "work" and room.last_source.get(entity_id) != "work":
+            wake_kelvin = 6500
 
         await self.writer.async_set_brightness(
             entity_id, solution.level, transition, wake_kelvin=wake_kelvin, is_acute=is_acute
@@ -1016,9 +1032,11 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
             room = self.rooms.get(subentry.subentry_id)
             if room is None:
                 continue
+            if self.is_manual(subentry, room):
+                continue
             for entity_id in subentry.data.get(CONF_LIGHTS, []):
                 sol = room.solutions.get(entity_id)
-                if sol is not None and sol.level <= 0:
+                if sol is not None and (sol.level <= 0 or sol.source == "manual"):
                     continue
                 state = self.hass.states.get(entity_id)
                 if state is None or state.state != STATE_ON:
@@ -1027,9 +1045,13 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                 current_k = state.attributes.get("color_temp_kelvin")
                 if current_k is None:
                     continue
-                target = resolve_colour(target_hour, dusk, house, light)
+                if sol is not None and sol.source == "work":
+                    target_kelvin = 6500
+                else:
+                    target = resolve_colour(target_hour, dusk, house, light)
+                    target_kelvin = target.kelvin
                 current_m = kelvin_to_mired(current_k)
-                target_m = kelvin_to_mired(target.kelvin)
+                target_m = kelvin_to_mired(target_kelvin)
                 delta_m = abs(target_m - current_m)
                 step_trans_s = dynamic_colour_transition_s(
                     delta_m,
@@ -1041,12 +1063,12 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                 await self.writer.async_step_colour(
                     entity_id,
                     current_k,
-                    target.kelvin,
+                    target_kelvin,
                     light,
                     profile=self.fade_profile_for(light.family),
                     transition_s=step_trans_s,
                 )
-                room.last_written_kelvin[entity_id] = target.kelvin
+                room.last_written_kelvin[entity_id] = target_kelvin
 
     def fade_profile_for(self, family: Family) -> FadeProfile:
         """The colour-walking strategy for one family, from live settings.
