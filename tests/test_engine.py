@@ -838,9 +838,10 @@ def test_virtual_sunrise_fades_bedroom_lights_when_asleep(house, light):
     assert mid.level > 0
     assert mid.source == "sunrise"
 
-    # Non-bedroom room stays dark while asleep during virtual sunrise
+    # Bedroom-only mode (wake_house_wide off): non-bedroom room stays dark while asleep
     kitchen = RoomSettings(name="Kitchen", night_off=False, sunrise_enabled=False)
-    kitchen_got = solve(house, kitchen, light, _input(lux=1.0, sunrise_progress=0.5, asleep=True))
+    legacy = replace(house, wake_house_wide=False)
+    kitchen_got = solve(legacy, kitchen, light, _input(lux=1.0, sunrise_progress=0.5, asleep=True))
     assert kitchen_got.mode is Mode.SUNRISE
     assert kitchen_got.level == 0
     assert kitchen_got.source == "sunrise"
@@ -963,7 +964,7 @@ def test_virtual_sunset_only_applies_to_bedroom(light):
         SplinePoint(0.0, 180.0),
         SplinePoint(100.0, 2.0),
     )
-    house_curve = HouseSettings(sunset_curve=custom_curve)
+    house_curve = HouseSettings(sunset_curve=custom_curve, winddown_house_wide=False)
     bedroom = RoomSettings(name="Bedroom", night_off=True)
     kitchen = RoomSettings(name="Kitchen", night_off=False, sunset_enabled=False)
 
@@ -1242,3 +1243,71 @@ def test_exposure_envelope_bias_stops_wakes_near_threshold_and_boosts_schedule(h
 
 
 
+
+
+# -------------------------------------------------------------------------------- house-wide
+# wake-up and wind-down (2026-11-13): the fade is a phase on every room's demand; presence
+# only gates it, and the clock never restarts.
+
+
+def test_house_wide_sunrise_lights_the_room_you_are_in(house, light):
+    """Toilet trip at 50% of the dawn: the bathroom gets the dawn level, not night level."""
+    bathroom = RoomSettings(name="Bathroom")
+    got = solve(house, bathroom, light, _input(lux=1.0, sunrise_progress=0.5, asleep=True, occupied=True))
+    bedroom = RoomSettings(name="Bedroom", night_off=True)
+    bed = solve(house, bedroom, light, _input(lux=1.0, sunrise_progress=0.5, asleep=True, occupied=True))
+    assert got.source == "sunrise"
+    assert got.level == bed.level > 0
+
+
+def test_house_wide_sunrise_leaves_empty_rooms_dark(house, light):
+    bathroom = RoomSettings(name="Bathroom")
+    got = solve(house, bathroom, light, _input(lux=1.0, sunrise_progress=0.5, asleep=True, occupied=False))
+    assert got.level == 0
+
+
+def test_house_wide_sunrise_bedroom_follows_presence_only_when_you_are_seen_elsewhere(house, light):
+    """A still sleeper the mmWave misses keeps the dawn; a provable trip elsewhere does not."""
+    bedroom = RoomSettings(name="Bedroom", night_off=True)
+    missed = solve(house, bedroom, light, _input(lux=1.0, sunrise_progress=0.5, asleep=True, occupied=False))
+    assert missed.level > 0
+    away = solve(
+        house, bedroom, light,
+        _input(lux=1.0, sunrise_progress=0.5, asleep=True, occupied=False, occupied_elsewhere=True),
+    )
+    assert away.level == 0
+
+
+def test_house_wide_sunrise_returns_at_the_later_level(house, light):
+    """Back from the bathroom later in the fade: the bedroom is brighter than when you left."""
+    bedroom = RoomSettings(name="Bedroom", night_off=True)
+    left_at = solve(house, bedroom, light, _input(lux=1.0, sunrise_progress=0.3, asleep=True))
+    back_at = solve(house, bedroom, light, _input(lux=1.0, sunrise_progress=0.6, asleep=True))
+    assert back_at.level > left_at.level
+
+
+def test_sleep_off_mid_wake_gives_light_to_see_by(house, light):
+    """Woke 1 minute in at level 1 and switched sleep off: normal demand, not the dawn floor."""
+    bedroom = RoomSettings(name="Bedroom", night_off=True)
+    dawn = solve(house, bedroom, light, _input(lux=1.0, sunrise_progress=0.03, asleep=False))
+    boosted = solve(house, bedroom, light, _input(lux=1.0, sunrise_progress=0.03, asleep=False, wake_boost=True))
+    assert boosted.level > dawn.level
+    assert boosted.level == boosted.state_table.l1
+
+
+def test_house_wide_sunset_dims_every_occupied_room(light):
+    curve = (SplinePoint(0.0, 180.0), SplinePoint(100.0, 2.0))
+    house_curve = HouseSettings(sunset_curve=curve)
+    kitchen = RoomSettings(name="Kitchen")
+    half = solve(house_curve, kitchen, light, _input(lux=0.0, sunset_progress=0.5, occupied=True))
+    end = solve(house_curve, kitchen, light, _input(lux=0.0, sunset_progress=1.0, occupied=True))
+    assert half.source == end.source == "sunset"
+    assert end.level < half.level
+
+
+def test_house_wide_sunset_leaves_the_stairway_on_its_safety_curve(light):
+    curve = (SplinePoint(0.0, 180.0), SplinePoint(100.0, 2.0))
+    house_curve = HouseSettings(sunset_curve=curve)
+    stairs = RoomSettings(name="Stairway")
+    got = solve(house_curve, stairs, light, _input(lux=0.0, sunset_progress=1.0, occupied=True))
+    assert got.source != "sunset"

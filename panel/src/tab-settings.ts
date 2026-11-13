@@ -249,7 +249,7 @@ export class SolTabSettings extends LitElement {
             <div class="bed-card">
               <div class="bed-head">
                 <ha-icon icon="mdi:desk-lamp" style="color: var(--sol-blue);"></ha-icon>
-                <div class="bed-title">Work mode (Living Office)</div>
+                <div class="bed-title">Work mode (Bedroom Office · D65 6500K)</div>
                 <div class="spacer"></div>
                 <div class="badge ${workActive ? "badge-blue" : "badge-dim"}">
                   ${workActive ? "Working (Active)" : "Standby"}
@@ -259,7 +259,7 @@ export class SolTabSettings extends LitElement {
               <div class="triggers-bar">
                 <div class="trigger-item ${workActive ? "active" : ""}">
                   <ha-icon icon="mdi:gesture-tap-hold"></ha-icon>
-                  <span>Sonoff Button: <strong>Hold to toggle</strong></span>
+                  <span>Desk Button: <strong>Toggle Work Mode</strong></span>
                 </div>
                 <button
                   class="manual-sleep-btn ${workActive ? "active-work" : ""}"
@@ -272,7 +272,7 @@ export class SolTabSettings extends LitElement {
 
               <div class="sleep-inputs-grid">
                 <div>
-                  <div style="font-size: 11.5px; color: var(--sol-text-2); margin-bottom: 4px;">Desk lamp</div>
+                  <div style="font-size: 11.5px; color: var(--sol-text-2); margin-bottom: 4px;">Desk bias (L / R-0.3EV)</div>
                   <div class="input-with-unit">
                     <input
                       type="number"
@@ -280,7 +280,7 @@ export class SolTabSettings extends LitElement {
                       style="flex: 1;"
                       min="0"
                       max="254"
-                      .value=${String(house.work_mode_desk_level ?? 254)}
+                      .value=${String(house.work_mode_desk_level ?? 86)}
                       @change=${(e: Event) =>
                         setHouse(this.hass, { work_mode_desk_level: parseFloat((e.target as HTMLInputElement).value) })}
                     />
@@ -289,7 +289,7 @@ export class SolTabSettings extends LitElement {
                 </div>
 
                 <div>
-                  <div style="font-size: 11.5px; color: var(--sol-text-2); margin-bottom: 4px;">Backlight</div>
+                  <div style="font-size: 11.5px; color: var(--sol-text-2); margin-bottom: 4px;">Counter fill</div>
                   <div class="input-with-unit">
                     <input
                       type="number"
@@ -297,7 +297,7 @@ export class SolTabSettings extends LitElement {
                       style="flex: 1;"
                       min="0"
                       max="254"
-                      .value=${String(house.work_mode_backlight_level ?? 200)}
+                      .value=${String(house.work_mode_backlight_level ?? 135)}
                       @change=${(e: Event) =>
                         setHouse(this.hass, { work_mode_backlight_level: parseFloat((e.target as HTMLInputElement).value) })}
                     />
@@ -306,7 +306,7 @@ export class SolTabSettings extends LitElement {
                 </div>
 
                 <div>
-                  <div style="font-size: 11.5px; color: var(--sol-text-2); margin-bottom: 4px;">Corner</div>
+                  <div style="font-size: 11.5px; color: var(--sol-text-2); margin-bottom: 4px;">Wardrobe fill</div>
                   <div class="input-with-unit">
                     <input
                       type="number"
@@ -314,7 +314,7 @@ export class SolTabSettings extends LitElement {
                       style="flex: 1;"
                       min="0"
                       max="254"
-                      .value=${String(house.work_mode_corner_level ?? 180)}
+                      .value=${String(house.work_mode_corner_level ?? 105)}
                       @change=${(e: Event) =>
                         setHouse(this.hass, { work_mode_corner_level: parseFloat((e.target as HTMLInputElement).value) })}
                     />

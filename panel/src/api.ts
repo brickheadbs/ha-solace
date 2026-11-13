@@ -96,6 +96,11 @@ export interface World {
   kelvin: number;
   asleep: boolean;
   work_mode?: boolean;
+  special_mode?: "work" | "gaming" | "movie" | null;
+  special_modes?: Record<string, boolean>;
+  mode_paused?: boolean;
+  creative_app_open?: boolean;
+  mac_watcher_alive?: boolean;
   guest_mode?: boolean;
   gate_open?: boolean;
   phone_dnd?: boolean;
@@ -355,6 +360,9 @@ export const toggleSleep = (hass: Hass) =>
 
 export const toggleWorkMode = (hass: Hass) =>
   hass.connection.sendMessagePromise({ type: "solace/toggle_work_mode" });
+
+export const toggleSpecialMode = (hass: Hass, mode: "work" | "gaming" | "movie") =>
+  hass.connection.sendMessagePromise({ type: "solace/toggle_special_mode", mode });
 
 export const toggleGuestMode = (hass: Hass) =>
   hass.connection.sendMessagePromise({ type: "solace/toggle_guest_mode" });

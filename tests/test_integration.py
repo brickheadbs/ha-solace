@@ -1005,7 +1005,12 @@ async def test_sunset_bedroom_only_does_not_affect_kitchen(
         title="Solace",
         unique_id="solace_multi_room_sunset_test",
         data={CONF_LUX_SENSOR: LUX, CONF_DND_ENTITY: DND},
-        options={CONF_LUX_SENSOR: LUX, CONF_DND_ENTITY: DND, "sunset_fade_minutes": 30.0},
+        options={
+            CONF_LUX_SENSOR: LUX,
+            CONF_DND_ENTITY: DND,
+            "sunset_fade_minutes": 30.0,
+            "winddown_house_wide": 0,
+        },
         subentries_data=[
             ConfigSubentryData(
                 subentry_type=SUBENTRY_TYPE_ROOM,

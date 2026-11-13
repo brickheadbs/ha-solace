@@ -59,6 +59,7 @@ from .const import (
     Setting,
 )
 from .coordinator import SolaceConfigEntry, SolaceCoordinator
+from .modes import MODE_HELPERS
 from .engine import solve_master
 from .models import Family
 
@@ -88,6 +89,7 @@ def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_set_sunset_curve)
     websocket_api.async_register_command(hass, ws_toggle_sleep)
     websocket_api.async_register_command(hass, ws_toggle_work_mode)
+    websocket_api.async_register_command(hass, ws_toggle_special_mode)
     websocket_api.async_register_command(hass, ws_toggle_guest_mode)
     websocket_api.async_register_command(hass, ws_toggle_gate)
     websocket_api.async_register_command(hass, ws_set_room)
@@ -343,6 +345,14 @@ def _snapshot(hass: HomeAssistant, coordinator: SolaceCoordinator) -> dict[str, 
             "kelvin": master_out.target_kelvin,
             "asleep": coordinator._asleep(),  # noqa: SLF001
             "work_mode": coordinator._work_mode(),  # noqa: SLF001
+            "special_mode": coordinator._special_mode(),  # noqa: SLF001
+            "special_modes": {
+                m: coordinator._is_on(h, default=False)  # noqa: SLF001
+                for m, h in MODE_HELPERS.items()
+            },
+            "mode_paused": coordinator._mode_paused(),  # noqa: SLF001
+            "creative_app_open": coordinator._is_on("binary_sensor.mac_creative_app_open", default=False),  # noqa: SLF001
+            "mac_watcher_alive": coordinator._is_on("binary_sensor.mac_watcher_alive", default=False),  # noqa: SLF001
             "guest_mode": coordinator._living_guest_mode(),  # noqa: SLF001
             "gate_open": coordinator._gate_open(),  # noqa: SLF001
             "phone_dnd": coordinator._phone_dnd(),  # noqa: SLF001
@@ -707,6 +717,31 @@ async def ws_toggle_work_mode(hass: HomeAssistant, connection, msg: dict[str, An
     )
     await coordinator.async_request_refresh()
     connection.send_result(msg["id"], {"success": True, "work_mode": coordinator._work_mode()})
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "solace/toggle_special_mode",
+        vol.Required("mode"): vol.In(tuple(MODE_HELPERS)),
+    }
+)
+@websocket_api.async_response
+async def ws_toggle_special_mode(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    """Toggle one Special Mode helper (the coordinator keeps them mutually exclusive)."""
+    entry = _entry(hass)
+    if entry is None:
+        connection.send_error(msg["id"], "not_loaded", "Solace is not set up")
+        return
+    coordinator = entry.runtime_data.coordinator
+    helper = MODE_HELPERS[msg["mode"]]
+    if hass.states.get(helper) is None:
+        connection.send_error(msg["id"], "missing_helper", f"{helper} does not exist")
+        return
+    await hass.services.async_call(
+        "input_boolean", "toggle", {"entity_id": helper}, context=coordinator.writer.new_context()
+    )
+    await coordinator.async_request_refresh()
+    connection.send_result(msg["id"], {"success": True, "special_mode": coordinator._special_mode()})  # noqa: SLF001
 
 
 @websocket_api.websocket_command({vol.Required("type"): "solace/toggle_guest_mode"})

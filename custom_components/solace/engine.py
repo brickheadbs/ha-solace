@@ -520,14 +520,37 @@ def solve(
         source = "away"
         trace.append(("away", True))
 
-    # B. VIRTUAL SUNRISE: Artificial dawn goes on TOP of sleep mode to gently wake, capped by demand L1
+    # B. VIRTUAL SUNRISE: artificial dawn goes on TOP of sleep mode to gently wake.
+    #    House-wide (wake_house_wide): the dawn level is a phase on every room's demand,
+    #    and presence only gates it — a toilet trip lights the bathroom at the current
+    #    dawn level and the bedroom picks the fade back up on return. The clock never
+    #    restarts. Bedroom keeps the dawn while nobody is seen elsewhere, so a still
+    #    sleeper the mmWave misses is still woken.
     elif mode is Mode.SUNRISE:
-        if room.sunrise_enabled or room.night_off or "bedroom" in room.name.lower():
-            progress_pct = max(0.0, min(100.0, (data.sunrise_progress or 0.0) * 100.0))
-            sunrise_spline = MonotoneCubicSpline(house.sunrise_curve)
-            curve_raw = sunrise_spline(progress_pct)
-            target_level = min(int(round(curve_raw)), state_table.l1)
-            level = apply_clamp(max(0, target_level), light)
+        is_wake_room = room.sunrise_enabled or room.night_off or "bedroom" in room.name.lower()
+        progress_pct = max(0.0, min(100.0, (data.sunrise_progress or 0.0) * 100.0))
+        sunrise_spline = MonotoneCubicSpline(house.sunrise_curve)
+        dawn_level = apply_clamp(max(0, min(int(round(sunrise_spline(progress_pct))), state_table.l1)), light)
+        if house.wake_house_wide:
+            present = data.occupied or (is_wake_room and not data.occupied_elsewhere)
+            if not present:
+                level = 0
+                source = "off"
+                trace.append(("sunrise_unoccupied", True))
+            else:
+                level = dawn_level
+                if data.wake_boost and state_table.l1 > level:
+                    # Sleep switched off mid-fade: normal demand, so there is light to see by.
+                    level = state_table.l1
+                    trace.append(("sunrise_wake_boost", level))
+                if is_stairway and state_table.l1s > level:
+                    # Stairs never go darker than the night corridor floor.
+                    level = state_table.l1s
+                    trace.append(("sunrise_stairway_floor", level))
+                source = "sunrise"
+                trace.append(("virtual_sunrise_house", level))
+        elif is_wake_room:
+            level = dawn_level
             source = "sunrise"
             trace.append(("virtual_sunrise", level))
         else:
@@ -541,12 +564,18 @@ def solve(
         source = "sleep"
         trace.append(("bedroom_sleep_forced_off", True))
 
-    # D. VIRTUAL SUNSET: Bedtime fade (bedroom only, only while occupied)
+    # D. VIRTUAL SUNSET: bedtime fade. Started by Bedroom dwell; with winddown_house_wide
+    #    every occupied room follows the same fade (Stairway keeps its own safety curve).
     elif mode is Mode.SUNSET:
-        if room.sunset_enabled or room.night_off or "bedroom" in room.name.lower():
+        is_winddown_room = room.sunset_enabled or room.night_off or "bedroom" in room.name.lower()
+        if is_winddown_room or (house.winddown_house_wide and not is_stairway):
             if not data.occupied:
-                level = 0
-                source = "off"
+                if is_winddown_room:
+                    level = 0
+                    source = "off"
+                else:
+                    level = state_table.l3 if (house.ambience_ignores_occupancy and ambience_open and not data.asleep) else 0
+                    source = "ambience" if level > 0 else "off"
                 trace.append(("sunset_unoccupied", True))
             else:
                 progress_pct = max(0.0, min(100.0, (data.sunset_progress or 0.0) * 100.0))
