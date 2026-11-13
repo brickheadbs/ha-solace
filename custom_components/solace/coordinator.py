@@ -64,6 +64,17 @@ from .const import (
     ROOM_DEFAULTS,
     SUBENTRY_TYPE_ROOM,
 )
+from .modes import sunny_override_state
+from .modes import (
+    DISPLAYS_ASLEEP_ENTITY,
+    GUEST_MODE_ENTITY,
+    WATCHER_ALIVE_ENTITY,
+    MODE_HELPERS,
+    MODE_LIGHTS,
+    active_mode,
+    mode_hold,
+    profile_for,
+)
 from .engine import (
     ambience_threshold,
     apply_clamp,
@@ -251,6 +262,15 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         self._active_sunset_started_at: float | None = None
         self._active_sunset_duration_s: float | None = None
         self._gate_override: bool | None = None
+        #: Kelvin per office light while a Special Mode drives it at a fixed level.
+        self._mode_kelvin: dict[str, int | None] = {}
+        #: Sleep was switched off during the active wake-up (cleared when sleep returns or
+        #: the wake-up ends). Gives normal demand so there is light to see by.
+        self._wake_boost = False
+        #: Sunny override latch (hysteresis; see sunny_override_release_pct).
+        self._sunny_latched = False
+        #: Sleep switched back ON during the wake-up: do not auto-clear it until the fade ends.
+        self._sleep_reasserted = False
         self._unsubscribes: list[Any] = []
         self._last_presence: dict[str, float] = {}
         self.last_tick: Any = None
@@ -514,6 +534,9 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         for extra_sensor in (
             "input_boolean.away_mode",
             "input_boolean.work_mode",
+            "input_boolean.gaming_mode",
+            "input_boolean.movie_mode",
+            DISPLAYS_ASLEEP_ENTITY,
             "input_boolean.living_guest_mode",
             "input_boolean.ambient_gate",
             "sun.sun",
@@ -643,7 +666,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         # Compute raw master demand and filter via AsymmetricFilter (instant attack, damped decay)
         raw_cloud = self._cloud_coverage()
         cloud_coverage = (
-            0.0 if (house.sunny_override_lux > 0 and lux >= house.sunny_override_lux) else raw_cloud
+            0.0 if self._sunny_active(lux, house) else raw_cloud
         )
         raw_master = solve_master(lux, clock_hour, house, cloud_coverage=cloud_coverage)
         now_ts = now.timestamp()
@@ -696,10 +719,12 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                 if bedroom_fade_level < kitchen_ambient_level:
                     ambient_suppressed_by_bedroom = True
 
+        occupied_ids = {sid for sid, r in self.rooms.items() if r.occupied}
         for subentry in self._subentries():
             room = self.rooms[subentry.subentry_id]
             settings = self.room_settings(subentry)
             occupied = room.occupied
+            occupied_elsewhere = bool(occupied_ids - {subentry.subentry_id})
             # Zone presence — "is THIS end of the room occupied", which is what drives diminish.
             zone_presence = {z.get("zone_id"): z.get("presence") for z in (subentry.data.get(CONF_ZONES) or ())}
             area_near_clear = not self._any_on(
@@ -738,7 +763,9 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                 or "bedroom" in subentry.title.lower()
                 or "bedroom" in settings.name.lower()
             )
-            effective_sunset = sunset_progress if is_sunset_room else None
+            effective_sunset = (
+                sunset_progress if (is_sunset_room or house.winddown_house_wide) else None
+            )
             for entity_id in subentry.data.get(CONF_LIGHTS, []):
                 zone = zone_for.get(entity_id)
                 if zone is not None and zone.zone_id in zone_presence:
@@ -752,6 +779,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                         entity_id, subentry, house, settings, room, lux, dnd, clock_hour,
                         occupied, near_clear, manual, asleep, away, sunrise_progress, effective_sunset, bedtime_dwell_active, zone,
                         filtered_demand=filtered_demand,
+                        occupied_elsewhere=occupied_elsewhere,
                     )
                 except Exception:  # noqa: BLE001
                     _LOGGER.exception("Solace: failed to apply %s", entity_id)
@@ -797,6 +825,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         bedtime_dwell_active: bool,
         zone: ZoneSettings | None = None,
         filtered_demand: float | None = None,
+        occupied_elsewhere: bool = False,
     ) -> None:
         state = self.hass.states.get(entity_id)
         if state is None:
@@ -808,9 +837,31 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
             current = 0
 
         diminish_pct = zone.diminish_pct if zone is not None else settings.diminish_pct
+
+        # Special Modes (Work / Gaming / Movie): a profile laid over normal demand.
+        mode_profile = None
+        mode_holding = False
+        if entity_id in MODE_LIGHTS:
+            mode_name = self._special_mode()
+            if mode_name is not None:
+                mode_profile = profile_for(house, mode_name)
+                last_occ = self._last_presence.get(subentry.subentry_id, 0.0)
+                now_ts = dt_util.utcnow().timestamp()
+                mode_holding = mode_hold(
+                    occupied=occupied,
+                    seconds_since_presence=(now_ts - last_occ) if last_occ > 0 else 999999.0,
+                    debounce_minutes=mode_profile.debounce_minutes,
+                    displays_asleep=self._mode_paused(),
+                    occupied_elsewhere=occupied_elsewhere,
+                    guest_mode=self._is_on(GUEST_MODE_ENTITY, default=False),
+                )
+        solve_settings = settings
+        if mode_profile is not None and mode_holding and abs(mode_profile.bias_stops) > 1e-9:
+            solve_settings = replace(settings, bias_stops=settings.bias_stops + mode_profile.bias_stops)
+
         solution = solve(
             house,
-            settings,
+            solve_settings,
             light,
             EngineInput(
                 lux=lux,
@@ -832,65 +883,35 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                 last_source=room.last_source.get(entity_id),
                 cloud_coverage=(
                     0.0
-                    if (house.sunny_override_lux > 0 and lux >= house.sunny_override_lux)
+                    if self._sunny_active(lux, house)
                     else self._cloud_coverage()
                 ),
                 demand_override=filtered_demand,
+                occupied_elsewhere=occupied_elsewhere,
+                wake_boost=self._wake_boost and sunrise_progress is not None,
             ),
             zone=zone,
         )
 
-        # Work Mode overrides the 3 office zone lights with manual work brightness when occupied (with debounce).
-        # ⚠️ Work Mode sets the LEVEL. It does not decide whether to write — that is the dead
-        # zone's job, and forcing ``should_write=True`` here bypassed it entirely. Measured
-        # 2026-09-13: the three office fixtures were the only ones in the house re-emitting an
-        # identical ``{state:ON, brightness:100, transition:300}`` every ~5.5 minutes for over
-        # an hour and a half, because the forced write meant the "nothing changed" test never
-        # ran. Every other room was silent. A value provider must never also be a write forcer.
-        if self._work_mode() and entity_id in (
-            "light.bedroom_desk_left",
-            "light.bedroom_desk_right",
-            "light.bedroom_counter",
-            "light.bedroom_wardrobe",
-            "light.bedroom_glass_lamp",
-        ):
-            last_occ = self._last_presence.get(subentry.subentry_id, 0.0)
-            now_ts = dt_util.utcnow().timestamp()
-            elapsed = (now_ts - last_occ) if last_occ > 0 else 999999.0
-            debounce_s = float(house.work_mode_debounce_minutes) * 60.0
-            if (occupied or elapsed < debounce_s) and entity_id != "light.bedroom_glass_lamp":
-                if entity_id == "light.bedroom_desk_left":
-                    work_target = house.work_mode_desk_level
-                elif entity_id == "light.bedroom_desk_right":
-                    # Apply -0.30 EV corner-reflection compensation (78/86 = 0.907x slider)
-                    work_target = round(float(house.work_mode_desk_level) * (78.0 / 86.0))
-                elif entity_id == "light.bedroom_counter":
-                    work_target = house.work_mode_backlight_level
-                else:
-                    work_target = house.work_mode_corner_level
-                work_target = min(254, max(0, int(work_target)))
+        # Special Mode fixed levels. ⚠️ A mode sets the LEVEL. It does not decide whether to
+        # write — that is the dead zone's job, and forcing ``should_write=True`` here bypassed
+        # it entirely. Measured 2026-09-13: the office fixtures were the only ones in the
+        # house re-emitting an identical ``{state:ON, brightness:100, transition:300}`` every
+        # ~5.5 minutes for over an hour and a half. A value provider must never also be a
+        # write forcer. Lights set to "follow" (-1) keep the normal solution, biased above.
+        if mode_profile is not None and mode_holding:
+            fixed = mode_profile.fixed_level(entity_id)
+            if fixed is not None:
+                self._mode_kelvin[entity_id] = mode_profile.fixed_kelvin
                 solution = replace(
                     solution,
-                    level=work_target,
+                    level=fixed,
                     source="work",
                     should_write=past_dead_zone(
-                        work_target,
+                        fixed,
                         room.last_written.get(entity_id),
                         house.dead_zone,
                         source="work",
-                        last_source=room.last_source.get(entity_id),
-                    ),
-                )
-            else:
-                solution = replace(
-                    solution,
-                    level=0,
-                    source="off",
-                    should_write=past_dead_zone(
-                        0,
-                        room.last_written.get(entity_id),
-                        house.dead_zone,
-                        source="off",
                         last_source=room.last_source.get(entity_id),
                     ),
                 )
@@ -998,14 +1019,18 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         # has to ride in the same turn-on, and only then.
         wake_kelvin = None
         if was_off:
-            if solution.source == "work":
-                wake_kelvin = 6500
+            if solution.source == "work" and self._mode_kelvin.get(entity_id):
+                wake_kelvin = self._mode_kelvin[entity_id]
             else:
                 wake_kelvin = resolve_colour(
                     clock_hour, self._dusk_hour(), house, light
                 ).kelvin
-        elif solution.source == "work" and room.last_source.get(entity_id) != "work":
-            wake_kelvin = 6500
+        elif (
+            solution.source == "work"
+            and room.last_source.get(entity_id) != "work"
+            and self._mode_kelvin.get(entity_id)
+        ):
+            wake_kelvin = self._mode_kelvin[entity_id]
 
         await self.writer.async_set_brightness(
             entity_id, solution.level, transition, wake_kelvin=wake_kelvin, is_acute=is_acute
@@ -1045,8 +1070,8 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                 current_k = state.attributes.get("color_temp_kelvin")
                 if current_k is None:
                     continue
-                if sol is not None and sol.source == "work":
-                    target_kelvin = 6500
+                if sol is not None and sol.source == "work" and self._mode_kelvin.get(entity_id):
+                    target_kelvin = self._mode_kelvin[entity_id]
                 else:
                     target = resolve_colour(target_hour, dusk, house, light)
                     target_kelvin = target.kelvin
@@ -1150,6 +1175,8 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
             # Completed naturally
             self._active_sunrise_start = None
             self._active_sunrise_end = None
+            self._wake_boost = False
+            self._sleep_reasserted = False
 
         candidates: list[datetime] = []
         entity_id = self.config_entry.options.get(
@@ -1258,7 +1285,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                     if (bedroom_room and bedroom_room.unoccupied_since is not None)
                     else 0.0
                 )
-                if unoccupied_duration >= 300.0:
+                if unoccupied_duration >= float(house.winddown_leave_grace_minutes) * 60.0:
                     self._active_sunset_started_at = None
                     self._active_sunset_duration_s = None
                     return None
@@ -1360,8 +1387,11 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         if asleep:
             # If asleep only via manual sleep toggle, allow dawn lux / alarm / sunrise to unlatch
             if unlatch:
-                _LOGGER.info("Solace: leaving night mode (dawn/sunrise/alarm override on sleep toggle)")
                 self._night_latched = False
+                if self._sleep_reasserted and self._active_sunrise_start is not None:
+                    # Back to bed mid wake-up: the dawn carries on; sleep stays on.
+                    return
+                _LOGGER.info("Solace: leaving night mode (dawn/sunrise/alarm override on sleep toggle)")
                 self._clear_sleep_toggle()
                 self._clear_work_mode()
                 return
@@ -1623,8 +1653,35 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                 "sensor.pixel_8a_do_not_disturb_sensor",
             ) and new_state.state == "off":
                 self._night_latched = False
-            if entity_id == "input_boolean.work_mode" and new_state.state == "on":
-                self.hass.async_create_task(self._async_colour_tick(None))
+            sleep_entity = (
+                self.config_entry.options.get(CONF_SLEEP_TOGGLE)
+                or self.config_entry.data.get(CONF_SLEEP_TOGGLE)
+                or "input_boolean.solace_sleep"
+            )
+            if entity_id == sleep_entity and not self.writer.is_our_context(new_state.context):
+                # Only YOUR sleep toggles count. Solace itself clears the toggle when the
+                # wake-up starts; that echo must not read as "I'm up, give me light".
+                if new_state.state == "off" and self._active_sunrise_start is not None:
+                    self._wake_boost = True
+                    self._sleep_reasserted = False
+                elif new_state.state == "on":
+                    self._wake_boost = False
+                    # Back to bed mid wake-up: keep sleep on and let the fade carry on.
+                    self._sleep_reasserted = self._active_sunrise_start is not None
+            for mode_name, helper in MODE_HELPERS.items():
+                if entity_id == helper and new_state.state == "on":
+                    # One special mode at a time: switching one on switches the others off.
+                    others = [h for m, h in MODE_HELPERS.items() if m != mode_name and self._is_on(h, default=False)]
+                    if others:
+                        self.hass.async_create_task(
+                            self.hass.services.async_call(
+                                "input_boolean",
+                                "turn_off",
+                                {"entity_id": others},
+                                context=self.writer.new_context(),
+                            )
+                        )
+                    self.hass.async_create_task(self._async_colour_tick(None))
 
         self.hass.async_create_task(self.async_refresh())
 
@@ -1787,6 +1844,26 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         """Is work mode active?"""
         return self._is_on("input_boolean.work_mode", default=False)
 
+    def _sunny_active(self, lux: float, house: HouseSettings) -> bool:
+        """Sunny lux override with hysteresis: on at the threshold, off only once lux
+        drops ``sunny_override_release_pct`` below it."""
+        self._sunny_latched = sunny_override_state(
+            lux, house.sunny_override_lux, house.sunny_override_release_pct, self._sunny_latched
+        )
+        return self._sunny_latched
+
+    def _special_mode(self) -> str | None:
+        """The live Special Mode (movie > gaming > work), or None."""
+        return active_mode({m: self._is_on(h, default=False) for m, h in MODE_HELPERS.items()})
+
+    def _mode_paused(self) -> bool:
+        """Displays asleep: the Special Mode profile pauses until they wake."""
+        # Only trusted while the Mac watcher is heartbeating: a stale "asleep" from a dead
+        # watcher must never pause a mode indefinitely.
+        return self._is_on(DISPLAYS_ASLEEP_ENTITY, default=False) and self._is_on(
+            WATCHER_ALIVE_ENTITY, default=False
+        )
+
     def _living_guest_mode(self) -> bool:
         """Is living room guest mode active?"""
         return self._is_on("input_boolean.living_guest_mode", default=False)
@@ -1815,27 +1892,21 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         return new_state
 
     def _clear_work_mode(self) -> None:
-        """Auto-clear work mode helper when night mode or morning release fires."""
-        if self._work_mode():
-            _LOGGER.info("Solace: auto-clearing work mode helper")
-            if self.hass.services.has_service("input_boolean", "turn_off"):
-                self.hass.async_create_task(
-                    self.hass.services.async_call(
-                        "input_boolean",
-                        "turn_off",
-                        {"entity_id": "input_boolean.work_mode"},
-                        context=self.writer.new_context(),
-                    )
-                )
-            elif self.hass.services.has_service("homeassistant", "turn_off"):
-                self.hass.async_create_task(
-                    self.hass.services.async_call(
-                        "homeassistant",
-                        "turn_off",
-                        {"entity_id": "input_boolean.work_mode"},
-                        context=self.writer.new_context(),
-                    )
-                )
+        """Auto-clear every Special Mode helper when night mode or morning release fires."""
+        on = [h for h in MODE_HELPERS.values() if self._is_on(h, default=False)]
+        if not on:
+            return
+        _LOGGER.info("Solace: auto-clearing special mode helpers %s", on)
+        domain, service = (
+            ("input_boolean", "turn_off")
+            if self.hass.services.has_service("input_boolean", "turn_off")
+            else ("homeassistant", "turn_off")
+        )
+        self.hass.async_create_task(
+            self.hass.services.async_call(
+                domain, service, {"entity_id": on}, context=self.writer.new_context()
+            )
+        )
 
     def _dnd(self) -> bool:
         """Asleep? Checks configured DND entity and Pixel Watch bedtime sensors."""

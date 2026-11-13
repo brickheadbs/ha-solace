@@ -13,6 +13,7 @@ from homeassistant.core import Event, EventStateChangedData, HomeAssistant, call
 from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.util import dt as dt_util
 
+from .modes import MODE_HELPERS, MODE_LIGHTS
 from .const import CONF_REMOTES, CONF_SLEEP_TOGGLE
 
 if TYPE_CHECKING:
@@ -88,16 +89,8 @@ DEFAULT_REMOTES: list[dict[str, Any]] = [
 ]
 
 
-# The bedroom office fixtures Work Mode drives (mirrors the list in coordinator._async_apply_light).
-WORK_MODE_LIGHTS = frozenset(
-    (
-        "light.bedroom_desk_left",
-        "light.bedroom_desk_right",
-        "light.bedroom_counter",
-        "light.bedroom_wardrobe",
-        "light.bedroom_glass_lamp",
-    )
-)
+# The bedroom office fixtures the Special Modes drive.
+WORK_MODE_LIGHTS = MODE_LIGHTS
 RESUME_ACTIONS = frozenset(("resume_auto", "auto", "turn_on"))
 
 
@@ -356,16 +349,20 @@ class RemoteDispatcher:
                 await self.coordinator.writer.async_turn_off(
                     lights, getattr(self.coordinator.house, "transition_down_off_s", 4.0), is_acute=True
                 )
-            # Work Mode drives the office lights; switching THAT room off ends it. Any
-            # other room's off button must not.
-            work_mode = self.hass.states.get("input_boolean.work_mode")
-            if work_mode and work_mode.state == "on" and any(l in WORK_MODE_LIGHTS for l in lights):
-                await self.hass.services.async_call(
-                    "input_boolean",
-                    "turn_off",
-                    {"entity_id": "input_boolean.work_mode"},
-                    context=self.coordinator.writer.new_context(),
-                )
+            # Special Modes drive the office lights; switching THAT room off ends whichever
+            # mode is on. Any other room's off button must not.
+            if any(l in WORK_MODE_LIGHTS for l in lights):
+                on = [
+                    h for h in MODE_HELPERS.values()
+                    if (st := self.hass.states.get(h)) is not None and st.state == "on"
+                ]
+                if on:
+                    await self.hass.services.async_call(
+                        "input_boolean",
+                        "turn_off",
+                        {"entity_id": on},
+                        context=self.coordinator.writer.new_context(),
+                    )
             await self.coordinator.async_persist()
             await self.coordinator.async_request_refresh()
 

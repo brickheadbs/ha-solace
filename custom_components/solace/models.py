@@ -179,6 +179,9 @@ class HouseSettings:
     lux_cloudy_curve: tuple[SplinePoint, ...] = DEFAULT_LUX_CLOUDY_CURVE
     cloudy_blend_threshold: float = 50.0
     sunny_override_lux: float = 0.0
+    #: Hysteresis: once on, the override holds until lux falls this % below the threshold,
+    #: so clouds bouncing either side of it cannot flap lights off/on (2026-11-13).
+    sunny_override_release_pct: float = 15.0
     brightness_timeline: tuple[SplinePoint, ...] = DEFAULT_BRIGHTNESS_TIMELINE
     colour_timeline: tuple[SplinePoint, ...] = DEFAULT_COLOUR_TIMELINE
     mood_trim_stops: float = 0.0
@@ -262,11 +265,35 @@ class HouseSettings:
     bedtime_dwell_hour: float = 22.5
     bedtime_dwell_level: int = 15
 
-    # -- Work Mode ----------------------------------------------------------------
-    work_mode_desk_level: int = 254
-    work_mode_backlight_level: int = 200
-    work_mode_corner_level: int = 180
+    # -- House-wide wake-up / wind-down --------------------------------------------
+    wake_house_wide: bool = True
+    winddown_house_wide: bool = True
+    winddown_leave_grace_minutes: float = 5.0
+
+    # -- Special Modes (Work / Gaming / Movie) ------------------------------------
+    # Level -1 = follow Solace demand; Kelvin 0 = follow the house colour curve.
+    work_mode_desk_level: int = 86
+    work_mode_backlight_level: int = 135
+    work_mode_corner_level: int = 105
+    work_mode_glass_level: int = 0
+    work_mode_kelvin: int = 6500
+    work_mode_bias_stops: float = 0.0
     work_mode_debounce_minutes: float = 5.0
+    work_mode_app_close_delay_minutes: float = 0.0
+    gaming_mode_desk_level: int = 86
+    gaming_mode_backlight_level: int = 135
+    gaming_mode_corner_level: int = 105
+    gaming_mode_glass_level: int = 0
+    gaming_mode_kelvin: int = 6500
+    gaming_mode_bias_stops: float = 0.0
+    gaming_mode_debounce_minutes: float = 5.0
+    movie_mode_desk_level: int = 0
+    movie_mode_backlight_level: int = -1
+    movie_mode_corner_level: int = -1
+    movie_mode_glass_level: int = -1
+    movie_mode_kelvin: int = 0
+    movie_mode_bias_stops: float = -2.0
+    movie_mode_debounce_minutes: float = 5.0
 
     # -- Stairway Eye-Adaptation Curve --------------------------------------------
     stairway_start_lux: float = 10.0
@@ -363,6 +390,11 @@ class EngineInput:
     last_source: str | None = None
     cloud_coverage: float | None = None
     demand_override: float | None = None
+    #: Someone is seen in another room right now (house-wide fades use this to tell a
+    #: still sleeper the mmWave missed from an empty bedroom).
+    occupied_elsewhere: bool = False
+    #: Sleep was switched OFF during the active wake-up: give enough light to see by.
+    wake_boost: bool = False
 
 
 @dataclass(frozen=True, slots=True)

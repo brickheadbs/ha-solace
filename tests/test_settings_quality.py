@@ -21,6 +21,8 @@ from custom_components.solace.models import HouseSettings, RoomSettings
 BOOLEANS = {
     "ambience_ignores_occupancy",
     "sunrise_fade_enabled",
+    "wake_house_wide",
+    "winddown_house_wide",
     "sunset_fade_enabled",
     "bedroom_sleep_forced_off",
     "bedtime_dwell_enabled",
