@@ -47,7 +47,8 @@ const ROOM_SENSORS: { name: string; id: string }[] = [
   { name: "Office", id: OFFICE_TEMP },
   { name: "Bedroom", id: BEDROOM_TEMP },
   { name: "Bathroom", id: BATH_TEMP },
-  { name: "Entrance", id: ENTRY_TEMP },
+  // Sensor moved from the stairway to the unheated ground-floor storage on 2026-11-05.
+  { name: "Storage", id: ENTRY_TEMP },
 ];
 
 const TRACKED = [
