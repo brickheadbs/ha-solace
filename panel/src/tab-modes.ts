@@ -391,6 +391,12 @@ export class SolTabModes extends LitElement {
           <span class="badge ${w.creative_app_open ? "on" : ""}">Creative app ${w.creative_app_open ? "open" : "closed"}</span>
           <span class="badge ${w.mode_paused ? "paused" : ""}">Displays ${w.mode_paused ? "asleep" : "awake"}</span>
         </div>
+        ${this.sliderRow(
+          "transition_mode_s",
+          "Mode switch fade",
+          "How long the office lights take to reach a mode's levels when you switch a mode on or off. Everyday tracking keeps the slow Automatic fade.",
+          "s"
+        )}
       </div>
       ${MODES.map((m) => this.modeCard(m))}
     </div>`;

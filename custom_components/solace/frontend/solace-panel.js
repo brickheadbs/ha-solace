@@ -1897,6 +1897,19 @@ var Aa=Object.defineProperty;var La=Object.getOwnPropertyDescriptor;var m=(l,i,e
                 />
               </div>
               <div class="trans-row">
+                <div class="trans-lbl">Mode Switch</div>
+                <div class="trans-dots"></div>
+                <div class="trans-path">Work / Gaming / Movie</div>
+                <input
+                  type="number"
+                  step="0.5"
+                  class="num-input"
+                  style="width: 62px;"
+                  .value=${String(i.transition_mode_s??3)}
+                  @change=${o=>L(this.hass,{transition_mode_s:parseFloat(o.target.value)})}
+                />
+              </div>
+              <div class="trans-row">
                 <div class="trans-lbl">Special Mode</div>
                 <div class="trans-dots"></div>
                 <div class="trans-path">Sunrise / Sunset</div>
@@ -4987,6 +5000,7 @@ var Aa=Object.defineProperty;var La=Object.getOwnPropertyDescriptor;var m=(l,i,e
           <span class="badge ${e.creative_app_open?"on":""}">Creative app ${e.creative_app_open?"open":"closed"}</span>
           <span class="badge ${e.mode_paused?"paused":""}">Displays ${e.mode_paused?"asleep":"awake"}</span>
         </div>
+        ${this.sliderRow("transition_mode_s","Mode switch fade","How long the office lights take to reach a mode's levels when you switch a mode on or off. Everyday tracking keeps the slow Automatic fade.","s")}
       </div>
       ${xi.map(s=>this.modeCard(s))}
     </div>`}};Me.styles=[D,z`

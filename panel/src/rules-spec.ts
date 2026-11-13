@@ -82,6 +82,7 @@ export const TRACKED_HOUSE_KEYS: readonly string[] = [
   "transition_down_off_s",
   "transition_automatic_s",
   "transition_manual_s",
+  "transition_mode_s",
   "day_kelvin",
   "night_kelvin",
   "colour_heartbeat_s",

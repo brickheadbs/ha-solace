@@ -228,6 +228,7 @@ class HouseSettings:
     transition_down_off_s: float = 4.0
     transition_automatic_s: float = 15.0
     transition_manual_s: float = 0.5
+    transition_mode_s: float = 3.0
 
     # -- Colour Settings ----------------------------------------------------------
     day_kelvin: int = 4000

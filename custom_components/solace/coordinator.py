@@ -264,6 +264,9 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         self._gate_override: bool | None = None
         #: Kelvin per office light while a Special Mode drives it at a fixed level.
         self._mode_kelvin: dict[str, int | None] = {}
+        # Loop time of the last special-mode toggle (on or off). Office-light writes in the
+        # few seconds after it use the "Mode switch" fade instead of the slow Automatic one.
+        self._mode_switch_at: float | None = None
         #: Sleep was switched off during the active wake-up (cleared when sleep returns or
         #: the wake-up ends). Gives normal demand so there is light to see by.
         self._wake_boost = False
@@ -345,6 +348,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         fields["transition_down_off_s"] = float(fields.get("transition_down_off_s", fields.get("transition_clear_to_off_s", 4.0)))
         fields["transition_automatic_s"] = float(fields.get("transition_automatic_s", fields.get("transition_tracking_s", 15.0)))
         fields["transition_manual_s"] = float(fields.get("transition_manual_s", fields.get("transition_manual_drag_s", 0.5)))
+        fields["transition_mode_s"] = float(fields.get("transition_mode_s", 3.0))
         fields["ramp"] = tuple(
             RampPoint(hour=float(p["hour"]), stops=float(p["stops"])) for p in ramp
         )
@@ -959,9 +963,19 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         was_off = current == 0
 
         is_acute = False
+        mode_switch = (
+            entity_id in MODE_LIGHTS
+            and self._mode_switch_at is not None
+            and self.hass.loop.time() - self._mode_switch_at < 15.0
+        )
         if self._tuning:
             # A slider is being dragged in the dashboard.
             transition = house.transition_manual_s
+            is_acute = True
+        elif mode_switch:
+            # A mode was just switched on or off: the person pressed a button and is
+            # waiting, so this is a response, not background tracking.
+            transition = house.transition_mode_s
             is_acute = True
         elif was_off:
             if solution.source == "ambience":
@@ -1668,6 +1682,10 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                     self._wake_boost = False
                     # Back to bed mid wake-up: keep sleep on and let the fade carry on.
                     self._sleep_reasserted = self._active_sunrise_start is not None
+            if entity_id in MODE_HELPERS.values() and (
+                old_state is None or old_state.state != new_state.state
+            ):
+                self._mode_switch_at = self.hass.loop.time()
             for mode_name, helper in MODE_HELPERS.items():
                 if entity_id == helper and new_state.state == "on":
                     # One special mode at a time: switching one on switches the others off.
