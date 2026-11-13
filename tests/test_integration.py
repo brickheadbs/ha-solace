@@ -1420,3 +1420,44 @@ async def test_per_light_clamp_max_caps_output(hass: HomeAssistant, entry, world
     assert int(hass.states.get("sensor.kitchen_target_level").state) == 80
 
 
+
+
+async def test_switching_a_mode_uses_the_mode_switch_fade(
+    hass: HomeAssistant, entry, world, monkeypatch
+) -> None:
+    """⚠️ Regression, 2026-11-13 from the live house: switching Work mode on took the
+    office lights five minutes to arrive, because a fixed mode level coming from an
+    already-lit light fell through the ladder to `transition_automatic_s` (live: 300 s).
+    A mode switch is a button press with someone waiting, so it gets its own fade.
+    """
+    import custom_components.solace.coordinator as coord_mod
+
+    monkeypatch.setattr(coord_mod, "MODE_LIGHTS", frozenset({LIGHT}))
+    world(lux=10.0, occupied=True, light_on=True)
+    await async_setup_component(hass, "input_boolean", {"input_boolean": {"movie_mode": None}})
+    hass.states.async_set("input_boolean.movie_mode", "off")
+    hass.config_entries.async_update_entry(
+        entry, options={**entry.options, "transition_automatic_s": 300.0, "transition_mode_s": 3.0}
+    )
+    assert await _setup(hass, entry)
+    coordinator = entry.runtime_data.coordinator
+    await hass.async_block_till_done()
+
+    calls: list[dict] = []
+    hass.bus.async_listen(
+        "call_service",
+        lambda e: calls.append(e.data) if e.data.get("domain") == "light" else None,
+    )
+
+    # Movie's default profile follows Solace at -2 stops, so the level must drop.
+    hass.states.async_set("input_boolean.movie_mode", "on")
+    await hass.async_block_till_done()
+
+    turn_ons = [c for c in calls if c["service"] == "turn_on"]
+    assert turn_ons, "switching Movie mode on produced no write"
+    got = turn_ons[-1]["service_data"]["transition"]
+    assert got == coordinator.house.transition_mode_s, (
+        f"mode switch used {got}s; expected the mode-switch fade "
+        f"{coordinator.house.transition_mode_s}s, not Automatic "
+        f"{coordinator.house.transition_automatic_s}s"
+    )

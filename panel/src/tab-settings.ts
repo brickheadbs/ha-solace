@@ -662,6 +662,20 @@ export class SolTabSettings extends LitElement {
                 />
               </div>
               <div class="trans-row">
+                <div class="trans-lbl">Mode Switch</div>
+                <div class="trans-dots"></div>
+                <div class="trans-path">Work / Gaming / Movie</div>
+                <input
+                  type="number"
+                  step="0.5"
+                  class="num-input"
+                  style="width: 62px;"
+                  .value=${String(house.transition_mode_s ?? 3.0)}
+                  @change=${(e: Event) =>
+                    setHouse(this.hass, { transition_mode_s: parseFloat((e.target as HTMLInputElement).value) })}
+                />
+              </div>
+              <div class="trans-row">
                 <div class="trans-lbl">Special Mode</div>
                 <div class="trans-dots"></div>
                 <div class="trans-path">Sunrise / Sunset</div>

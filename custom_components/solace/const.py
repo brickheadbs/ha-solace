@@ -123,6 +123,7 @@ HOUSE_SETTINGS: tuple[Setting, ...] = (
     # CONTINUOUS & SPECIAL
     Setting("transition_automatic_s", "Automatic", 0, 1200, 0.5, 15, "s", "mdi:auto-fix"),
     Setting("transition_manual_s", "Manual", 0, 10, 0.05, 0.5, "s", "mdi:gesture-swipe"),
+    Setting("transition_mode_s", "Mode switch", 0, 60, 0.1, 3, "s", "mdi:swap-horizontal"),
     # Colour
     Setting("day_kelvin", "Day colour", 2000, 9000, 10, 4000, "K", "mdi:white-balance-sunny"),
     Setting("night_kelvin", "Night colour", 2000, 9000, 10, 2200, "K", "mdi:weather-night"),
