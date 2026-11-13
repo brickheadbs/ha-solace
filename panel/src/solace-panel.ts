@@ -13,6 +13,7 @@ import type { Hass, Snapshot } from "./api";
 import { subscribe } from "./api";
 import { kelvinToDerim } from "./derim";
 import "./tab-engine";
+import "./tab-heating";
 import "./tab-help";
 import "./tab-home";
 import "./tab-lighting";
@@ -23,7 +24,7 @@ import "./tab-winddown";
 import { tokens } from "./tokens";
 import "./ui";
 
-type Tab = "home" | "lighting" | "modes" | "wakeup" | "winddown" | "music" | "engine" | "help";
+type Tab = "home" | "lighting" | "modes" | "wakeup" | "winddown" | "music" | "heating" | "engine" | "help";
 
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: "home", label: "Home" },
@@ -32,6 +33,7 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: "wakeup", label: "Wake-up" },
   { id: "winddown", label: "Wind-down" },
   { id: "music", label: "Music" },
+  { id: "heating", label: "Heating" },
   { id: "engine", label: "Engine" },
   { id: "help", label: "Help" },
 ];
@@ -377,6 +379,8 @@ export class SolacePanel extends LitElement {
         return html`<sol-tab-winddown .hass=${this.hass} .snap=${this.snap}></sol-tab-winddown>`;
       case "music":
         return html`<sol-tab-music .hass=${this.hass} .snap=${this.snap}></sol-tab-music>`;
+      case "heating":
+        return html`<sol-tab-heating .hass=${this.hass}></sol-tab-heating>`;
       case "engine":
         return html`<sol-tab-engine .hass=${this.hass} .snap=${this.snap}></sol-tab-engine>`;
       case "help":
