@@ -348,6 +348,7 @@ class RoomSettings:
     night_off: bool = False
     manual_hold_minutes: float = 30.0
     manual_mode: bool = False
+    manual_follow_occupancy: bool = False
     sunrise_enabled: bool = False
     sunset_enabled: bool = False
     bedtime_dwell_enabled: bool = False

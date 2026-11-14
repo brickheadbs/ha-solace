@@ -388,6 +388,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
             night_off=bool(data.get("night_off", False)) or ("living" in subentry.title.lower() and self._living_guest_mode()),
             manual_hold_minutes=float(data.get("manual_hold_minutes", 30.0)),
             manual_mode=bool(data.get("manual_mode", False)),
+            manual_follow_occupancy=bool(data.get("manual_follow_occupancy", False)),
             sunrise_enabled=bool(data.get("sunrise_enabled", False)),
             sunset_enabled=bool(data.get("sunset_enabled", False)),
             bedtime_dwell_enabled=bool(data.get("bedtime_dwell_enabled", False)),
@@ -755,6 +756,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
             if not manual and room.manual_touched and not room.manual_switch:
                 room.manual_touched = False
                 room.manual_since = None
+                room.manual_level = None
 
             zone_for = {
                 light_id: zone
@@ -863,6 +865,15 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         if mode_profile is not None and mode_holding and abs(mode_profile.bias_stops) > 1e-9:
             solve_settings = replace(settings, bias_stops=settings.bias_stops + mode_profile.bias_stops)
 
+        effective_manual_level: int | None = None
+        if manual:
+            if room.manual_level is not None:
+                effective_manual_level = room.manual_level
+            else:
+                effective_manual_level = current
+                if current > 0:
+                    room.manual_level = current
+
         solution = solve(
             house,
             solve_settings,
@@ -881,7 +892,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                 ambience_open=room.ambience_open,
                 ambience_resolved=room.ambience_open,
                 diminish_active=near_clear and diminish_pct > 0,
-                manual_level=current if manual else None,
+                manual_level=effective_manual_level,
                 current_level=current,
                 last_written_level=room.last_written.get(entity_id),
                 last_source=room.last_source.get(entity_id),
@@ -929,8 +940,9 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         last_src = room.last_source.get(entity_id)
         room.last_source[entity_id] = solution.source
 
-        # Manual wins: compute and display, but never write.
-        if manual:
+        # Manual wins: compute and display, but never write — unless manual_follow_occupancy
+        # is active, in which case Solace writes the held manual_level on occupancy and 0 on clear.
+        if manual and not settings.manual_follow_occupancy:
             return
         has_active_or_pending_on = (
             current > 0
@@ -996,7 +1008,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
             is_acute = True
         elif solution.source == "ambience" and last_src in ("demand", "diminish"):
             transition = house.transition_down_ambience_s
-        elif solution.source == "demand" and last_src in ("diminish", "ambience"):
+        elif solution.source in ("demand", "manual") and last_src in ("diminish", "ambience", "off"):
             transition = house.transition_up_occupancy_s
             is_acute = True
         elif solution.mode is Mode.NIGHT and room.last_mode is not Mode.NIGHT:

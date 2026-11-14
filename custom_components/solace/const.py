@@ -268,6 +268,7 @@ ROOM_SETTINGS: tuple[Setting, ...] = (
         scope="room",
     ),
     Setting("manual_mode", "Manual mode toggle", 0, 1, 1, 0, None, "mdi:hand-back-right", scope="room"),
+    Setting("manual_follow_occupancy", "Manual follows occupancy", 0, 1, 1, 0, None, "mdi:motion-sensor", scope="room"),
     Setting("sunrise_enabled", "Virtual sunrise in room", 0, 1, 1, 0, None, "mdi:weather-sunset-up", scope="room"),
     Setting("sunset_enabled", "Virtual sunset in room", 0, 1, 1, 0, None, "mdi:weather-sunset-down", scope="room"),
     Setting("bedtime_dwell_enabled", "Bedtime wind-down in room", 0, 1, 1, 0, None, "mdi:bed-outline", scope="room"),

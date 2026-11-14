@@ -699,9 +699,15 @@ def solve(
 
     # 8. Manual Override
     if data.manual_level is not None:
-        level = max(0, min(MAX_LEVEL, data.manual_level))
-        source = "manual"
-        trace.append(("manual", level))
+        is_sleep_off = (room.night_off or "bedroom" in room.name.lower()) and data.asleep
+        if room.manual_follow_occupancy and (not data.occupied or mode is Mode.AWAY or is_sleep_off):
+            level = 0
+            source = "off"
+            trace.append(("manual_unoccupied", 0))
+        else:
+            level = max(0, min(MAX_LEVEL, data.manual_level))
+            source = "manual"
+            trace.append(("manual", level))
 
     # 9. Hardware Clamp
     level = apply_clamp(level, light)

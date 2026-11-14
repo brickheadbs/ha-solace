@@ -259,6 +259,7 @@ def _snapshot(hass: HomeAssistant, coordinator: SolaceCoordinator) -> dict[str, 
                     "active": manual_active,
                     "switch": bool(state.manual_switch) if state else False,
                     "touched": bool(state.manual_touched) if state else False,
+                    "level": state.manual_level if state else None,
                     "remaining_s": remaining,
                     "hold_minutes": hold,
                 },
@@ -798,12 +799,38 @@ async def ws_set_room(hass: HomeAssistant, connection, msg: dict[str, Any]) -> N
     if unknown:
         connection.send_error(msg["id"], "unknown_key", f"unknown settings: {sorted(unknown)}")
         return
+    coordinator = entry.runtime_data.coordinator
+    room = coordinator.rooms.get(msg["subentry_id"])
+    persist = False
+    if room is not None and "manual_follow_occupancy" in msg["values"]:
+        follow_val = bool(msg["values"]["manual_follow_occupancy"])
+        now_ts = dt_util.utcnow().timestamp()
+        settings = coordinator.room_settings(subentry)
+        if follow_val and room.manual_touched and not room.manual_switch:
+            room.manual_switch = True
+            persist = True
+        elif (
+            not follow_val
+            and room.is_manual(settings.manual_hold_minutes, now_ts)
+            and room.manual_level is not None
+            and room.manual_level > 0
+        ):
+            house = coordinator.house
+            for entity_id in subentry.data.get(CONF_LIGHTS, []):
+                await coordinator.writer.async_set_brightness(
+                    entity_id, int(room.manual_level), house.transition_manual_s
+                )
+                room.last_written[entity_id] = int(room.manual_level)
+            persist = True
+
     hass.config_entries.async_update_subentry(
         entry, subentry, data={**subentry.data, **msg["values"]}
     )
-    entry.runtime_data.coordinator.async_resubscribe()
-    entry.runtime_data.coordinator.async_note_tuning()
-    await entry.runtime_data.coordinator.async_request_refresh()
+    if persist:
+        await coordinator.async_persist()
+    coordinator.async_resubscribe()
+    coordinator.async_note_tuning()
+    await coordinator.async_request_refresh()
     connection.send_result(msg["id"])
 
 
@@ -875,26 +902,39 @@ async def ws_room_action(hass: HomeAssistant, connection, msg: dict[str, Any]) -
     action = msg["action"]
     if action == "manual":
         room.manual_switch = True
+        if room.manual_level is None:
+            max_cur = 0
+            for entity_id in subentry.data.get(CONF_LIGHTS, []):
+                st = hass.states.get(entity_id)
+                if st is not None and st.state == "on":
+                    max_cur = max(max_cur, int(st.attributes.get("brightness") or 0))
+            room.manual_level = max_cur
     elif action == "auto":
         # "Resume now" clears the touch timer as well as the switch — otherwise a stale
         # touch keeps holding the room and the button looks like it did nothing.
         room.manual_switch = False
         room.manual_touched = False
         room.manual_since = None
+        room.manual_level = None
     else:
         level = msg.get("level", 0)
+        room.manual_level = int(level)
         room.manual_touched = True
         room.manual_since = dt_util.utcnow().timestamp()
-        house = coordinator.house
-        for entity_id in subentry.data.get(CONF_LIGHTS, []):
-            if level <= 0:
-                await coordinator.writer.async_turn_off(entity_id, house.transition_down_off_s)
-            else:
-                # The setting-change transition — this fires while the slider is being
-                # dragged, so a long glide here is unusable.
-                await coordinator.writer.async_set_brightness(
-                    entity_id, int(level), house.transition_manual_s
-                )
+        settings = coordinator.room_settings(subentry)
+        if not settings.manual_follow_occupancy or room.occupied:
+            house = coordinator.house
+            for entity_id in subentry.data.get(CONF_LIGHTS, []):
+                if level <= 0:
+                    await coordinator.writer.async_turn_off(entity_id, house.transition_down_off_s)
+                    room.last_written[entity_id] = 0
+                else:
+                    # The setting-change transition — this fires while the slider is being
+                    # dragged, so a long glide here is unusable.
+                    await coordinator.writer.async_set_brightness(
+                        entity_id, int(level), house.transition_manual_s
+                    )
+                    room.last_written[entity_id] = int(level)
 
     await coordinator.async_persist()
     await coordinator.async_request_refresh()

@@ -241,6 +241,18 @@ export class SolTabLighting extends LitElement {
         color: var(--sol-text-4);
         margin-top: 6px;
       }
+      .manual-opts {
+        margin-top: 8px;
+      }
+      .manual-check {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        font-size: 12px;
+        color: var(--sol-text-2);
+        cursor: pointer;
+        accent-color: var(--sol-amber);
+      }
 
       .bias-row {
         display: flex;
@@ -672,6 +684,14 @@ export class SolTabLighting extends LitElement {
     const lit = (room.level ?? 0) > 0;
     const isOpen = this.open.has(room.subentry_id);
     const manual = room.manual.active;
+    const manualFollowOcc = Boolean(
+      this.local(
+        this.key(room.subentry_id, "manual_follow_occupancy"),
+        Number(room.settings.manual_follow_occupancy ?? 0)
+      )
+    );
+    const manualLevel =
+      room.manual.level ?? Math.max(...room.lights.map((l) => l.current_level), 0);
 
     const biasKey = this.key(room.subentry_id, "bias_stops");
     const bias = this.local(biasKey, Number(room.settings.bias_stops ?? 0));
@@ -808,7 +828,7 @@ export class SolTabLighting extends LitElement {
                   <sol-slider
                     tone="amber"
                     noReset
-                    .value=${Math.max(...room.lights.map((l) => l.current_level), 0)}
+                    .value=${manualLevel}
                     .min=${0}
                     .max=${254}
                     .step=${1}
@@ -816,11 +836,32 @@ export class SolTabLighting extends LitElement {
                       roomAction(this.hass, room.subentry_id, "level", Math.round(e.detail.value))}
                   ></sol-slider>
                   <div class="readout tab-num">
-                    ${lightPct(Math.max(...room.lights.map((l) => l.current_level), 0), gamma)}%
-                    (${Math.max(...room.lights.map((l) => l.current_level), 0)} lvl)
+                    ${lightPct(manualLevel, gamma)}% (${manualLevel} lvl)
                   </div>
                 </div>
-                <div class="note">Held manually — Solace automatic writes are paused.</div>
+                <div class="manual-opts">
+                  <label class="manual-check">
+                    <input
+                      type="checkbox"
+                      .checked=${manualFollowOcc}
+                      @change=${(e: Event) =>
+                        this.pushRoom(
+                          room.subentry_id,
+                          "manual_follow_occupancy",
+                          (e.target as HTMLInputElement).checked ? 1 : 0,
+                          true
+                        )}
+                    />
+                    <span>Hold brightness, follow occupancy sensor</span>
+                  </label>
+                </div>
+                <div class="note">
+                  ${manualFollowOcc
+                    ? room.occupied
+                      ? `Occupied — holding ${manualLevel} lvl until room clears.`
+                      : `Unoccupied — lights off; will restore ${manualLevel} lvl on motion.`
+                    : "Held manually — Solace automatic writes are paused."}
+                </div>
               </div>`
             : html`<div class="status">
                 <div>

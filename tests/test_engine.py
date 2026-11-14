@@ -333,6 +333,43 @@ def test_manual_wins_over_everything_computed(house, room, light):
     assert result.level == 200
 
 
+def test_manual_follow_occupancy_holds_level_when_occupied_and_turns_off_when_unoccupied(
+    house, light
+):
+    """Closed-blinds manual hold: holds selected manual_level above lux cutoff when occupied,
+    turns off when unoccupied/asleep/away while preserving manual_level on the room."""
+    bedroom = RoomSettings(name="Bedroom", manual_follow_occupancy=True)
+    occ = solve(
+        house, bedroom, light, _input(lux=5000.0, occupied=True, manual_level=150)
+    )
+    assert occ.level == 150
+    assert occ.source == "manual"
+
+    clear = solve(
+        house, bedroom, light, _input(lux=5000.0, occupied=False, manual_level=150)
+    )
+    assert clear.level == 0
+    assert clear.source == "off"
+
+    asleep = solve(
+        house,
+        replace(bedroom, night_off=True),
+        light,
+        _input(lux=5000.0, occupied=True, asleep=True, manual_level=150),
+    )
+    assert asleep.level == 0
+    assert asleep.source == "off"
+
+    away = solve(
+        house,
+        bedroom,
+        light,
+        _input(lux=5000.0, occupied=True, away=True, manual_level=150),
+    )
+    assert away.level == 0
+    assert away.source == "off"
+
+
 # --------------------------------------------------------------------------------
 # Step 14 — the clamp
 # --------------------------------------------------------------------------------

@@ -159,6 +159,7 @@ export const TRACKED_ROOM_KEYS: readonly string[] = [
   "occupied_max",
   "manual_hold_minutes",
   "manual_mode",
+  "manual_follow_occupancy",
   "sunrise_enabled",
   "sunset_enabled",
   "bedtime_dwell_enabled",
@@ -228,7 +229,7 @@ export const PRIORITY_LADDER: readonly PriorityRule[] = [
     rank: 2,
     mode: "Manual Hold",
     trigger: "Room segmented switch = Manual or remote manual latch",
-    outputRule: "Solace stops all writes to that room; physical/UI slider level holds.",
+    outputRule: "Solace stops automatic writes and holds slider brightness; when manual_follow_occupancy is checked, holds selected manual_level while occupied and turns off (0) on clear/asleep/away.",
     releaseRule: "Click 'Resume now' or manual_hold_minutes timer expires.",
   },
   {
@@ -353,7 +354,7 @@ export const ROOM_EXCEPTIONS: readonly RoomExceptionSpec[] = [
       },
       {
         label: "0s Hold + 5m Entry Trigger",
-        detail: "Motion hold is 0s (vs 90s elsewhere). Exterior/entry arrival fires a 5-min stairway timer that cancels immediately once Living Office or Bedroom occupancy turns ON.",
+        detail: "Motion hold is 0s (vs 90s elsewhere). Exterior/entry arrival or U200 unlock fires a 5-min stairway timer that cancels 1 min after indoor occupancy triggers while entry is clear.",
       },
     ],
   },
@@ -450,8 +451,8 @@ export const HOUSE_AUTOMATIONS: readonly AutomationStrip[] = [
     group: "Lighting & Presence",
     name: "Stairway 5m Entry Trigger",
     entityId: "automation.solace_stairway_5m_trigger_cancel_on_indoor_occupancy",
-    trigger: "Entry door/motion arrival",
-    guard: "Cancelled immediately when Living Office or Bedroom occupancy -> ON",
+    trigger: "Entry door/motion arrival or U200 lock unlock",
+    guard: "Cancels 1m after indoor occupancy (Living / Kitchen / Bedroom) turns ON while Entry is clear",
     action: "Holds Stairway active up to 5m for coat/shoe drop, then 0s clear",
   },
   {

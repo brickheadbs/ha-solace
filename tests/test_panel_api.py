@@ -190,6 +190,33 @@ async def test_manual_and_resume_round_trip(
     assert (await _get(client))["rooms"][0]["manual"]["switch"] is True
 
     await client.send_json(
+        {
+            "id": _id(),
+            "type": "solace/room_action",
+            "subentry_id": subentry_id,
+            "action": "level",
+            "level": 150,
+        }
+    )
+    assert (await client.receive_json())["success"]
+    await hass.async_block_till_done()
+    assert (await _get(client))["rooms"][0]["manual"]["level"] == 150
+
+    await client.send_json(
+        {
+            "id": _id(),
+            "type": "solace/set_room",
+            "subentry_id": subentry_id,
+            "values": {"manual_follow_occupancy": 1},
+        }
+    )
+    assert (await client.receive_json())["success"]
+    await hass.async_block_till_done()
+    snap = await _get(client)
+    assert snap["rooms"][0]["settings"]["manual_follow_occupancy"] == 1
+    assert snap["rooms"][0]["manual"]["level"] == 150
+
+    await client.send_json(
         {"id": _id(), "type": "solace/room_action", "subentry_id": subentry_id, "action": "auto"}
     )
     assert (await client.receive_json())["success"]
@@ -197,7 +224,7 @@ async def test_manual_and_resume_round_trip(
     manual = (await _get(client))["rooms"][0]["manual"]
     # "Resume now" clears the touch timer too, or a stale touch keeps holding the room
     # and the button looks like it did nothing.
-    assert manual["switch"] is False and manual["touched"] is False
+    assert manual["switch"] is False and manual["touched"] is False and manual["level"] is None
 
 
 async def test_subscribe_pushes_a_snapshot(

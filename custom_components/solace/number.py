@@ -147,24 +147,34 @@ class SolaceManualLevel(SolaceRoomEntity, NumberEntity):
         from homeassistant.util import dt as dt_util
 
         self._value = value
+        subentry = self.coordinator.config_entry.subentries[self._subentry_id]
         room = self.room
         if room is not None:
+            room.manual_level = int(value)
             room.manual_touched = True
             room.manual_since = dt_util.utcnow().timestamp()
             await self.coordinator.async_persist()
 
-        subentry = self.coordinator.config_entry.subentries[self._subentry_id]
-        for entity_id in subentry.data.get("lights", []):
-            if value <= 0:
-                await self.coordinator.writer.async_turn_off(
-                    entity_id, self.coordinator.house.transition_down_off_s
-                )
-            else:
-                await self.coordinator.writer.async_set_brightness(
-                    entity_id,
-                    int(value),
-                    # The setting-change transition — this fires while the slider is
-                    # being dragged, so a long glide here is unusable.
-                    self.coordinator.house.transition_manual_s,
-                )
+        if (
+            room is None
+            or not self.coordinator.room_settings(subentry).manual_follow_occupancy
+            or room.occupied
+        ):
+            for entity_id in subentry.data.get("lights", []):
+                if value <= 0:
+                    await self.coordinator.writer.async_turn_off(
+                        entity_id, self.coordinator.house.transition_down_off_s
+                    )
+                    if room is not None:
+                        room.last_written[entity_id] = 0
+                else:
+                    await self.coordinator.writer.async_set_brightness(
+                        entity_id,
+                        int(value),
+                        # The setting-change transition — this fires while the slider is
+                        # being dragged, so a long glide here is unusable.
+                        self.coordinator.house.transition_manual_s,
+                    )
+                    if room is not None:
+                        room.last_written[entity_id] = int(value)
         self.async_write_ha_state()

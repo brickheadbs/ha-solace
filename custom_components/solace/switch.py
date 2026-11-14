@@ -64,6 +64,7 @@ class SolaceManualSwitch(SolaceRoomEntity, SwitchEntity):
             room.manual_switch = False
             room.manual_touched = False
             room.manual_since = None
+            room.manual_level = None
             await self.coordinator.async_persist()
             self.async_write_ha_state()
             await self.coordinator.async_request_refresh()

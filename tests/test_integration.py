@@ -1461,3 +1461,65 @@ async def test_switching_a_mode_uses_the_mode_switch_fade(
         f"{coordinator.house.transition_mode_s}s, not Automatic "
         f"{coordinator.house.transition_automatic_s}s"
     )
+
+
+async def test_manual_follow_occupancy_turns_off_on_clear_and_restores_level_on_motion(
+    hass: HomeAssistant, entry, world, freezer
+) -> None:
+    """In Manual mode with manual_follow_occupancy enabled, clearing occupancy turns lights
+    off while retaining room.manual_level, and re-occupying turns them back on to that level."""
+    from .conftest import PRESENCE
+
+    subentry = next(iter(entry.subentries.values()))
+    hass.config_entries.async_update_subentry(
+        entry,
+        subentry,
+        data={**subentry.data, "manual_follow_occupancy": True},
+    )
+    world(lux=5000.0, occupied=True, light_on=True)
+    assert await _setup(hass, entry)
+    coordinator = entry.runtime_data.coordinator
+    room = coordinator.rooms[subentry.subentry_id]
+    room.manual_switch = True
+    room.manual_level = 150
+    room.last_written[LIGHT] = 150
+
+    calls: list[dict] = []
+    hass.bus.async_listen(
+        "call_service",
+        lambda e: calls.append(e.data) if e.data.get("domain") == "light" else None,
+    )
+
+    # Clear occupancy and advance past the 90s room presence hold.
+    hass.states.async_set(PRESENCE, "off")
+    await hass.async_block_till_done()
+    freezer.move_to("2026-08-13 14:02:00+00:00")
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    assert room.occupied is False
+    assert room.manual_level == 150
+    turn_offs = [c for c in calls if c["service"] == "turn_off"]
+    assert turn_offs, "clearing occupancy in manual_follow_occupancy did not turn light off"
+
+    # Simulate physical bulb off now, then re-occupy the room.
+    calls.clear()
+    hass.states.async_set(
+        LIGHT,
+        "off",
+        {
+            "brightness": None,
+            "color_temp_kelvin": None,
+            "min_color_temp_kelvin": 2702,
+            "max_color_temp_kelvin": 6535,
+            "supported_color_modes": ["color_temp"],
+        },
+    )
+    hass.states.async_set(PRESENCE, "on")
+    await hass.async_block_till_done()
+
+    assert room.occupied is True
+    assert room.manual_level == 150
+    turn_ons = [c for c in calls if c["service"] == "turn_on"]
+    assert turn_ons, "re-occupying in manual_follow_occupancy did not restore light"
+    assert turn_ons[-1]["service_data"]["brightness"] == 150

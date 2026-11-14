@@ -75,6 +75,7 @@ export interface RoomRow {
     active: boolean;
     switch: boolean;
     touched: boolean;
+    level?: number | null;
     remaining_s: number | null;
     hold_minutes: number;
   };

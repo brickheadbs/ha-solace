@@ -29,6 +29,7 @@ BOOLEANS = {
     "sunrise_enabled",
     "sunset_enabled",
     "manual_mode",
+    "manual_follow_occupancy",
 }
 """Rendered as switches. Two states is the whole point, not coarseness."""
 
