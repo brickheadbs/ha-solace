@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from custom_components.solace.const import HOUSE_DEFAULTS
+from custom_components.solace.engine import past_dead_zone
 from custom_components.solace.models import HouseSettings
 from custom_components.solace.modes import (
     COUNTER,
@@ -95,3 +96,10 @@ def test_sunny_override_does_not_flap_on_passing_cloud():
     assert not sunny_override_state(3800, 4500, 15, latched)
     assert not sunny_override_state(4457, 4500, 15, False)
     assert not sunny_override_state(9000, 0, 15, False)
+
+
+def test_work_mode_past_dead_zone_writes_small_adjustments():
+    """Small fixed-level tweaks (< dead_zone) in Special Modes must write immediately."""
+    assert past_dead_zone(12, 10, dead_zone=8, source="work", last_source="work")
+    assert past_dead_zone(3, 5, dead_zone=8, source="work", last_source="work")
+    assert not past_dead_zone(10, 10, dead_zone=8, source="work", last_source="work")

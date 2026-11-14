@@ -512,7 +512,7 @@ var Aa=Object.defineProperty;var La=Object.getOwnPropertyDescriptor;var h=(l,i,e
         padding: 9px 0;
       }
       .label {
-        flex: 0 0 176px;
+        flex: 0 0 var(--sol-row-label, 176px);
         display: flex;
         align-items: center;
         gap: 6px;
@@ -527,7 +527,7 @@ var Aa=Object.defineProperty;var La=Object.getOwnPropertyDescriptor;var h=(l,i,e
         gap: 10px;
       }
       .value {
-        flex: 0 0 88px;
+        flex: 0 0 var(--sol-row-value, 88px);
         text-align: right;
         font-size: 12.5px;
         font-variant-numeric: tabular-nums;
@@ -4941,46 +4941,48 @@ var Aa=Object.defineProperty;var La=Object.getOwnPropertyDescriptor;var h=(l,i,e
       .pill.off {
         color: var(--sol-faint);
       }
-    `],h([y({attribute:!1})],ue.prototype,"hass",2),h([y({attribute:!1})],ue.prototype,"snap",2),h([y({type:Boolean})],ue.prototype,"reorderMode",2),h([k()],ue.prototype,"open",2),h([k()],ue.prototype,"draft",2),h([k()],ue.prototype,"dragId",2),h([k()],ue.prototype,"overId",2),ue=h([R("sol-tab-lighting")],ue);var xi=[{id:"work",label:"Work",icon:"mdi:palette-swatch-variant",blurb:"Turns on by itself when Photoshop, Lightroom Classic or DaVinci Resolve opens. Pauses while the Mac displays sleep.",resetLabel:"Reset to calibrated D65"},{id:"gaming",label:"Gaming",icon:"mdi:controller",blurb:"Turns on by itself when Steam or CrossOver opens.",resetLabel:"Reset to defaults"},{id:"movie",label:"Movie",icon:"mdi:movie-open-outline",blurb:"Turns on by itself when the Jellyfin app opens.",resetLabel:"Reset to defaults"}],bi=[{label:"Desk bias",suffix:"desk_level",help:"Left desk light. The right desk light runs 0.30 EV lower to compensate for the corner reflection."},{label:"Counter fill",suffix:"backlight_level",help:"Counter light."},{label:"Wardrobe fill",suffix:"corner_level",help:"Wardrobe light."},{label:"Glass lamp",suffix:"glass_level",help:"Glass lamp. 0 keeps it off."}],Ma=-1,Me=class extends L{constructor(){super(...arguments);this.draft={};this.confirmReset=null}schema(e){return this.snap.house_schema.find(t=>t.key===e)}value(e){return this.draft[e]??this.snap.house[e]??this.schema(e)?.default??0}async push(e,t,s=!0){this.draft={...this.draft,[e]:t},await A(this.hass,{[e]:t}),s&&window.setTimeout(()=>{let a={...this.draft};delete a[e],this.draft=a},700)}async reset(e){if(this.confirmReset!==e){this.confirmReset=e,window.setTimeout(()=>{this.confirmReset===e&&(this.confirmReset=null)},4e3);return}this.confirmReset=null;let t={};for(let s of this.snap.house_schema)s.key.startsWith(`${e}_mode_`)&&(t[s.key]=s.default);this.draft={},await A(this.hass,t)}lightRow(e,t,s,a){let n=`${e}_mode_${t}`,o=this.schema(n);if(!o)return v;let r=this.value(n),d=r<=Ma;return u`<sol-row .label=${s} .help=${a}>
-      <label class="follow">
+    `],h([y({attribute:!1})],ue.prototype,"hass",2),h([y({attribute:!1})],ue.prototype,"snap",2),h([y({type:Boolean})],ue.prototype,"reorderMode",2),h([k()],ue.prototype,"open",2),h([k()],ue.prototype,"draft",2),h([k()],ue.prototype,"dragId",2),h([k()],ue.prototype,"overId",2),ue=h([R("sol-tab-lighting")],ue);var xi=[{id:"work",label:"Work",icon:"mdi:palette-swatch-variant",blurb:"Turns on by itself when Photoshop, Lightroom Classic or DaVinci Resolve opens. Pauses while the Mac displays sleep.",resetLabel:"Reset to calibrated D65"},{id:"gaming",label:"Gaming",icon:"mdi:controller",blurb:"Turns on by itself when Steam or CrossOver opens.",resetLabel:"Reset to defaults"},{id:"movie",label:"Movie",icon:"mdi:movie-open-outline",blurb:"Turns on by itself when the Jellyfin app opens.",resetLabel:"Reset to defaults"}],bi=[{label:"Desk bias",suffix:"desk_level",help:"Left desk light. The right desk light runs 0.30 EV lower to compensate for the corner reflection."},{label:"Counter fill",suffix:"backlight_level",help:"Counter light."},{label:"Wardrobe fill",suffix:"corner_level",help:"Wardrobe light."},{label:"Glass lamp",suffix:"glass_level",help:"Glass lamp. 0 keeps it off."}],Ma=-1,Me=class extends L{constructor(){super(...arguments);this.draft={};this.confirmReset=null;this._debounceTimers=new Map}schema(e){return this.snap.house_schema.find(t=>t.key===e)}value(e){return this.draft[e]??this.snap.house[e]??this.schema(e)?.default??0}async push(e,t,s=!0){this.draft={...this.draft,[e]:t};let a=this._debounceTimers.get(e);if(a&&clearTimeout(a),s)this._debounceTimers.delete(e),await A(this.hass,{[e]:t}),window.setTimeout(()=>{let n={...this.draft};delete n[e],this.draft=n},700);else{let n=window.setTimeout(async()=>{this._debounceTimers.delete(e),await A(this.hass,{[e]:t})},250);this._debounceTimers.set(e,n)}}async reset(e){if(this.confirmReset!==e){this.confirmReset=e,window.setTimeout(()=>{this.confirmReset===e&&(this.confirmReset=null)},4e3);return}this.confirmReset=null;for(let[s,a]of this._debounceTimers)s.startsWith(`${e}_mode_`)&&(clearTimeout(a),this._debounceTimers.delete(s));let t={};for(let s of this.snap.house_schema)s.key.startsWith(`${e}_mode_`)&&(t[s.key]=s.default);this.draft={},await A(this.hass,t)}lightRow(e,t,s,a){let n=`${e}_mode_${t}`,o=this.schema(n);if(!o)return v;let r=this.value(n),d=r<=Ma,p=o.default>=0?o.default:25;return u`<sol-row .label=${s} .help=${a}>
+      <label class="follow" title="Follow Solace automatic brightness (with mode bias)">
         <input
           type="checkbox"
           .checked=${d}
-          @change=${p=>this.push(n,p.target.checked?Ma:Math.max(0,o.default))}
+          @change=${c=>this.push(n,c.target.checked?Ma:p)}
         />
-        Follow Solace
+        Follow
       </label>
-      ${d?u`<span class="spacer"></span><span class="val">auto</span>`:u`<sol-slider
+      ${d?u`<span class="spacer"></span><span slot="value" class="val">auto</span>`:u`<sol-slider
               tone="amber"
               .value=${r}
               .min=${0}
               .max=${254}
               .step=${1}
-              .neutral=${Math.max(0,o.default)}
-              @value-changed=${p=>this.push(n,p.detail.value,p.detail.final)}
+              .neutral=${p}
+              .noReset=${o.default<0}
+              @value-changed=${c=>this.push(n,c.detail.value,c.detail.final)}
             ></sol-slider>
-            <span class="val">${Math.round(r)}</span>`}
-    </sol-row>`}kelvinRow(e){let t=`${e}_mode_kelvin`,s=this.schema(t);if(!s)return v;let a=this.value(t),n=a<=0;return u`<sol-row
+            <span slot="value" class="val">${Math.round(r)}</span>`}
+    </sol-row>`}kelvinRow(e){let t=`${e}_mode_kelvin`,s=this.schema(t);if(!s)return v;let a=this.value(t),n=a<=0,o=s.default>0?s.default:e==="movie"?2700:4e3;return u`<sol-row
       label="Colour temperature"
-      help="Applies to lights set to a fixed level. Follow house uses the normal Solace colour curve."
+      help="Applies to lights set to a fixed level. Follow uses the normal Solace colour curve."
     >
-      <label class="follow">
+      <label class="follow" title="Use the normal Solace colour curve">
         <input
           type="checkbox"
           .checked=${n}
-          @change=${o=>this.push(t,o.target.checked?0:s.default>0?s.default:4e3)}
+          @change=${r=>this.push(t,r.target.checked?0:o)}
         />
-        Follow house
+        Follow
       </label>
-      ${n?u`<span class="spacer"></span><span class="val">auto</span>`:u`<sol-slider
+      ${n?u`<span class="spacer"></span><span slot="value" class="val">auto</span>`:u`<sol-slider
               .value=${a}
               .min=${2e3}
               .max=${6535}
               .step=${10}
-              .neutral=${s.default>0?s.default:4e3}
-              @value-changed=${o=>this.push(t,o.detail.value,o.detail.final)}
+              .neutral=${o}
+              .noReset=${s.default<=0}
+              @value-changed=${r=>this.push(t,r.detail.value,r.detail.final)}
             ></sol-slider>
-            <span class="val">${Math.round(a)} K</span>`}
+            <span slot="value" class="val">${Math.round(a)} K</span>`}
     </sol-row>`}sliderRow(e,t,s,a){let n=this.schema(e);if(!n)return v;let o=this.value(e);return u`<sol-row .label=${t} .help=${s}>
       <sol-slider
         .value=${o}
@@ -4990,7 +4992,7 @@ var Aa=Object.defineProperty;var La=Object.getOwnPropertyDescriptor;var h=(l,i,e
         .neutral=${n.default}
         @value-changed=${r=>this.push(e,r.detail.value,r.detail.final)}
       ></sol-slider>
-      <span class="val">${a==="stops"?o.toFixed(2):Math.round(o*10)/10} ${a}</span>
+      <span slot="value" class="val">${a==="stops"?o.toFixed(2):Math.round(o*10)/10} ${a}</span>
     </sol-row>`}modeCard(e){let t=this.snap.world,s=!!t.special_modes?.[e.id],a=t.special_mode===e.id,n=a&&!!t.mode_paused,o=s?n?u`<span class="badge paused">Paused: displays asleep</span>`:a?u`<span class="badge on">Active</span>`:u`<span class="badge">Overridden</span>`:u`<span class="badge">Off</span>`;return u`<div class="card ${a?"live":""}">
       <div class="head">
         <ha-icon .icon=${e.icon}></ha-icon>
@@ -5033,16 +5035,22 @@ var Aa=Object.defineProperty;var La=Object.getOwnPropertyDescriptor;var h=(l,i,e
       }
       .grid {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+        grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
         gap: 14px;
         align-items: start;
       }
       .card {
+        --sol-row-label: 116px;
+        --sol-row-value: 58px;
         background: var(--sol-card);
         border-radius: var(--sol-r-card);
         padding: 15px 18px 16px;
         box-shadow: var(--sol-shadow);
         border: 1px solid transparent;
+      }
+      .card sol-slider {
+        flex: 1;
+        min-width: 96px;
       }
       .card.live {
         border-color: rgba(100, 181, 246, 0.45);
@@ -5133,11 +5141,11 @@ var Aa=Object.defineProperty;var La=Object.getOwnPropertyDescriptor;var h=(l,i,e
         margin: 0;
       }
       .val {
-        flex: 0 0 52px;
-        text-align: right;
+        font-size: 12px;
         font-variant-numeric: tabular-nums;
-        font-size: 12.5px;
-        color: var(--sol-text);
+        color: var(--sol-text-2);
+        text-align: right;
+        white-space: nowrap;
       }
       .signals {
         display: flex;

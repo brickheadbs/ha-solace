@@ -179,7 +179,7 @@ def past_dead_zone(
         return new_level != last_written
     if last_source is not None and last_source != source:
         return new_level != last_written
-    if source in ("ambience", "night", "sunrise", "sunset", "away", "manual", "bedtime_dwell"):
+    if source in ("ambience", "night", "sunrise", "sunset", "away", "manual", "bedtime_dwell", "work"):
         return new_level != last_written
     return abs(new_level - last_written) >= max(dead_zone, 1)
 

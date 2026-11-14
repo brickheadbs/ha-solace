@@ -1053,8 +1053,11 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                 ).kelvin
         elif (
             solution.source == "work"
-            and room.last_source.get(entity_id) != "work"
             and self._mode_kelvin.get(entity_id)
+            and (
+                last_src != "work"
+                or room.last_written_kelvin.get(entity_id) != self._mode_kelvin[entity_id]
+            )
         ):
             wake_kelvin = self._mode_kelvin[entity_id]
 
@@ -1062,6 +1065,8 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
             entity_id, solution.level, transition, wake_kelvin=wake_kelvin, is_acute=is_acute
         )
         room.last_written[entity_id] = solution.level
+        if wake_kelvin is not None:
+            room.last_written_kelvin[entity_id] = wake_kelvin
 
     # ------------------------------------------------------------------ colour clock
 

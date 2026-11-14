@@ -453,7 +453,7 @@ export class SolRow extends LitElement {
         padding: 9px 0;
       }
       .label {
-        flex: 0 0 176px;
+        flex: 0 0 var(--sol-row-label, 176px);
         display: flex;
         align-items: center;
         gap: 6px;
@@ -468,7 +468,7 @@ export class SolRow extends LitElement {
         gap: 10px;
       }
       .value {
-        flex: 0 0 88px;
+        flex: 0 0 var(--sol-row-value, 88px);
         text-align: right;
         font-size: 12.5px;
         font-variant-numeric: tabular-nums;

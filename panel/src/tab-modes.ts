@@ -71,6 +71,7 @@ export class SolTabModes extends LitElement {
 
   @state() private draft: Record<string, number> = {};
   @state() private confirmReset: ModeId | null = null;
+  private _debounceTimers = new Map<string, number>();
 
   static styles = [
     tokens,
@@ -81,16 +82,22 @@ export class SolTabModes extends LitElement {
       }
       .grid {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+        grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
         gap: 14px;
         align-items: start;
       }
       .card {
+        --sol-row-label: 116px;
+        --sol-row-value: 58px;
         background: var(--sol-card);
         border-radius: var(--sol-r-card);
         padding: 15px 18px 16px;
         box-shadow: var(--sol-shadow);
         border: 1px solid transparent;
+      }
+      .card sol-slider {
+        flex: 1;
+        min-width: 96px;
       }
       .card.live {
         border-color: rgba(100, 181, 246, 0.45);
@@ -181,11 +188,11 @@ export class SolTabModes extends LitElement {
         margin: 0;
       }
       .val {
-        flex: 0 0 52px;
-        text-align: right;
+        font-size: 12px;
         font-variant-numeric: tabular-nums;
-        font-size: 12.5px;
-        color: var(--sol-text);
+        color: var(--sol-text-2);
+        text-align: right;
+        white-space: nowrap;
       }
       .signals {
         display: flex;
@@ -215,13 +222,23 @@ export class SolTabModes extends LitElement {
 
   private async push(key: string, value: number, final = true) {
     this.draft = { ...this.draft, [key]: value };
-    await setHouse(this.hass, { [key]: value });
+    const existing = this._debounceTimers.get(key);
+    if (existing) clearTimeout(existing);
+
     if (final) {
+      this._debounceTimers.delete(key);
+      await setHouse(this.hass, { [key]: value });
       window.setTimeout(() => {
         const next = { ...this.draft };
         delete next[key];
         this.draft = next;
       }, 700);
+    } else {
+      const timer = window.setTimeout(async () => {
+        this._debounceTimers.delete(key);
+        await setHouse(this.hass, { [key]: value });
+      }, 250);
+      this._debounceTimers.set(key, timer);
     }
   }
 
@@ -234,6 +251,12 @@ export class SolTabModes extends LitElement {
       return;
     }
     this.confirmReset = null;
+    for (const [k, timer] of this._debounceTimers) {
+      if (k.startsWith(`${mode}_mode_`)) {
+        clearTimeout(timer);
+        this._debounceTimers.delete(k);
+      }
+    }
     const values: Record<string, number> = {};
     for (const s of this.snap.house_schema) {
       if (s.key.startsWith(`${mode}_mode_`)) values[s.key] = s.default;
@@ -248,28 +271,30 @@ export class SolTabModes extends LitElement {
     if (!s) return nothing;
     const v = this.value(key);
     const following = v <= FOLLOW;
+    const manualDefault = s.default >= 0 ? s.default : 25;
     return html`<sol-row .label=${label} .help=${help}>
-      <label class="follow">
+      <label class="follow" title="Follow Solace automatic brightness (with mode bias)">
         <input
           type="checkbox"
           .checked=${following}
           @change=${(e: Event) =>
-            this.push(key, (e.target as HTMLInputElement).checked ? FOLLOW : Math.max(0, s.default))}
+            this.push(key, (e.target as HTMLInputElement).checked ? FOLLOW : manualDefault)}
         />
-        Follow Solace
+        Follow
       </label>
       ${following
-        ? html`<span class="spacer"></span><span class="val">auto</span>`
+        ? html`<span class="spacer"></span><span slot="value" class="val">auto</span>`
         : html`<sol-slider
               tone="amber"
               .value=${v}
               .min=${0}
               .max=${254}
               .step=${1}
-              .neutral=${Math.max(0, s.default)}
+              .neutral=${manualDefault}
+              .noReset=${s.default < 0}
               @value-changed=${(e: CustomEvent) => this.push(key, e.detail.value, e.detail.final)}
             ></sol-slider>
-            <span class="val">${Math.round(v)}</span>`}
+            <span slot="value" class="val">${Math.round(v)}</span>`}
     </sol-row>`;
   }
 
@@ -279,30 +304,32 @@ export class SolTabModes extends LitElement {
     if (!s) return nothing;
     const v = this.value(key);
     const following = v <= 0;
+    const manualDefault = s.default > 0 ? s.default : mode === "movie" ? 2700 : 4000;
     return html`<sol-row
       label="Colour temperature"
-      help="Applies to lights set to a fixed level. Follow house uses the normal Solace colour curve."
+      help="Applies to lights set to a fixed level. Follow uses the normal Solace colour curve."
     >
-      <label class="follow">
+      <label class="follow" title="Use the normal Solace colour curve">
         <input
           type="checkbox"
           .checked=${following}
           @change=${(e: Event) =>
-            this.push(key, (e.target as HTMLInputElement).checked ? 0 : s.default > 0 ? s.default : 4000)}
+            this.push(key, (e.target as HTMLInputElement).checked ? 0 : manualDefault)}
         />
-        Follow house
+        Follow
       </label>
       ${following
-        ? html`<span class="spacer"></span><span class="val">auto</span>`
+        ? html`<span class="spacer"></span><span slot="value" class="val">auto</span>`
         : html`<sol-slider
               .value=${v}
               .min=${2000}
               .max=${6535}
               .step=${10}
-              .neutral=${s.default > 0 ? s.default : 4000}
+              .neutral=${manualDefault}
+              .noReset=${s.default <= 0}
               @value-changed=${(e: CustomEvent) => this.push(key, e.detail.value, e.detail.final)}
             ></sol-slider>
-            <span class="val">${Math.round(v)} K</span>`}
+            <span slot="value" class="val">${Math.round(v)} K</span>`}
     </sol-row>`;
   }
 
@@ -319,7 +346,7 @@ export class SolTabModes extends LitElement {
         .neutral=${s.default}
         @value-changed=${(e: CustomEvent) => this.push(key, e.detail.value, e.detail.final)}
       ></sol-slider>
-      <span class="val">${unit === "stops" ? v.toFixed(2) : Math.round(v * 10) / 10} ${unit}</span>
+      <span slot="value" class="val">${unit === "stops" ? v.toFixed(2) : Math.round(v * 10) / 10} ${unit}</span>
     </sol-row>`;
   }
 
