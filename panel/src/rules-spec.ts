@@ -354,7 +354,7 @@ export const ROOM_EXCEPTIONS: readonly RoomExceptionSpec[] = [
       },
       {
         label: "0s Hold + 5m Entry Trigger",
-        detail: "Motion hold is 0s (vs 90s elsewhere). Exterior/entry arrival or U200 unlock fires a 5-min stairway timer that cancels 1 min after indoor occupancy triggers while entry is clear.",
+        detail: "No post-clear hold in Solace (sensor timeouts are set in Zigbee2MQTT). Exterior/entry arrival or U200 unlock fires a 5-min stairway timer that cancels 1 min after indoor occupancy triggers while entry is clear.",
       },
     ],
   },
