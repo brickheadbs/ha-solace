@@ -235,9 +235,9 @@ export const PRIORITY_LADDER: readonly PriorityRule[] = [
   {
     rank: 3,
     mode: "Special Modes: Movie > Gaming > Work (Bedroom Office)",
-    trigger: "input_boolean.movie_mode / gaming_mode / work_mode == ON (one at a time; switching one on switches the others off). Work auto-ON when Photoshop, Lightroom Classic or DaVinci Resolve launches (packages/special_modes.yaml, overriding Movie Mode); Gaming auto-ON with Steam/CrossOver; Movie auto-ON with the Jellyfin app unless Work Mode is active.",
+    trigger: "input_boolean.movie_mode / gaming_mode / work_mode == ON (one at a time; switching one on switches the others off). Work is toggled manually (UI or Desk Styrbar up-tap); Gaming auto-ON with Steam/CrossOver; Movie auto-ON with the Jellyfin app unless Work Mode is active.",
     outputRule: "Per-mode profile on the 5 office lights: each light is a fixed level (Work default = D65 calibration: desk 86 / right desk 78 corner-compensated / counter 135 / wardrobe 105 / glass 0 @ 6500K) or -1 = follow Solace demand with the mode's bias stops (Movie default: desk 0, rest follow at -2 stops). Kelvin 0 = follow house colour curve.",
-    releaseRule: "Profile holds while Bedroom occupied + per-mode debounce. Pauses while Mac displays asleep (binary_sensor.mac_displays_asleep), resumes on wake. Debounce skipped when Bedroom empty and another room occupied (unless Living Guest Mode ON). Sleep/Night/morning release auto-clears all three. Work auto-OFF after work_mode_app_close_delay_minutes (default 0) once all creative apps close.",
+    releaseRule: "Profile holds while Bedroom occupied + per-mode debounce. Pauses while Mac displays asleep (binary_sensor.mac_displays_asleep), resumes on wake. Debounce skipped when Bedroom empty and another room occupied (unless Living Guest Mode ON). Sleep/Night/morning release auto-clears all three.",
   },
   {
     rank: 4,
