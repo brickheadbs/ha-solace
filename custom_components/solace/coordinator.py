@@ -26,6 +26,7 @@ from homeassistant.const import STATE_ON
 from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
 from homeassistant.helpers.debounce import Debouncer
 from homeassistant.helpers.event import (
+    async_call_later,
     async_track_state_change_event,
     async_track_time_interval,
 )
@@ -275,6 +276,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         #: Sleep switched back ON during the wake-up: do not auto-clear it until the fade ends.
         self._sleep_reasserted = False
         self._unsubscribes: list[Any] = []
+        self._presence_hold_unsub: Any = None
         self._last_presence: dict[str, float] = {}
         self.last_tick: Any = None
         self._tuning = False
@@ -573,6 +575,9 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
     def async_shutdown_listeners(self) -> None:
         self.remotes.async_unregister()
         self.music.async_shutdown()
+        if self._presence_hold_unsub is not None:
+            self._presence_hold_unsub()
+            self._presence_hold_unsub = None
         while self._unsubscribes:
             self._unsubscribes.pop()()
 
@@ -622,6 +627,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         # Update room presence states first so dwell-based special modes have fresh data.
         now_ts = now.timestamp()
         away = self._away()
+        earliest_hold_expiry: float | None = None
         for subentry in self._subentries():
             room = self.rooms.setdefault(
                 subentry.subentry_id,
@@ -635,7 +641,16 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
             else:
                 last_occ = self._last_presence.get(subentry.subentry_id, 0.0)
                 hold_s = 0.0 if (is_hallway or asleep or self._night_active() or away) else 90.0
-                is_occupied = (now_ts - last_occ) < hold_s if last_occ > 0 else False
+                elapsed = now_ts - last_occ
+                is_occupied = elapsed < hold_s if last_occ > 0 else False
+                if is_occupied:
+                    remaining = hold_s - elapsed
+                    if remaining > 0:
+                        earliest_hold_expiry = (
+                            remaining
+                            if earliest_hold_expiry is None
+                            else min(earliest_hold_expiry, remaining)
+                        )
 
             if is_occupied:
                 if not room.occupied:
@@ -650,6 +665,20 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                 room.occupied_since = None
                 room.fresh_occupancy = False
             room.occupied = is_occupied
+
+        if self._presence_hold_unsub is not None:
+            self._presence_hold_unsub()
+            self._presence_hold_unsub = None
+        if earliest_hold_expiry is not None:
+
+            @callback
+            def _on_presence_hold_expired(_now: Any) -> None:
+                self._presence_hold_unsub = None
+                self.hass.async_create_task(self.async_request_refresh())
+
+            self._presence_hold_unsub = async_call_later(
+                self.hass, earliest_hold_expiry + 0.5, _on_presence_hold_expired
+            )
 
         sunrise_progress = self._sunrise_progress(house)
         if (
