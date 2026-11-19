@@ -346,7 +346,7 @@ export class SolTabSettings extends LitElement {
             <div class="bed-card">
               <div class="bed-head">
                 <ha-icon icon="mdi:account-star" style="color: var(--sol-cyan);"></ha-icon>
-                <div class="bed-title">Guest mode (Living Office)</div>
+                <div class="bed-title">Guest mode (Living Room)</div>
                 <div class="spacer"></div>
                 <div class="badge ${guestActive ? "badge-blue" : "badge-dim"}">
                   ${guestActive ? "Guest Staying" : "Standby"}
@@ -356,7 +356,7 @@ export class SolTabSettings extends LitElement {
               <div class="triggers-bar">
                 <div class="trigger-item ${guestActive ? "active" : ""}">
                   <ha-icon icon="mdi:remote"></ha-icon>
-                  <span>Styrbar: <strong>Office Control</strong></span>
+                  <span>Styrbar: <strong>Desk Control</strong></span>
                 </div>
                 <button
                   class="manual-sleep-btn ${guestActive ? "active-work" : ""}"
@@ -368,7 +368,7 @@ export class SolTabSettings extends LitElement {
               </div>
 
               <div style="font-size: 12px; color: var(--sol-text-3); line-height: 1.55; margin-top: 4px;">
-                Suppresses overnight motion turn-on in Living Office while Sleep Mode is active so a
+                Suppresses overnight motion turn-on in Living Room while Sleep Mode is active so a
                 sleeping guest is never woken by rolling over. Guest controls room lights directly via
                 the Styrbar remote.
               </div>

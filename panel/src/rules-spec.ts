@@ -250,7 +250,7 @@ export const PRIORITY_LADDER: readonly PriorityRule[] = [
     rank: 5,
     mode: "Asleep / Guest Sleep",
     trigger: "Phone DND = priority_only OR Pixel Watch = bedtime OR input_boolean.solace_sleep == ON",
-    outputRule: "Rooms with night_off (Bedroom, and Living Office when Guest Mode ON) force 0; house latches Night Mode.",
+    outputRule: "Rooms with night_off (Bedroom, and Living Room when Guest Mode ON) force 0; house latches Night Mode.",
     releaseRule: "Outdoor lux >= night_release_lux after morning_release_hour, or upcoming alarm lead-in.",
   },
   {
@@ -377,16 +377,12 @@ export const ROOM_EXCEPTIONS: readonly RoomExceptionSpec[] = [
     ],
   },
   {
-    room: "Living Office",
-    subtitle: "Dual-role studio & guest room",
+    room: "Living Room",
+    subtitle: "Open-plan living & guest room",
     rules: [
       {
-        label: "Work Mode Override",
-        detail: "Locks desk lamp, monitor backlight, and corner bulb to dedicated task levels with a 5-min coffee-break debounce.",
-      },
-      {
         label: "Guest Mode",
-        detail: "input_boolean.living_guest_mode treats room as a bedroom overnight (suppresses motion turn-on while asleep; Styrbar remote controls room).",
+        detail: "input_boolean.living_guest_mode treats room as a bedroom overnight (suppresses motion turn-on while asleep).",
       },
     ],
   },

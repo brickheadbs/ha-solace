@@ -44,7 +44,7 @@ const BEDROOM_TEMP = "sensor.bedroom_temperature";
 const ENTRY_TEMP = "sensor.entrance_temperature";
 
 const ROOM_SENSORS: { name: string; id: string }[] = [
-  { name: "Office", id: OFFICE_TEMP },
+  { name: "Living Room", id: OFFICE_TEMP },
   { name: "Bedroom", id: BEDROOM_TEMP },
   { name: "Bathroom", id: BATH_TEMP },
   // Sensor moved from the stairway to the unheated ground-floor storage on 2026-11-05.
@@ -1357,9 +1357,17 @@ export class SolTabHome extends LitElement {
     const washerRemaining =
       this.hass.states["sensor.washing_machine_time_remaining"]?.state ?? "—";
     const washerPower = parseFloat(
-      this.hass.states["sensor.entry_washing_machine_plug_power"]?.state ??
-        this.hass.states["sensor.washing_machine_current_power"]?.state ??
-        "0"
+      this.hass.states["sensor.washing_machine_current_power"]?.state ?? "0"
+    );
+    const deskPower = parseFloat(
+      this.hass.states["sensor.desk_outlet_power"]?.state ?? ""
+    );
+    const blanketPower = parseFloat(
+      this.hass.states["sensor.electric_blanket_power"]?.state ?? ""
+    );
+    const blanketOn = this.hass.states["switch.electric_blanket"]?.state === "on";
+    const lightsPower = parseFloat(
+      this.hass.states["sensor.all_lighting_power"]?.state ?? ""
     );
 
     const chargerPower = parseFloat(
@@ -1377,14 +1385,36 @@ export class SolTabHome extends LitElement {
     if (!isWasherRunning && !isCharging) {
       return html`
         <div class="idle-strip">
-          <span class="idle-item">
-            <ha-icon icon="mdi:washing-machine"></ha-icon>
-            Washing machine <b>idle</b>
-          </span>
-          <span class="idle-sep"></span>
+          ${Number.isFinite(deskPower)
+            ? html`
+                <span class="idle-item">
+                  <ha-icon icon="mdi:desk"></ha-icon>
+                  Desk <b>${Math.round(deskPower)} W</b>
+                </span>
+                <span class="idle-sep"></span>
+              `
+            : nothing}
+          ${Number.isFinite(blanketPower)
+            ? html`
+                <span class="idle-item">
+                  <ha-icon icon="mdi:bed-outline"></ha-icon>
+                  Blanket <b>${blanketOn ? `${Math.round(blanketPower)} W` : "off"}</b>
+                </span>
+                <span class="idle-sep"></span>
+              `
+            : nothing}
+          ${Number.isFinite(lightsPower)
+            ? html`
+                <span class="idle-item">
+                  <ha-icon icon="mdi:lightbulb-on-outline"></ha-icon>
+                  Lights <b>${Math.round(lightsPower)} W</b>
+                </span>
+                <span class="idle-sep"></span>
+              `
+            : nothing}
           <span class="idle-item">
             <ha-icon icon="mdi:watch"></ha-icon>
-            Device charging <b>${chargerPower.toFixed(2)} W</b>
+            Charger <b>${chargerPower.toFixed(1)} W</b>
           </span>
         </div>
       `;
@@ -1536,7 +1566,9 @@ export class SolTabHome extends LitElement {
       { id: "inside", label: "Inside", render: () => this.renderInsideCard() },
       { id: "outside", label: "Outside", render: () => this.renderOutsideCard() },
       { id: "weather", label: "Forecast", render: () => this.renderWeatherCard() },
-      { id: "fridge", label: "Refrigerator", render: () => this.renderFridgeCard() },
+      ...(this.hass.states[FRIDGE_TEMP]
+        ? [{ id: "fridge", label: "Refrigerator", render: () => this.renderFridgeCard() }]
+        : []),
       { id: "running", label: "Running Now", fullSpan: true, render: () => this.renderRunningNow() },
     ];
 
