@@ -483,5 +483,21 @@ export const HOUSE_AUTOMATIONS: readonly AutomationStrip[] = [
     guard: "Debounced against door openings",
     action: "Flags Home card in amber/red + sends mobile alert",
   },
+  {
+    group: "Appliances & Safety",
+    name: "Electric Blanket Auto-Heat",
+    entityId: "automation.electric_blanket_auto_heat_in_cold_window",
+    trigger: "Window start, bedroom < threshold for 3m, arrive home, or Auto enabled",
+    guard: "Auto ON, Away OFF, time inside window, bedroom < threshold",
+    action: "Turns on switch.electric_blanket",
+  },
+  {
+    group: "Appliances & Safety",
+    name: "Electric Blanket Auto-Off",
+    entityId: "automation.electric_blanket_auto_off_away_window_end",
+    trigger: "Away Mode ON or window end",
+    guard: "Blanket ON (window end also requires Auto ON)",
+    action: "Turns off switch.electric_blanket",
+  },
 ] as const;
 // === END REQUIRED AGENT READING ===
