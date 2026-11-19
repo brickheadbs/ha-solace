@@ -1618,3 +1618,123 @@ async def test_closed_ambient_gate_keeps_occupied_evening_lights_on_and_standby_
     bedroom_standby = coordinator.standby_cache.get_target(bedroom_sub.subentry_id, EMPTY_LIGHT, StateTier.L1_DEMAND)
     assert kitchen_standby is not None and 0 < kitchen_standby.level < 100
     assert bedroom_standby is not None and 0 < bedroom_standby.level < 100
+
+
+async def test_ambient_gate_toggle_in_daylight_only_controls_l3_and_standby_obeys_cutoff(
+    hass: HomeAssistant, world, freezer
+) -> None:
+    """Option A integration: toggling input_boolean.ambient_gate in daylight only controls L3
+    ambient glow without changing cutoff_threshold, and standby_cache L1 mirrors daylight_cutoff.
+    """
+    from homeassistant.config_entries import ConfigSubentryData
+    from custom_components.solace.const import (
+        CONF_DND_ENTITY,
+        CONF_LIGHTS,
+        CONF_LUX_SENSOR,
+        CONF_PRESENCE,
+        SUBENTRY_TYPE_ROOM,
+    )
+    from custom_components.solace.models import StateTier
+    from .conftest import DND, PRESENCE
+
+    EMPTY_PRESENCE = "binary_sensor.bedroom_occupancy"
+    EMPTY_LIGHT = "light.bedroom_counter"
+    hass.states.async_set(EMPTY_PRESENCE, "off")
+    hass.states.async_set(
+        EMPTY_LIGHT,
+        "off",
+        {
+            "brightness": None,
+            "color_temp_kelvin": None,
+            "min_color_temp_kelvin": 2702,
+            "max_color_temp_kelvin": 6535,
+            "supported_color_modes": ["color_temp"],
+        },
+    )
+
+    await async_setup_component(hass, "input_boolean", {"input_boolean": {"ambient_gate": None}})
+    hass.states.async_set("input_boolean.ambient_gate", "off")
+    world(lux=250.0, occupied=True, light_on=False)
+    freezer.move_to("2026-06-15 21:00:00+00:00")
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Solace",
+        unique_id="solace_option_a_ambient_test",
+        data={CONF_LUX_SENSOR: LUX, CONF_DND_ENTITY: DND},
+        options={
+            CONF_LUX_SENSOR: LUX,
+            CONF_DND_ENTITY: DND,
+            "min_cutoff": 100,
+            "cloudy_blend_threshold": 100.0,
+            "ambience_level": 51,
+            "ambience_ignores_occupancy": 1.0,
+            "lux_curve": [
+                {"lux": 0.0, "demand_pct": 1.0},
+                {"lux": 1.0, "demand_pct": 1.0},
+                {"lux": 300.0, "demand_pct": 0.33},
+                {"lux": 301.0, "demand_pct": 0.0},
+            ],
+            "brightness_timeline": [
+                {"hour": 0.0, "level": 68.0},
+                {"hour": 8.5, "level": 233.0},
+                {"hour": 17.0, "level": 240.0},
+                {"hour": 23.133333333333333, "level": 65.0},
+            ],
+        },
+        subentries_data=[
+            ConfigSubentryData(
+                subentry_type=SUBENTRY_TYPE_ROOM,
+                title="Kitchen",
+                unique_id=None,
+                data={CONF_LIGHTS: [LIGHT], CONF_PRESENCE: [PRESENCE], "ambience_level": 51},
+            ),
+            ConfigSubentryData(
+                subentry_type=SUBENTRY_TYPE_ROOM,
+                title="Bedroom",
+                unique_id=None,
+                data={CONF_LIGHTS: [EMPTY_LIGHT], CONF_PRESENCE: [EMPTY_PRESENCE], "ambience_level": 51},
+            ),
+        ],
+    )
+    entry.add_to_hass(hass)
+    assert await _setup(hass, entry)
+    coordinator = entry.runtime_data.coordinator
+
+    subentries = {s.title: s for s in coordinator._subentries()}
+    kitchen_sub = subentries["Kitchen"]
+    bedroom_sub = subentries["Bedroom"]
+
+    # 1. With ambient_gate OFF at 250 lx (demand=0.40, L1=46 < cutoff 60):
+    kitchen_sol_off = coordinator.rooms[kitchen_sub.subentry_id].solutions[LIGHT]
+    bedroom_sol_off = coordinator.rooms[bedroom_sub.subentry_id].solutions[EMPTY_LIGHT]
+    assert dict(kitchen_sol_off.trace)["cutoff_threshold"] == 60
+    assert kitchen_sol_off.level == 0
+    assert bedroom_sol_off.level == 0
+
+    bedroom_standby = coordinator.standby_cache.get_target(bedroom_sub.subentry_id, EMPTY_LIGHT, StateTier.L1_DEMAND)
+    assert bedroom_standby is not None and bedroom_standby.level == 0
+
+    # 2. Toggle ambient_gate ON at the same 250 lx: L3 turns on cleanly; cutoff_threshold
+    # includes +12 Schmitt hysteresis (72) solely because last_written was 0, not from gate
+    hass.states.async_set("input_boolean.ambient_gate", "on")
+    await coordinator.async_refresh()
+
+    kitchen_sol_on = coordinator.rooms[kitchen_sub.subentry_id].solutions[LIGHT]
+    bedroom_sol_on = coordinator.rooms[bedroom_sub.subentry_id].solutions[EMPTY_LIGHT]
+    assert dict(kitchen_sol_on.trace)["cutoff_threshold"] == 72
+    assert dict(kitchen_sol_on.trace)["cutoff_armed"] is True
+    assert kitchen_sol_on.level == 51
+    assert kitchen_sol_on.source == "ambience"
+    assert bedroom_sol_on.level == 51
+    assert bedroom_sol_on.source == "ambience"
+
+    bedroom_standby_on = coordinator.standby_cache.get_target(bedroom_sub.subentry_id, EMPTY_LIGHT, StateTier.L1_DEMAND)
+    assert bedroom_standby_on is not None and bedroom_standby_on.level == 51
+
+    # 3. Toggle ambient_gate back OFF: L3 turns off, cutoff_threshold stays 72 (invariant to gate)
+    hass.states.async_set("input_boolean.ambient_gate", "off")
+    await coordinator.async_refresh()
+    kitchen_sol_reoff = coordinator.rooms[kitchen_sub.subentry_id].solutions[LIGHT]
+    assert dict(kitchen_sol_reoff.trace)["cutoff_threshold"] == 72
+    assert kitchen_sol_reoff.level == 0

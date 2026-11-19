@@ -32,8 +32,10 @@ from .models import (
 from .spline import MonotoneCubicSpline
 
 __all__ = [
+    "CUTOFF_HYSTERESIS",
     "ambience_threshold",
     "debounce_ambience",
+    "daylight_cutoff",
     "demand",
     "ramp_bias",
     "mode_for",
@@ -144,6 +146,36 @@ def apply_clamp(level: int, light: LightSettings) -> int:
     if light.family in (Family.AQARA_RGB, Family.AQARA_CCT):
         clamped = max(AQARA_MIN_LEVEL, clamped)
     return clamped
+
+
+CUTOFF_HYSTERESIS: int = 12
+
+
+def daylight_cutoff(
+    min_cutoff: int,
+    demand_value: float,
+    *,
+    was_off: bool = False,
+    hysteresis: int = CUTOFF_HYSTERESIS,
+) -> int:
+    """Compute continuous daylight-proportional cutoff threshold with Schmitt hysteresis.
+
+    Scales linearly from 0 in complete darkness (demand == 1.0) up to
+    ``min_cutoff`` in full daylight (demand == 0.0), automatically inheriting
+    clear/overcast sky curves, sunny override, and per-room threshold_stops.
+    When ``was_off`` is True and the scaled cutoff > 0, adds a bounded Schmitt
+    band ``min(hysteresis, scaled)`` so cloud edges and AsymmetricFilter decay
+    cannot chatter lights on/off. ``min_cutoff >= MAX_LEVEL`` remains a hard
+    demand shutoff at any lux.
+    """
+    if min_cutoff >= MAX_LEVEL:
+        return MAX_LEVEL
+    scaled = int(round(max(0, min_cutoff) * (1.0 - _clamp01(demand_value))))
+    if scaled <= 0:
+        return 0
+    if was_off and hysteresis > 0:
+        return min(MAX_LEVEL, scaled + min(hysteresis, scaled))
+    return scaled
 
 
 def apply_cutoff(level: int, cutoff: int) -> int:
@@ -653,30 +685,33 @@ def solve(
 
     # 7. Minimum Cutoff — the ONE place Cut Offs are applied.
     #
-    # Cut Offs suppress the weak daytime buzz band. They DISARM whenever a resting floor is
-    # armed: L3 (the ambience gate is open or outdoor lux is dark) or Ls (night). "Armed" is
-    # darkness/the gate, not the currently-selected state — a room occupied at dusk still
-    # has darkness underneath it, even if `input_boolean.ambient_gate` is closed to suppress
-    # unoccupied L3 ambience, so its Cut Off stays off.
-    #
-    # ⚠️ Deliberately NOT conditioned on ``state_table.l3 > 0``. Owner, 2026-08-13: the
-    # ambience settings "also disable the Minimum cutoff so that lights can go as low as 1
-    # at night when low levels are actually needed" — darkness is what disarms the cutoff,
-    # and a room with no ambience floor of its own still gets that. Pinned by
-    # test_the_cutoff_drops_out_below_the_threshold_but_zero_is_still_off.
-    lux_dark = ambience_threshold(effective_lux, data.ambience_open, house)
-    l3_armed = ambience_open or lux_dark
+    # Cut Offs suppress the weak daytime glow band without relying on a brittle lux gate or
+    # coupling to L3 `ambient_gate`. They scale continuously as `min_cutoff * (1 - demand)`
+    # (0 when demand == 1.0 in darkness, up to `min_cutoff` in full daylight) with bounded
+    # Schmitt hysteresis (+12 when re-igniting from off or L3).
     ls_armed = mode is Mode.NIGHT
     if is_stairway:
         cutoff = 0 if (ls_armed or source in ("night", "sunrise", "sunset")) else light.clamp_min
     elif house.min_cutoff >= MAX_LEVEL and source == "demand":
         cutoff = MAX_LEVEL
+    elif ls_armed or data.bedtime_dwell_active or source in ("ambience", "night", "sunrise", "sunset", "bedtime_dwell"):
+        cutoff = 0
     else:
-        cutoff = 0 if (l3_armed or ls_armed or data.bedtime_dwell_active or source in ("ambience", "night", "sunrise", "sunset", "bedtime_dwell")) else max(house.min_cutoff, light.clamp_min)
+        was_off = (data.last_written_level == 0) or (data.last_source == "ambience")
+        cutoff = daylight_cutoff(
+            max(house.min_cutoff, light.clamp_min),
+            master.demand,
+            was_off=was_off,
+        )
+    trace.append(("cutoff_threshold", cutoff))
     trace.append(("cutoff_armed", cutoff > 0))
     if (0 < level <= cutoff if cutoff >= MAX_LEVEL else 0 < level < cutoff) and mode not in (Mode.AWAY, Mode.SUNRISE, Mode.SUNSET, Mode.NIGHT):
         level = 0
         trace.append(("below_cutoff", cutoff))
+        if ambience_open and not data.asleep and state_table.l3 > 0 and house.min_cutoff < MAX_LEVEL:
+            level = state_table.l3
+            source = "ambience"
+            trace.append(("ambience_replaces_cutoff", level))
 
     # 7b. Room Occupied Minimum / Maximum Bounds
     # Non-Stairway rooms can set a generic occupied floor and ceiling in Normal Mode.

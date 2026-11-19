@@ -204,8 +204,8 @@ export const PIPELINE_STAGES: readonly PipelineStage[] = [
   {
     step: 6,
     title: "Cutoff & Mode Gate",
-    formula: "lvl < min_cutoff -> 0 (in daylight with gate closed)",
-    summary: "Applies Priority Ladder, daytime min_cutoff (disarmed by darkness <= ambience_start_lux or open gate; closing input_boolean.ambient_gate only suppresses unoccupied L3 ambience), L3 ambience floor when gate is open, and room occupied_min/max.",
+    formula: "lvl < round(cutoff * (1 - demand)) -> 0 (+12 hyst)",
+    summary: "Applies Priority Ladder, continuous daylight cutoff (scales from 0 when dark/demand=1.0 up to max(min_cutoff, clamp_min) in full sun with bounded +12 Schmitt hysteresis, completely independent of input_boolean.ambient_gate; L3 acts as the floor when Ambient is manually ON), L3 ambience when gate is open, and room occupied_min/max.",
     keys: ["min_cutoff", "ambience_start_lux", "ambience_stop_lux", "occupied_min", "occupied_max"],
   },
   {
@@ -302,15 +302,15 @@ export const CUTOFFS_AND_CLAMPS: readonly CutoffRule[] = [
     name: "Daytime Low Cutoff",
     scope: "House",
     key: "min_cutoff",
-    rule: "Drops computed L1/L2 demand below min_cutoff (live: 48/254) straight to 0 during daylight.",
-    exemptions: "Disarmed when outdoor lux is dark (<= ambience_start_lux) OR Ambience Gate is open (closing input_boolean.ambient_gate only suppresses unoccupied L3 ambience, never occupied evening/night lighting), and during Night Mode, Bedtime Dwell, Sunrise, and Sunset.",
+    rule: "Drops computed L1/L2 demand below effective_cutoff = round(max(min_cutoff, clamp_min) * (1 - demand)) straight to 0 (with bounded +12 Schmitt hysteresis when re-igniting from off or L3). Automatically 0 when dark (demand == 1.0) and scales to full ceiling in bright daylight.",
+    exemptions: "Completely independent of input_boolean.ambient_gate (which strictly toggles L3 ambient lights on/off; if L3 is ON when daytime L1 is cut off, occupied rooms rest at L3). Exempt in Stairway, Night Mode, Bedtime Dwell, Sunrise, and Sunset.",
   },
   {
     name: "Per-Light Cut & Max",
     scope: "Per-Light",
     key: "clamp_min / clamp_max",
-    rule: "clamp_min acts as a per-fixture daytime cutoff -> 0; clamp_max is an unconditional hard ceiling across all automatic modes.",
-    exemptions: "clamp_min is disarmed when Ambience Gate is open, in Ambience (L3), and in Night Mode (L1s).",
+    rule: "clamp_min sets a per-fixture daylight cutoff ceiling (scaled by (1 - demand) outside Stairway); clamp_max is an unconditional hard ceiling across all automatic modes.",
+    exemptions: "clamp_min scales to 0 in full darkness (demand == 1.0) and is exempt in Ambience (L3), Night Mode (L1s), Sunrise, and Sunset.",
   },
   {
     name: "Occupied Room Bounds",

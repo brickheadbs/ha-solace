@@ -431,8 +431,11 @@ export class SolTabSettings extends LitElement {
             </div>
 
             <div>
-              <div style="font-size: 11.5px; color: var(--sol-text-2); margin-bottom: 4px;">
-                Daytime low cutoff
+              <div
+                style="font-size: 11.5px; color: var(--sol-text-2); margin-bottom: 4px;"
+                title="Scales by (1 - demand) with +12 hysteresis: 0 in dark, full ceiling in bright daylight"
+              >
+                Daylight cutoff ceiling
               </div>
               <div class="input-with-unit">
                 <input
@@ -440,7 +443,7 @@ export class SolTabSettings extends LitElement {
                   class="num-input"
                   style="flex: 1;"
                   min="0"
-                  max="120"
+                  max="254"
                   .value=${String(house.min_cutoff ?? 48)}
                   @change=${(e: Event) => {
                     const v = parseFloat((e.target as HTMLInputElement).value);

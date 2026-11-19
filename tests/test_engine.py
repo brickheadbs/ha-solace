@@ -11,10 +11,12 @@ from dataclasses import replace
 import pytest
 
 from custom_components.solace.engine import (
+    CUTOFF_HYSTERESIS,
     ambience_threshold,
     apply_clamp,
     clip_to_full,
     compute_state_table,
+    daylight_cutoff,
     debounce_ambience,
     demand,
     past_dead_zone,
@@ -320,8 +322,8 @@ def test_min_cutoff_prefers_off_to_a_useless_glow(house, light):
     bright = solve(house, room, light, _input(lux=200.0))
     assert bright.level == 0
 
-    # Dark: it does not. A level below the cutoff survives instead of snapping off.
-    dark = solve(house, room, light, _input(lux=10.0))
+    # Dark (demand == 1.0): cutoff scales to 0, so a level below the ceiling survives.
+    dark = solve(house, room, light, _input(lux=1.0))
     assert 0 < dark.level < 10
 
 
@@ -680,7 +682,7 @@ def test_the_cutoff_drops_out_below_the_threshold_but_zero_is_still_off(light):
         min_cutoff=11,
         demand_floor_level=1,
     )
-    dim = solve(house, RoomSettings(bias_stops=-6.0), light, _input(lux=10.0, occupied=True))
+    dim = solve(house, RoomSettings(bias_stops=-6.0), light, _input(lux=1.0, occupied=True))
     assert 0 < dim.level < 11
 
 
@@ -1066,18 +1068,19 @@ def test_per_light_min_is_a_cutoff_not_a_floor_and_exempt_in_ambience_and_night(
     )
     assert 0 < table_low_demand.l1 < entry_light.clamp_min
 
-    # Same lux (so the same demand, so the same raw level) with only the GATE differing —
-    # `ambience_resolved` pins it directly, since `ambience_open` is merely the previous
-    # state fed to the hysteresis and at 200 lx would resolve closed either way.
-    common = dict(lux=200.0, clock_hour=14.0)
+    # In bright daylight (lux=200.0 -> demand ~0.156, scaled clamp_min=51), demand=40 drops to 0
+    # regardless of whether input_boolean.ambient_gate is off or on (ambient no longer disarms cutoff).
+    day_common = dict(lux=200.0, clock_hour=14.0)
+    lit_gate_off = solve(house, room, entry_light, _input(**day_common, ambience_resolved=False))
+    lit_gate_on = solve(house, room, entry_light, _input(**day_common, ambience_resolved=True))
+    assert lit_gate_off.level == 0
+    assert lit_gate_on.level == 0
 
-    # Gate CLOSED (daylight) — the cutoff is armed and takes it to 0.
-    lit = solve(house, room, entry_light, _input(**common, ambience_resolved=False))
-    assert lit.level == 0
-
-    # Gate OPEN (dark) — the cutoff is disarmed, so the same level survives.
-    dark = solve(house, room, entry_light, _input(**common, ambience_resolved=True))
-    assert dark.level == table_low_demand.l1
+    # In true darkness (lux=0.0 -> demand=1.0), cutoff scales to 0 so a dim level (< 60) survives.
+    dark_dim = solve(house, RoomSettings(bias_stops=-3.0), entry_light, _input(lux=0.0, clock_hour=14.0))
+    assert 0 < dark_dim.level < entry_light.clamp_min
+    assert dict(dark_dim.trace)["cutoff_threshold"] == 0
+    assert dict(dark_dim.trace)["cutoff_armed"] is False
 
 
 def test_virtual_sunset_holds_at_low_level_until_bedtime_mode(light):
@@ -1399,3 +1402,150 @@ def test_closed_ambient_gate_does_not_arm_daytime_cutoff_in_the_dark(light):
     )
     assert occ_day.level == 0
     assert dict(occ_day.trace)["cutoff_armed"] is True
+
+
+def test_daylight_cutoff_scales_continuously_with_live_curves(light):
+    """Option A: effective cutoff = round(min_cutoff * (1 - demand)), automatically tracking
+    clear/cloudy curves while staying 0 whenever demand == 1.0 (dark).
+    """
+    live_house = HouseSettings(
+        lux_curve=(
+            SplinePoint(0.0, 1.0),
+            SplinePoint(1.0, 1.0),
+            SplinePoint(300.0, 0.33),
+            SplinePoint(301.0, 0.0),
+        ),
+        lux_cloudy_curve=(
+            SplinePoint(0.0, 1.0),
+            SplinePoint(1.0, 1.0),
+            SplinePoint(999.0, 0.33),
+            SplinePoint(1000.0, 0.0),
+        ),
+        brightness_timeline=(
+            SplinePoint(0.0, 68.0),
+            SplinePoint(3.3833333333333333, 69.0),
+            SplinePoint(8.5, 233.0),
+            SplinePoint(17.0, 240.0),
+            SplinePoint(23.133333333333333, 65.0),
+        ),
+        min_cutoff=100,
+        cloudy_blend_threshold=100.0,
+    )
+    kitchen = RoomSettings(name="Kitchen")
+    living = RoomSettings(name="Living", bias_stops=-0.4)
+
+    # 1. Dark night (0 lx, 21:41) -> demand=1.0, cutoff=0, both stay ON
+    dark_k = solve(live_house, kitchen, light, _input(lux=0.0, clock_hour=21.683))
+    dark_l = solve(live_house, living, light, _input(lux=0.0, clock_hour=21.683))
+    assert dict(dark_k.trace)["cutoff_threshold"] == 0
+    assert dark_k.level == 90
+    assert dark_l.level == 68
+
+    # 2. Dusk (50 lx clear, 20:30) -> demand=0.818, cutoff=18, both stay ON (110 / 83)
+    dusk_k = solve(live_house, kitchen, light, _input(lux=50.0, clock_hour=20.5, cloud_coverage=0.0))
+    dusk_l = solve(live_house, living, light, _input(lux=50.0, clock_hour=20.5, cloud_coverage=0.0))
+    assert dict(dusk_k.trace)["cutoff_threshold"] == 18
+    assert dusk_k.level == 110
+    assert dusk_l.level == 83
+
+    # 3. June 21:00 bright twilight (250 lx clear) -> demand=0.40, cutoff=60, both cut to 0 (46 / 35 < 60)
+    june_k = solve(live_house, kitchen, light, _input(lux=250.0, clock_hour=21.0, cloud_coverage=0.0))
+    june_l = solve(live_house, living, light, _input(lux=250.0, clock_hour=21.0, cloud_coverage=0.0))
+    assert dict(june_k.trace)["cutoff_threshold"] == 60
+    assert june_k.level == 0
+    assert june_l.level == 0
+
+    # 4. Midday 300 lx clear -> demand=0.33, cutoff=67 -> Kitchen (79) ON, Living (60) OFF
+    clear_k = solve(live_house, kitchen, light, _input(lux=300.0, clock_hour=13.0, cloud_coverage=0.0))
+    clear_l = solve(live_house, living, light, _input(lux=300.0, clock_hour=13.0, cloud_coverage=0.0))
+    assert dict(clear_k.trace)["cutoff_threshold"] == 67
+    assert clear_k.level == 79
+    assert clear_l.level == 0
+
+    # 5. Midday 600 lx overcast -> demand=0.481, cutoff=52 -> both ON (115 / 87)
+    overcast_k = solve(live_house, kitchen, light, _input(lux=600.0, clock_hour=13.0, cloud_coverage=100.0))
+    overcast_l = solve(live_house, living, light, _input(lux=600.0, clock_hour=13.0, cloud_coverage=100.0))
+    assert dict(overcast_k.trace)["cutoff_threshold"] == 52
+    assert overcast_k.level == 115
+    assert overcast_l.level == 87
+
+    # 6. min_cutoff == 254 remains an unconditional off switch even at demand=1.0
+    assert daylight_cutoff(254, 1.0) == 254
+
+
+def test_daylight_cutoff_schmitt_hysteresis_and_dark_turn_on(light):
+    """Schmitt hysteresis (+min(12, scaled) when was_off) stops cloud-edge chatter while
+    keeping full darkness (demand == 1.0) at 0 cutoff even when turning on from off.
+    """
+    assert daylight_cutoff(100, 0.4, was_off=False) == 60
+    assert daylight_cutoff(100, 0.4, was_off=True) == 60 + CUTOFF_HYSTERESIS
+    assert daylight_cutoff(20, 0.8, was_off=True) == 8  # bounded by scaled (4 + 4)
+
+    live_clear = (
+        SplinePoint(0.0, 1.0),
+        SplinePoint(1.0, 1.0),
+        SplinePoint(300.0, 0.33),
+        SplinePoint(301.0, 0.0),
+    )
+    h = HouseSettings(lux_curve=live_clear, min_cutoff=100)
+    # 250 lx clear -> demand=0.400 -> scaled cutoff = 60, re-light cutoff = 72
+    # Level 65: stays ON when already lit (65 >= 60), stays OFF when previously off (65 < 72).
+    room_65 = RoomSettings(name="Living", bias_stops=-0.67)  # 102 * 2^-0.67 ≈ 64..65
+    already_on = solve(h, room_65, light, _input(lux=250.0, clock_hour=13.0, last_written_level=65, last_source="demand"))
+    from_off = solve(h, room_65, light, _input(lux=250.0, clock_hour=13.0, last_written_level=0, last_source="off"))
+    assert 60 <= dict(already_on.trace)["state_l1"] < 72
+    assert already_on.level >= 60
+    assert from_off.level == 0
+    assert dict(from_off.trace)["cutoff_threshold"] == 72
+
+    # Bright enough to clear hysteresis (>= 72): turns back ON from off
+    room_75 = RoomSettings(name="Living", bias_stops=-0.43)  # ~75
+    relit = solve(h, room_75, light, _input(lux=250.0, clock_hour=13.0, last_written_level=0, last_source="off"))
+    assert relit.level >= 72
+
+    # In dark (lux=0.0, demand=1.0), was_off=True STILL has cutoff=0 so ultra-dim demand turns ON
+    dark_turn_on = solve(
+        HouseSettings(min_cutoff=100, demand_floor_level=1),
+        RoomSettings(name="Living", bias_stops=-8.0),
+        light,
+        _input(lux=0.0, clock_hour=22.0, last_written_level=0, last_source="off"),
+    )
+    assert dict(dark_turn_on.trace)["cutoff_threshold"] == 0
+    assert dark_turn_on.level >= 1
+
+
+def test_ambient_button_only_controls_l3_independent_of_daylight_cutoff(light):
+    """Toggling ambient_gate in daylight never changes cutoff_threshold; when occupied demand
+    is cut off in daylight, manual Ambient ON keeps L3 as the floor rather than dropping below empty rooms.
+    """
+    live_clear = (
+        SplinePoint(0.0, 1.0),
+        SplinePoint(1.0, 1.0),
+        SplinePoint(300.0, 0.33),
+        SplinePoint(301.0, 0.0),
+    )
+    timeline = (
+        SplinePoint(0.0, 68.0),
+        SplinePoint(8.5, 233.0),
+        SplinePoint(17.0, 240.0),
+        SplinePoint(23.133333333333333, 65.0),
+    )
+    h = HouseSettings(
+        lux_curve=live_clear,
+        brightness_timeline=timeline,
+        min_cutoff=100,
+        ambience_level=51,
+        ambience_ignores_occupancy=True,
+    )
+    kitchen = RoomSettings(name="Kitchen", ambience_level=51)
+
+    off_amb = solve(h, kitchen, light, _input(lux=250.0, occupied=True, clock_hour=21.0, ambience_resolved=False))
+    on_amb = solve(h, kitchen, light, _input(lux=250.0, occupied=True, clock_hour=21.0, ambience_resolved=True))
+
+    assert dict(off_amb.trace)["cutoff_threshold"] == 60
+    assert dict(on_amb.trace)["cutoff_threshold"] == 60
+    assert off_amb.level == 0
+    assert off_amb.source == "demand"
+    assert on_amb.level == 51
+    assert on_amb.source == "ambience"
+    assert ("ambience_replaces_cutoff", 51) in on_amb.trace

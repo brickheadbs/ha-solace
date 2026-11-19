@@ -968,10 +968,11 @@ export class SolTabHome extends LitElement {
       (w.demand !== null && w.demand !== undefined ? Math.round(w.demand * 254) : 254);
     const targetPct = Math.round((masterTarget / 254) * 100);
     const derimVal = Math.round(kelvinToDerim(w.kelvin ?? 4000));
-    const gateOpen =
-      this.hass.states["input_boolean.ambient_gate"]?.state === "on" ||
-      this.hass.states["binary_sensor.entry_ambient_gate"]?.state === "on" ||
-      !!w.gate_open;
+    const ambientHelper = this.hass.states["input_boolean.ambient_gate"];
+    const ambientOn =
+      ambientHelper !== undefined
+        ? ambientHelper.state === "on"
+        : !!w.gate_open;
     const sleepActive =
       this.hass.states["input_boolean.solace_sleep"]?.state === "on" || w.night_active;
     const workActive =
@@ -1006,11 +1007,12 @@ export class SolTabHome extends LitElement {
             </button>
             <button
               class="btn-pill"
-              style="background: ${gateOpen ? "rgba(255,183,77,.22)" : "var(--sol-control)"}; color: ${gateOpen ? "var(--sol-amber)" : "var(--sol-text-3)"};"
+              title="Toggle L3 ambient lights only (independent of daylight cutoff)"
+              style="background: ${ambientOn ? "rgba(255,183,77,.22)" : "var(--sol-control)"}; color: ${ambientOn ? "var(--sol-amber)" : "var(--sol-text-3)"};"
               @click=${() => this.toggleGate()}
             >
               <ha-icon icon="mdi:theme-light-dark"></ha-icon>
-              Ambient
+              ${ambientOn ? "Ambient ON" : "Ambient"}
             </button>
             <button
               class="btn-pill"

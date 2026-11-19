@@ -79,6 +79,7 @@ from .engine import (
     ambience_threshold,
     apply_clamp,
     compute_state_table,
+    daylight_cutoff,
     debounce_ambience,
     demand,
     solve,
@@ -1487,6 +1488,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
             demand_override=filtered_demand,
         )
         dusk = self._dusk_hour()
+        asleep = self._asleep()
         for subentry in self._subentries():
             room_settings = self.room_settings(subentry)
             room_eff_lux = max(0.0, lux / (2.0 ** room_settings.threshold_stops))
@@ -1536,18 +1538,24 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                         else table.l1s
                     )
                 else:
-                    lux_dark = ambience_threshold(room_eff_lux, ambience_open, house)
+                    last_written = room_state.last_written.get(entity_id) if room_state is not None else None
+                    last_src = room_state.last_source.get(entity_id) if room_state is not None else None
+                    was_off = (last_written == 0) or (last_src == "ambience")
                     cutoff = (
                         254
                         if house.min_cutoff >= 254
-                        else (
-                            0
-                            if (ambience_open or lux_dark)
-                            else max(house.min_cutoff, light.clamp_min)
+                        else daylight_cutoff(
+                            max(house.min_cutoff, light.clamp_min),
+                            room_master.demand,
+                            was_off=was_off,
                         )
                     )
                     l1_level = 0 if (0 < table.l1 <= cutoff if cutoff >= 254 else 0 < table.l1 < cutoff) else table.l1
                     l2_level = 0 if (0 < table.l2 <= cutoff if cutoff >= 254 else 0 < table.l2 < cutoff) else table.l2
+                    if l1_level == 0 and ambience_open and not asleep and table.l3 > 0 and house.min_cutoff < 254:
+                        l1_level = table.l3
+                    if l2_level == 0 and ambience_open and not asleep and table.l3 > 0 and house.min_cutoff < 254:
+                        l2_level = table.l3
                     l1s_level = table.l1s
                     if occ_min > 0 or occ_max < 254:
                         l1_level = apply_clamp(max(occ_min, min(occ_max, l1_level)), light)
