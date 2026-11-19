@@ -433,7 +433,7 @@ export class SolTabHelp extends LitElement {
 
   render() {
     const h = this.snap?.house ?? {};
-    const groups = ["Front Door & U200 Lock", "Lighting & Presence", "Appliances & Safety"] as const;
+    const groups = ["Front Door & U200 Lock", "Lighting & Presence", "Appliances & Safety", "Reminders & Alerts"] as const;
 
     return html`
       <div class="stack">

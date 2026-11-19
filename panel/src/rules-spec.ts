@@ -42,7 +42,7 @@ export interface RoomExceptionSpec {
 }
 
 export interface AutomationStrip {
-  group: "Front Door & U200 Lock" | "Lighting & Presence" | "Appliances & Safety";
+  group: "Front Door & U200 Lock" | "Lighting & Presence" | "Appliances & Safety" | "Reminders & Alerts";
   name: string;
   entityId: string;
   trigger: string;
@@ -473,7 +473,7 @@ export const HOUSE_AUTOMATIONS: readonly AutomationStrip[] = [
     entityId: "script.start_charge_cycle_from_button_data",
     trigger: "Start Watch Charge button (Home / Wind-down / Bedside)",
     guard: "Power drops <= charge_off_wattage (1.1 W) after peak",
-    action: "Cuts bedroom smart plug power once Pixel Watch reaches full charge",
+    action: "Cuts bedroom smart plug power and calls script.send_home_reminder if Reminder Charge Done is ON",
   },
   {
     group: "Appliances & Safety",
@@ -487,17 +487,57 @@ export const HOUSE_AUTOMATIONS: readonly AutomationStrip[] = [
     group: "Appliances & Safety",
     name: "Electric Blanket Auto-Heat",
     entityId: "automation.electric_blanket_auto_heat_in_cold_window",
-    trigger: "Window start, bedroom < threshold for 3m, arrive home, or Auto enabled",
-    guard: "Auto ON, Away OFF, time inside window, bedroom < threshold",
+    trigger: "Window start, 19:00:05 peak end, bedroom < threshold for 3m, arrive home, or Auto enabled",
+    guard: "Auto ON, Away OFF, time inside window, bedroom < threshold, Peak Guard (>=17.5 C bypass during 17:00-19:00), and awake when Sleep Auto-Off ON",
     action: "Turns on switch.electric_blanket",
   },
   {
     group: "Appliances & Safety",
     name: "Electric Blanket Auto-Off",
     entityId: "automation.electric_blanket_auto_off_away_window_end",
-    trigger: "Away Mode ON or window end",
-    guard: "Blanket ON (window end also requires Auto ON)",
+    trigger: "Away Mode ON, Sleep Mode ON for 25m, or window end",
+    guard: "Blanket ON (Sleep trigger requires Sleep Auto-Off ON; window end requires Auto ON)",
     action: "Turns off switch.electric_blanket",
+  },
+  {
+    group: "Reminders & Alerts",
+    name: "Central Reminder Dispatcher",
+    entityId: "script.send_home_reminder",
+    trigger: "Called by reminder automations or Main -> Reminders Test button",
+    guard: "input_boolean.reminders_master == ON (voice gated by voice_reminders ON, Away OFF, Sleep OFF, Phone DND OFF)",
+    action: "Pushes to Pixel 8a + Pixel Watch 2 and optionally plays Maya /api/say soundbank or Cast audio clip",
+  },
+  {
+    group: "Reminders & Alerts",
+    name: "Daily Meds Reminder",
+    entityId: "automation.reminder_take_meds_daily_snooze",
+    trigger: "input_datetime.reminder_meds_time, 04:00 reset, or phone/watch Taken / Snooze 30m action",
+    guard: "reminder_meds == ON and meds_taken_today == OFF",
+    action: "Dispatches Take Your Meds notification with Taken / Snooze 30m buttons via script.send_home_reminder",
+  },
+  {
+    group: "Reminders & Alerts",
+    name: "Hot Water 60 C Sanitizer Alert",
+    entityId: "automation.reminder_hot_water_extra_hot_60degc_sanitizer_cycle",
+    trigger: "HP discharge probe > 52 C for 10m, wake-up (solace_sleep off), 08:00 fallback, Got it action, or 18h expiry",
+    guard: "Latches hot_water_extra_hot_active ON overnight if asleep so warning delivers on wake-up / 08:00 when reminder_hot_water ON",
+    action: "Sends extra-hot tap water warning via script.send_home_reminder and clears on acknowledgment",
+  },
+  {
+    group: "Reminders & Alerts",
+    name: "Electricity Tariff Window Alerts",
+    entityId: "automation.reminder_electricity_tariff_windows_peak_day_night",
+    trigger: "16:45 (15m pre-Peak), 07:45 (15m pre-Day), or 23:00 (Night start)",
+    guard: "Away OFF and matching per-window toggle ON (before_peak, before_day, night_rate_start)",
+    action: "Sends SST tariff transition reminder via script.send_home_reminder",
+  },
+  {
+    group: "Reminders & Alerts",
+    name: "Stale Sensor & Low Battery Watchdog",
+    entityId: "automation.watchdog_stale_sensors_low_battery",
+    trigger: "10:00 / 20:00 freshness sweep or any temperature/lock/remote/UPS battery < 20%",
+    guard: "input_boolean.reminder_sensor_health == ON; freshness ignores OK / unavailable",
+    action: "Reports probes silent >12h (sensor.stale_temperature_sensors) or low battery % via script.send_home_reminder",
   },
 ] as const;
 // === END REQUIRED AGENT READING ===
