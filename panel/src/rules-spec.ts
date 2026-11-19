@@ -509,11 +509,11 @@ export const HOUSE_AUTOMATIONS: readonly AutomationStrip[] = [
   },
   {
     group: "Reminders & Alerts",
-    name: "Daily Meds Reminder",
+    name: "AM / PM Meds Reminders",
     entityId: "automation.reminder_take_meds_daily_snooze",
-    trigger: "input_datetime.reminder_meds_time, 04:00 reset, or phone/watch Taken / Snooze 30m action",
-    guard: "reminder_meds == ON and meds_taken_today == OFF",
-    action: "Dispatches Take Your Meds notification with Taken / Snooze 30m buttons via script.send_home_reminder",
+    trigger: "Kitchen/Living occupancy >= input_number.meds_kitchen_dwell (default 5m) after reminder_meds_time (08:00), 04:00 reset, or AM/PM Taken / Snooze 30m actions",
+    guard: "Morning fires after earliest time before 16:30 when reminder_meds ON & meds_taken_today OFF (30m cooldown); Evening snooze uses reminder_evening_meds & evening_meds_taken_today",
+    action: "Dispatches Morning/Evening Meds notifications with Taken / Snooze 30m buttons via script.send_home_reminder",
   },
   {
     group: "Reminders & Alerts",
@@ -527,9 +527,9 @@ export const HOUSE_AUTOMATIONS: readonly AutomationStrip[] = [
     group: "Reminders & Alerts",
     name: "Electricity Tariff Window Alerts",
     entityId: "automation.reminder_electricity_tariff_windows_peak_day_night",
-    trigger: "16:45 (15m pre-Peak), 07:45 (15m pre-Day), or 23:00 (Night start)",
-    guard: "Away OFF and matching per-window toggle ON (before_peak, before_day, night_rate_start)",
-    action: "Sends SST tariff transition reminder via script.send_home_reminder",
+    trigger: "16:45 (15m pre-Peak + Evening Meds), 07:45 (15m pre-Day), or 23:00 (Night start)",
+    guard: "Tariff alerts require Away OFF & matching toggle; at 16:45 combines Peak + Evening Meds when both due, or sends Evening Meds standalone to phone/watch even if away",
+    action: "Sends SST tariff / combined Evening Meds reminder via script.send_home_reminder",
   },
   {
     group: "Reminders & Alerts",
