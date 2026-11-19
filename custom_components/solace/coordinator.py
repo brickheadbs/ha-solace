@@ -1536,7 +1536,16 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
                         else table.l1s
                     )
                 else:
-                    cutoff = 254 if house.min_cutoff >= 254 else (0 if ambience_open else max(house.min_cutoff, light.clamp_min))
+                    lux_dark = ambience_threshold(room_eff_lux, ambience_open, house)
+                    cutoff = (
+                        254
+                        if house.min_cutoff >= 254
+                        else (
+                            0
+                            if (ambience_open or lux_dark)
+                            else max(house.min_cutoff, light.clamp_min)
+                        )
+                    )
                     l1_level = 0 if (0 < table.l1 <= cutoff if cutoff >= 254 else 0 < table.l1 < cutoff) else table.l1
                     l2_level = 0 if (0 < table.l2 <= cutoff if cutoff >= 254 else 0 < table.l2 < cutoff) else table.l2
                     l1s_level = table.l1s

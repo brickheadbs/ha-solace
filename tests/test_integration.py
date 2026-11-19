@@ -1523,3 +1523,98 @@ async def test_manual_follow_occupancy_turns_off_on_clear_and_restores_level_on_
     turn_ons = [c for c in calls if c["service"] == "turn_on"]
     assert turn_ons, "re-occupying in manual_follow_occupancy did not restore light"
     assert turn_ons[-1]["service_data"]["brightness"] == 150
+
+
+async def test_closed_ambient_gate_keeps_occupied_evening_lights_on_and_standby_lit(
+    hass: HomeAssistant, world, freezer
+) -> None:
+    """⚠️ Regression, 2026-11-19: with input_boolean.ambient_gate=off, lux=0.0, min_cutoff=100,
+    and evening target < 100, both standby_cache (L1) and occupied room solutions stay lit,
+    while unoccupied rooms stay off (L3 suppressed).
+    """
+    from homeassistant.config_entries import ConfigSubentryData
+    from custom_components.solace.const import (
+        CONF_DND_ENTITY,
+        CONF_LIGHTS,
+        CONF_LUX_SENSOR,
+        CONF_PRESENCE,
+        SUBENTRY_TYPE_ROOM,
+    )
+    from custom_components.solace.models import StateTier
+    from .conftest import DND, PRESENCE
+
+    EMPTY_PRESENCE = "binary_sensor.bedroom_occupancy"
+    EMPTY_LIGHT = "light.bedroom_counter"
+    hass.states.async_set(EMPTY_PRESENCE, "off")
+    hass.states.async_set(
+        EMPTY_LIGHT,
+        "off",
+        {
+            "brightness": None,
+            "color_temp_kelvin": None,
+            "min_color_temp_kelvin": 2702,
+            "max_color_temp_kelvin": 6535,
+            "supported_color_modes": ["color_temp"],
+        },
+    )
+
+    await async_setup_component(hass, "input_boolean", {"input_boolean": {"ambient_gate": None}})
+    hass.states.async_set("input_boolean.ambient_gate", "off")
+    world(lux=0.0, occupied=True, light_on=False)
+    freezer.move_to("2026-08-13 21:41:00+00:00")
+
+    evening_entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Solace",
+        unique_id="solace_closed_gate_evening_test",
+        data={CONF_LUX_SENSOR: LUX, CONF_DND_ENTITY: DND},
+        options={
+            CONF_LUX_SENSOR: LUX,
+            CONF_DND_ENTITY: DND,
+            "min_cutoff": 100,
+            "ambience_start_lux": 80,
+            "ambience_stop_lux": 90,
+            "ambience_level": 51,
+            "ambience_ignores_occupancy": 1.0,
+            "brightness_timeline": [
+                {"hour": 0.0, "level": 68.0},
+                {"hour": 3.3833333333333333, "level": 69.0},
+                {"hour": 8.5, "level": 233.0},
+                {"hour": 17.0, "level": 240.0},
+                {"hour": 23.133333333333333, "level": 65.0},
+            ],
+        },
+        subentries_data=[
+            ConfigSubentryData(
+                subentry_type=SUBENTRY_TYPE_ROOM,
+                title="Kitchen",
+                unique_id=None,
+                data={CONF_LIGHTS: [LIGHT], CONF_PRESENCE: [PRESENCE], "ambience_level": 51},
+            ),
+            ConfigSubentryData(
+                subentry_type=SUBENTRY_TYPE_ROOM,
+                title="Bedroom",
+                unique_id=None,
+                data={CONF_LIGHTS: [EMPTY_LIGHT], CONF_PRESENCE: [EMPTY_PRESENCE], "ambience_level": 51},
+            ),
+        ],
+    )
+    evening_entry.add_to_hass(hass)
+    assert await _setup(hass, evening_entry)
+    coordinator = evening_entry.runtime_data.coordinator
+
+    subentries = {s.title: s for s in coordinator._subentries()}
+    kitchen_sub = subentries["Kitchen"]
+    bedroom_sub = subentries["Bedroom"]
+
+    kitchen_sol = coordinator.rooms[kitchen_sub.subentry_id].solutions[LIGHT]
+    bedroom_sol = coordinator.rooms[bedroom_sub.subentry_id].solutions[EMPTY_LIGHT]
+
+    assert 0 < kitchen_sol.level < 100
+    assert dict(kitchen_sol.trace)["cutoff_armed"] is False
+    assert bedroom_sol.level == 0
+
+    kitchen_standby = coordinator.standby_cache.get_target(kitchen_sub.subentry_id, LIGHT, StateTier.L1_DEMAND)
+    bedroom_standby = coordinator.standby_cache.get_target(bedroom_sub.subentry_id, EMPTY_LIGHT, StateTier.L1_DEMAND)
+    assert kitchen_standby is not None and 0 < kitchen_standby.level < 100
+    assert bedroom_standby is not None and 0 < bedroom_standby.level < 100

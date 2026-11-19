@@ -204,8 +204,8 @@ export const PIPELINE_STAGES: readonly PipelineStage[] = [
   {
     step: 6,
     title: "Cutoff & Mode Gate",
-    formula: "lvl < min_cutoff -> 0 (when gate closed)",
-    summary: "Applies Priority Ladder, daytime min_cutoff, L3 ambience floor when dusk gate is open, and room occupied_min/max.",
+    formula: "lvl < min_cutoff -> 0 (in daylight with gate closed)",
+    summary: "Applies Priority Ladder, daytime min_cutoff (disarmed by darkness <= ambience_start_lux or open gate; closing input_boolean.ambient_gate only suppresses unoccupied L3 ambience), L3 ambience floor when gate is open, and room occupied_min/max.",
     keys: ["min_cutoff", "ambience_start_lux", "ambience_stop_lux", "occupied_min", "occupied_max"],
   },
   {
@@ -303,7 +303,7 @@ export const CUTOFFS_AND_CLAMPS: readonly CutoffRule[] = [
     scope: "House",
     key: "min_cutoff",
     rule: "Drops computed L1/L2 demand below min_cutoff (live: 48/254) straight to 0 during daylight.",
-    exemptions: "Disarmed when Ambience Gate is open, during Night Mode, Bedtime Dwell, Sunrise, and Sunset.",
+    exemptions: "Disarmed when outdoor lux is dark (<= ambience_start_lux) OR Ambience Gate is open (closing input_boolean.ambient_gate only suppresses unoccupied L3 ambience, never occupied evening/night lighting), and during Night Mode, Bedtime Dwell, Sunrise, and Sunset.",
   },
   {
     name: "Per-Light Cut & Max",

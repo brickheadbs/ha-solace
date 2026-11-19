@@ -654,16 +654,18 @@ def solve(
     # 7. Minimum Cutoff — the ONE place Cut Offs are applied.
     #
     # Cut Offs suppress the weak daytime buzz band. They DISARM whenever a resting floor is
-    # armed: L3 (the ambience gate is open) or Ls (night). "Armed" is the gate, not the
-    # currently-selected state — a room occupied at dusk still has L3 armed underneath it,
-    # so its Cut Off is off.
+    # armed: L3 (the ambience gate is open or outdoor lux is dark) or Ls (night). "Armed" is
+    # darkness/the gate, not the currently-selected state — a room occupied at dusk still
+    # has darkness underneath it, even if `input_boolean.ambient_gate` is closed to suppress
+    # unoccupied L3 ambience, so its Cut Off stays off.
     #
     # ⚠️ Deliberately NOT conditioned on ``state_table.l3 > 0``. Owner, 2026-08-13: the
     # ambience settings "also disable the Minimum cutoff so that lights can go as low as 1
     # at night when low levels are actually needed" — darkness is what disarms the cutoff,
     # and a room with no ambience floor of its own still gets that. Pinned by
     # test_the_cutoff_drops_out_below_the_threshold_but_zero_is_still_off.
-    l3_armed = ambience_open
+    lux_dark = ambience_threshold(effective_lux, data.ambience_open, house)
+    l3_armed = ambience_open or lux_dark
     ls_armed = mode is Mode.NIGHT
     if is_stairway:
         cutoff = 0 if (ls_armed or source in ("night", "sunrise", "sunset")) else light.clamp_min

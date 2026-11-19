@@ -1348,3 +1348,54 @@ def test_house_wide_sunset_leaves_the_stairway_on_its_safety_curve(light):
     stairs = RoomSettings(name="Stairway")
     got = solve(house_curve, stairs, light, _input(lux=0.0, sunset_progress=1.0, occupied=True))
     assert got.source != "sunset"
+
+
+def test_closed_ambient_gate_does_not_arm_daytime_cutoff_in_the_dark(light):
+    """⚠️ Regression, 2026-11-19: closing input_boolean.ambient_gate sets ambience_resolved=False,
+    which must suppress unoccupied L3 ambience WITHOUT re-arming min_cutoff at 0 lx.
+    With min_cutoff=100 and evening brightness_timeline=90 at 21:41, occupied rooms stay lit.
+    """
+    evening_house = HouseSettings(
+        min_cutoff=100,
+        ambience_start_lux=80.0,
+        ambience_stop_lux=90.0,
+        ambience_level=51,
+        ambience_ignores_occupancy=True,
+        brightness_timeline=(
+            SplinePoint(0.0, 68.0),
+            SplinePoint(3.3833333333333333, 69.0),
+            SplinePoint(8.5, 233.0),
+            SplinePoint(17.0, 240.0),
+            SplinePoint(23.133333333333333, 65.0),
+        ),
+    )
+    bedroom = RoomSettings(name="Bedroom", ambience_level=51)
+
+    # 1. Dark (0 lx) + gate closed + occupied -> cutoff disarmed, room stays at 90
+    occ_dark = solve(
+        evening_house,
+        bedroom,
+        light,
+        _input(lux=0.0, occupied=True, clock_hour=21.683, ambience_resolved=False),
+    )
+    assert occ_dark.level == 90
+    assert dict(occ_dark.trace)["cutoff_armed"] is False
+
+    # 2. Dark (0 lx) + gate closed + unoccupied -> L3 ambience remains suppressed (0)
+    unocc_dark = solve(
+        evening_house,
+        bedroom,
+        light,
+        _input(lux=0.0, occupied=False, clock_hour=21.683, ambience_resolved=False),
+    )
+    assert unocc_dark.level == 0
+
+    # 3. Daylight (500 lx) + gate closed + occupied -> cutoff IS armed and zeroes weak (<100) demand
+    occ_day = solve(
+        evening_house,
+        replace(bedroom, bias_stops=-1.0),
+        light,
+        _input(lux=500.0, occupied=True, clock_hour=14.0, ambience_resolved=False),
+    )
+    assert occ_day.level == 0
+    assert dict(occ_day.trace)["cutoff_armed"] is True
