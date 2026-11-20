@@ -21,6 +21,8 @@ const HELP = {
     "Room-specific offset in photographic stops. Uses Exposure Envelope arithmetic: +EV both shifts the room's turn-on lux threshold upward (turning lights on sooner) and boosts dimmed evening schedule levels toward 254.",
   thresholdStops:
     "Permanent room threshold offset in photographic stops (-3 to +6 EV). Divides outdoor lux by 2^EV before evaluating the Lux Curve and Ambience Gate (+1 EV = half window light, +2 EV = quarter window light for north-facing rooms) without altering midnight brightness.",
+  blindsClosed:
+    "When checked, Solace assumes 0 lx for this room (100% daylight deficit demand, bypassing outdoor lux, threshold offset, and sunny override) while still following the 24h brightness schedule, biases, and modes.",
   zoneBias:
     "Sub-zone offset within a room in photographic stops, added on top of Room Bias.",
   ambience:
@@ -252,6 +254,26 @@ export class SolTabLighting extends LitElement {
         color: var(--sol-text-2);
         cursor: pointer;
         accent-color: var(--sol-amber);
+      }
+      .blinds-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        margin-top: 9px;
+      }
+      .blinds-check {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        font-size: 12.5px;
+        color: var(--sol-text-2);
+        cursor: pointer;
+        accent-color: var(--sol-amber);
+      }
+      .blinds-badge {
+        font-size: 11px;
+        color: var(--sol-amber);
       }
 
       .bias-row {
@@ -698,7 +720,15 @@ export class SolTabLighting extends LitElement {
     const threshKey = this.key(room.subentry_id, "threshold_stops");
     const threshVal =
       Math.round(this.local(threshKey, Number(room.settings.threshold_stops ?? 0)) * 20) / 20;
-    const effLux = Math.round((this.snap.world.lux ?? 0) / Math.pow(2, threshVal));
+    const blindsClosed = Boolean(
+      this.local(
+        this.key(room.subentry_id, "blinds_closed"),
+        Number(room.settings.blinds_closed ?? 0)
+      )
+    );
+    const effLux = blindsClosed
+      ? 0
+      : Math.round((this.snap.world.lux ?? 0) / Math.pow(2, threshVal));
     const zoneKey = this.key(room.subentry_id, "zone_bias_stops");
     const zone = this.local(zoneKey, Number(room.settings.zone_bias_stops ?? 0));
 
@@ -882,15 +912,19 @@ export class SolTabLighting extends LitElement {
                   <span class="eyebrow">Mode</span>
                   <span class="v">${room.mode ?? "—"}</span>
                 </div>
-                ${isStairway
-                  ? html`<span class="chip-note" title="Stairway log2-lux eye-adaptation range">
-                      Eye curve ${Math.min(occMinVal, occMaxVal)}–${Math.max(occMinVal, occMaxVal)} lvl
+                ${blindsClosed
+                  ? html`<span class="chip-note" title="Blinds closed — room assumes 0 lx">
+                      Blinds closed · 0 lx
                     </span>`
-                  : threshVal !== 0
-                    ? html`<span class="chip-note" title="Threshold offset active">
-                        Threshold ${stopLabel(threshVal)}
+                  : isStairway
+                    ? html`<span class="chip-note" title="Stairway log2-lux eye-adaptation range">
+                        Eye curve ${Math.min(occMinVal, occMaxVal)}–${Math.max(occMinVal, occMaxVal)} lvl
                       </span>`
-                    : nothing}
+                    : threshVal !== 0
+                      ? html`<span class="chip-note" title="Threshold offset active">
+                          Threshold ${stopLabel(threshVal)}
+                        </span>`
+                      : nothing}
               </div>`}
 
           <!-- Primary Everyday Control: Room Bias (Exposure Envelope) -->
@@ -906,6 +940,25 @@ export class SolTabLighting extends LitElement {
             ></sol-slider>
             <span class="readout tab-num">${stopLabel(bias)}</span>
             <span class="cons">${consequence(room.level, gamma)}</span>
+          </div>
+
+          <div class="blinds-row">
+            <label class="blinds-check">
+              <input
+                type="checkbox"
+                .checked=${blindsClosed}
+                @change=${(e: Event) =>
+                  this.pushRoom(
+                    room.subentry_id,
+                    "blinds_closed",
+                    (e.target as HTMLInputElement).checked ? 1 : 0,
+                    true
+                  )}
+              />
+              <span>Blinds closed</span>
+              <sol-help .text=${HELP.blindsClosed}></sol-help>
+            </label>
+            ${blindsClosed ? html`<span class="blinds-badge tab-num">Assuming 0 lx</span>` : nothing}
           </div>
 
           <!-- Disclosure Drawer Toggle -->

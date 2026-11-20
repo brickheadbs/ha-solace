@@ -455,12 +455,21 @@ def solve(
     trace: list[tuple[str, object]] = []
 
     is_stairway = "stair" in room.name.lower()
-    effective_lux = max(0.0, data.lux / (2.0 ** room.threshold_stops))
-    if abs(room.threshold_stops) > 1e-9:
-        trace.append(("threshold_stops", room.threshold_stops))
-        trace.append(("effective_lux", round(effective_lux, 2)))
+    if room.blinds_closed:
+        effective_lux = 0.0
+        trace.append(("blinds_closed", True))
+        trace.append(("effective_lux", 0.0))
+    else:
+        effective_lux = max(0.0, data.lux / (2.0 ** room.threshold_stops))
+        if abs(room.threshold_stops) > 1e-9:
+            trace.append(("threshold_stops", room.threshold_stops))
+            trace.append(("effective_lux", round(effective_lux, 2)))
 
-    sunny_override = house.sunny_override_lux > 0 and data.lux >= house.sunny_override_lux
+    sunny_override = (
+        not room.blinds_closed
+        and house.sunny_override_lux > 0
+        and data.lux >= house.sunny_override_lux
+    )
     effective_cloud = 0.0 if sunny_override else data.cloud_coverage
     if sunny_override:
         trace.append(("sunny_override_raw_lux", True))
@@ -471,7 +480,11 @@ def solve(
         data.clock_hour,
         house,
         cloud_coverage=effective_cloud,
-        demand_override=data.demand_override if abs(room.threshold_stops) <= 1e-9 else None,
+        demand_override=(
+            data.demand_override
+            if (not room.blinds_closed and abs(room.threshold_stops) <= 1e-9)
+            else None
+        ),
     )
     trace.extend(master.trace)
 

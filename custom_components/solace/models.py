@@ -339,6 +339,7 @@ class RoomSettings:
     name: str = "Room"
     bias_stops: float = 0.0
     threshold_stops: float = 0.0
+    blinds_closed: bool = False
     zone_bias_stops: float = 0.0
     diminish_stops: float = 0.0
     diminish_pct: float = 40.0

@@ -380,6 +380,7 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
             name=subentry.title,
             bias_stops=float(data.get("bias_stops", 0.0)),
             threshold_stops=threshold_stops,
+            blinds_closed=bool(data.get("blinds_closed", False)),
             zone_bias_stops=float(data.get("zone_bias_stops", 0.0)),
             diminish_stops=float(data.get("diminish_stops", 0.0)),
             diminish_pct=float(data.get("diminish_pct", 40.0 if data.get("diminish_stops", 0.0) <= 0 and "diminish_pct" not in data else data.get("diminish_pct", 0.0))),
@@ -733,7 +734,11 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
             )
 
             is_stairway = "stair" in subentry.title.lower() or "stair" in settings.name.lower()
-            room_lux = max(0.0, lux / (2.0 ** settings.threshold_stops))
+            room_lux = (
+                0.0
+                if settings.blinds_closed
+                else max(0.0, lux / (2.0 ** settings.threshold_stops))
+            )
             if is_stairway:
                 room.ambience_open = False
             elif self._gate_override is not None:
@@ -1491,10 +1496,14 @@ class SolaceCoordinator(DataUpdateCoordinator[dict[str, RoomState]]):
         asleep = self._asleep()
         for subentry in self._subentries():
             room_settings = self.room_settings(subentry)
-            room_eff_lux = max(0.0, lux / (2.0 ** room_settings.threshold_stops))
+            room_eff_lux = (
+                0.0
+                if room_settings.blinds_closed
+                else max(0.0, lux / (2.0 ** room_settings.threshold_stops))
+            )
             room_master = (
                 master
-                if abs(room_settings.threshold_stops) <= 1e-9
+                if (not room_settings.blinds_closed and abs(room_settings.threshold_stops) <= 1e-9)
                 else solve_master(
                     room_eff_lux,
                     clock_hour,

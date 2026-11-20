@@ -1549,3 +1549,28 @@ def test_ambient_button_only_controls_l3_independent_of_daylight_cutoff(light):
     assert on_amb.level == 51
     assert on_amb.source == "ambience"
     assert ("ambience_replaces_cutoff", 51) in on_amb.trace
+
+
+def test_blinds_closed_assumes_zero_lux(house, light):
+    """Checking blinds_closed forces effective_lux to 0.0 (demand=1.0), bypassing outdoor lux,
+    threshold_stops, sunny_override_lux, and house-level demand_override.
+    """
+    h = replace(house, sunny_override_lux=4500.0, min_cutoff=48)
+    open_room = RoomSettings(name="Bedroom", blinds_closed=False)
+    closed_room = RoomSettings(name="Bedroom", blinds_closed=True)
+    dark_open_room = RoomSettings(name="Bedroom", blinds_closed=False)
+
+    bright_input = _input(lux=10_000.0, occupied=True, clock_hour=14.0, demand_override=0.0)
+    dark_input = _input(lux=0.0, occupied=True, clock_hour=14.0)
+
+    res_open = solve(h, open_room, light, bright_input)
+    res_closed = solve(h, closed_room, light, bright_input)
+    res_dark = solve(h, dark_open_room, light, dark_input)
+
+    assert res_open.demand == 0.0
+    assert res_open.level == 0
+    assert res_closed.demand == 1.0
+    assert res_closed.level == res_dark.level
+    assert ("blinds_closed", True) in res_closed.trace
+    assert ("effective_lux", 0.0) in res_closed.trace
+    assert ("sunny_override_raw_lux", True) not in res_closed.trace

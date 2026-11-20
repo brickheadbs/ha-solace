@@ -220,6 +220,7 @@ HOUSE_SETTINGS: tuple[Setting, ...] = (
 ROOM_SETTINGS: tuple[Setting, ...] = (
     Setting("bias_stops", "Room bias", -4, 4, 0.05, 0, "stops", "mdi:tune", scope="room"),
     Setting("threshold_stops", "Threshold offset", -3, 6, 0.05, 0, "stops", "mdi:brightness-auto", scope="room"),
+    Setting("blinds_closed", "Blinds closed", 0, 1, 1, 0, None, "mdi:blinds-horizontal-closed", scope="room"),
     Setting("zone_bias_stops", "Zone bias", -4, 4, 0.05, 0, "stops", "mdi:tune", scope="room"),
     Setting("diminish_stops", "Diminish stops", 0, 4, 0.05, 0, "stops", "mdi:arrow-down-circle", scope="room"),
     Setting("diminish_pct", "Diminish", 0, 100, 1, 40, "%", "mdi:arrow-down-circle", scope="room"),

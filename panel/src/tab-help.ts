@@ -350,6 +350,10 @@ export class SolTabHelp extends LitElement {
           .join(", ");
         return parts || "0 stops";
       }
+      case "blinds_closed": {
+        const closed = rooms.filter((r) => Boolean(Number(r.settings.blinds_closed ?? 0))).map((r) => r.name);
+        return closed.length ? closed.join(", ") : "All open";
+      }
       case "bias_stops":
         return `House ${stopLabel(h.bias_stops ?? 0)}`;
       case "min_cutoff":

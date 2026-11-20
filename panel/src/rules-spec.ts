@@ -151,6 +151,7 @@ export const TRACKED_HOUSE_KEYS: readonly string[] = [
 export const TRACKED_ROOM_KEYS: readonly string[] = [
   "bias_stops",
   "threshold_stops",
+  "blinds_closed",
   "zone_bias_stops",
   "diminish_stops",
   "diminish_pct",
@@ -176,9 +177,9 @@ export const PIPELINE_STAGES: readonly PipelineStage[] = [
   {
     step: 2,
     title: "Room Threshold",
-    formula: "eff_lux = outdoor_lux / 2^(threshold_stops)",
-    summary: "+EV divides perceived outdoor lux so shaded/north rooms cross the turn-on curve earlier.",
-    keys: ["threshold_stops"],
+    formula: "blinds_closed ? 0 : outdoor_lux / 2^(threshold_stops)",
+    summary: "+EV divides perceived outdoor lux so shaded/north rooms cross the turn-on curve earlier. Checking 'Blinds closed' overrides effective lux to 0 lx for that room (ignoring outdoor sun and sunny_override_lux).",
+    keys: ["threshold_stops", "blinds_closed"],
   },
   {
     step: 3,
@@ -290,6 +291,13 @@ export const CUTOFFS_AND_CLAMPS: readonly CutoffRule[] = [
     key: "threshold_stops",
     rule: "Divides outdoor lux by 2^EV (-3..+6 stops). +2 EV in Bedroom makes 800 lx outdoor read as 200 lx so lights turn on sooner.",
     exemptions: "Applies before Lux Curve and Ambience Gate; does not alter 0-lux midnight ceiling.",
+  },
+  {
+    name: "Blinds Closed",
+    scope: "Room",
+    key: "blinds_closed",
+    rule: "Per-room checkbox on the Lighting page. When checked, Solace assumes 0 lx for that room (100% daylight deficit demand, bypassing threshold_stops and sunny_override_lux).",
+    exemptions: "Affects only the checked room; still obeys 24h brightness schedule, Exposure Envelope bias, Sleep/Away/Manual modes, and per-light clamps.",
   },
   {
     name: "Exposure Envelope Bias",
