@@ -8,7 +8,7 @@
  *   - Outside (calibrated exterior temperature, solar clamp indicator, lux/elevation)
  *   - Forecast (12h precipitation + 6-day Met Eireann forecast)
  *   - Refrigerator (24h sparkline + 1-5 C safety alarm band, unconditionally visible)
- *   - Running now (Washing machine + Pixel Watch smart plug power cycle)
+ *   - Running now (Eufy Omni C20 robot vacuum + Pixel Watch smart plug power cycle)
  */
 
 import { LitElement, css, html, nothing, svg } from "lit";
@@ -37,6 +37,13 @@ const LOCK_ENTITY = "lock.aqara_smart_lock_u200";
 const LOCK_BATTERY = "sensor.aqara_smart_lock_u200_battery";
 const LEAVING_BUTTON = "input_button.leaving_soon";
 const LEAVING_PENDING = "input_boolean.leaving_pending";
+
+const VACUUM = "vacuum.living_room_eufy_omni_c20";
+const VACUUM_BATTERY = "sensor.living_room_eufy_omni_c20_battery";
+const VACUUM_TASK = "sensor.living_room_eufy_omni_c20_task_status";
+const VACUUM_AREA = "sensor.living_room_eufy_omni_c20_cleaning_area";
+const VACUUM_TIME = "sensor.living_room_eufy_omni_c20_cleaning_time";
+const VACUUM_ACTIVE = ["cleaning", "returning", "paused", "error"];
 
 const BATH_TEMP = "sensor.bathroom_temperature";
 const OFFICE_TEMP = "sensor.office_temperature";
@@ -1349,18 +1356,16 @@ export class SolTabHome extends LitElement {
 
   /* 7. Running Now Card */
   private renderRunningNow() {
-    const isWasherRunning =
-      this.hass.states["input_boolean.washing_machine_running"]?.state === "on";
-    const washerProgram = this.hass.states["sensor.washing_machine_program"]?.state ?? "Cotton 40°";
-    const washerPhase = this.hass.states["sensor.washing_machine_current_phase"]?.state ?? "Idle";
-    const washerProgress = parseFloat(
-      this.hass.states["sensor.washing_machine_progress"]?.state ?? "0"
-    );
-    const washerRemaining =
-      this.hass.states["sensor.washing_machine_time_remaining"]?.state ?? "—";
-    const washerPower = parseFloat(
-      this.hass.states["sensor.washing_machine_current_power"]?.state ?? "0"
-    );
+    const vacState = this.hass.states[VACUUM]?.state ?? "unavailable";
+    const isVacuumActive = VACUUM_ACTIVE.includes(vacState);
+    const vacBattery = parseFloat(this.hass.states[VACUUM_BATTERY]?.state ?? "");
+    const vacTask = this.hass.states[VACUUM_TASK]?.state ?? "";
+    const vacArea = parseFloat(this.hass.states[VACUUM_AREA]?.state ?? "");
+    const vacTime = parseFloat(this.hass.states[VACUUM_TIME]?.state ?? "");
+    const vacLabel = vacState.charAt(0).toUpperCase() + vacState.slice(1);
+    const vacIdleText = Number.isFinite(vacBattery)
+      ? `${vacState} · ${Math.round(vacBattery)}%`
+      : vacState;
     const deskPower = parseFloat(
       this.hass.states["sensor.desk_outlet_power"]?.state ?? ""
     );
@@ -1384,7 +1389,7 @@ export class SolTabHome extends LitElement {
     const chargeCutoff = cycleCutoff > 0 ? cycleCutoff : defaultCutoff;
     const isCharging = chargerPower > chargeCutoff;
 
-    if (!isWasherRunning && !isCharging) {
+    if (!isVacuumActive && !isCharging) {
       return html`
         <div class="idle-strip">
           ${Number.isFinite(deskPower)
@@ -1418,37 +1423,46 @@ export class SolTabHome extends LitElement {
             <ha-icon icon="mdi:watch"></ha-icon>
             Charger <b>${chargerPower.toFixed(1)} W</b>
           </span>
+          <span class="idle-sep"></span>
+          <span class="idle-item">
+            <ha-icon icon="mdi:robot-vacuum"></ha-icon>
+            Vacuum <b>${vacIdleText}</b>
+          </span>
         </div>
       `;
     }
 
-    const washer = isWasherRunning
+    const vacColour = vacState === "error" ? "#ef5350" : "var(--sol-cyan)";
+    const vacuum = isVacuumActive
       ? html`
           <div class="card-wrap" style="padding-bottom: 26px;">
             <div class="bar-track">
               <div
                 class="bar-fill"
-                style="width: ${Math.min(100, Math.max(5, washerProgress))}%;"
+                style="width: ${Math.min(100, Math.max(5, Number.isFinite(vacBattery) ? vacBattery : 0))}%;"
               ></div>
             </div>
             <div class="c-head">
-              <ha-icon icon="mdi:washing-machine" style="color: var(--sol-cyan);"></ha-icon>
-              <span class="c-title">Washing Machine</span>
+              <ha-icon icon="mdi:robot-vacuum" style="color: ${vacColour};"></ha-icon>
+              <span class="c-title">Robot Vacuum</span>
               <span class="grow"></span>
-              <span class="c-status">${washerProgram}</span>
+              <span class="c-status">${vacTask}</span>
             </div>
             <div class="c-body">
               <div class="c-main">
-                <div class="run-phase">${washerPhase}</div>
+                <div class="run-phase" style="color: ${vacColour};">${vacLabel}</div>
                 <div class="high-low" style="margin-top: 8px; padding-top: 0;">
-                  ${Math.round(washerProgress)}% · remaining ${washerRemaining}
+                  ${Number.isFinite(vacArea) ? `${Math.round(vacArea)} m²` : "—"} ·
+                  ${Number.isFinite(vacTime) ? `${Math.round(vacTime)} min` : "—"}
                 </div>
               </div>
               <div class="small-grid c-side">
-                <span class="sg-k">Remaining</span>
-                <span class="sg-v" style="color: var(--sol-cyan);">${washerRemaining}</span>
-                <span class="sg-k">Draw</span>
-                <span class="sg-v">${Math.round(washerPower)} W</span>
+                <span class="sg-k">Battery</span>
+                <span class="sg-v" style="color: var(--sol-cyan);">
+                  ${Number.isFinite(vacBattery) ? `${Math.round(vacBattery)}%` : "—"}
+                </span>
+                <span class="sg-k">Area</span>
+                <span class="sg-v">${Number.isFinite(vacArea) ? `${Math.round(vacArea)} m²` : "—"}</span>
               </div>
             </div>
           </div>
@@ -1456,8 +1470,8 @@ export class SolTabHome extends LitElement {
       : html`
           <div class="idle-strip">
             <span class="idle-item">
-              <ha-icon icon="mdi:washing-machine"></ha-icon>
-              Washing machine <b>idle</b>
+              <ha-icon icon="mdi:robot-vacuum"></ha-icon>
+              Vacuum <b>${vacIdleText}</b>
             </span>
           </div>
         `;
@@ -1507,7 +1521,7 @@ export class SolTabHome extends LitElement {
           </div>
         `;
 
-    return html`<div class="g2-run">${washer}${charging}</div>`;
+    return html`<div class="g2-run">${vacuum}${charging}</div>`;
   }
 
   private renderCameraCard() {
