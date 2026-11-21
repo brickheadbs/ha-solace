@@ -266,6 +266,7 @@ export interface Hass {
   callApi?<T>(method: string, path: string, parameters?: object): Promise<T>;
   themes?: { darkMode?: boolean };
   language?: string;
+  dockedSidebar?: "docked" | "always_hidden" | "auto";
 }
 
 export const subscribe = (hass: Hass, cb: (snap: Snapshot) => void) =>

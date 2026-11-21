@@ -72,9 +72,41 @@ export class SolacePanel extends LitElement {
         padding: 0 18px;
         box-sizing: border-box;
       }
+      .menu-btn {
+        all: unset;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 40px;
+        height: 40px;
+        margin-left: -8px;
+        border-radius: 50%;
+        color: var(--sol-text-1);
+        flex-shrink: 0;
+      }
+      .menu-btn:hover {
+        background: var(--sol-control);
+      }
+      .menu-btn:focus-visible {
+        outline: 2px solid var(--sol-cyan);
+        outline-offset: 2px;
+      }
+      .menu-btn ha-icon {
+        --mdc-icon-size: 24px;
+      }
       .bar ha-icon.brand {
         --mdc-icon-size: 22px;
         color: var(--sol-text-3);
+      }
+      @media (max-width: 600px) {
+        .bar {
+          padding: 0 12px;
+          gap: 8px;
+        }
+        .reorder-toggle .reorder-label {
+          display: none;
+        }
       }
       h1 {
         margin: 0;
@@ -394,12 +426,34 @@ export class SolacePanel extends LitElement {
     }
   }
 
+  private toggleSidebar() {
+    this.dispatchEvent(
+      new CustomEvent("hass-toggle-menu", {
+        bubbles: true,
+        composed: true,
+      })
+    );
+  }
+
   render() {
     const canReorder = this.tab === "home" || this.tab === "lighting";
+    const showMenu = this.narrow || this.hass?.dockedSidebar === "always_hidden";
     return html`
       <header>
         <div class="bar">
-          <ha-icon class="brand" icon="mdi:tune"></ha-icon>
+          ${showMenu
+            ? html`
+                <button
+                  class="menu-btn"
+                  type="button"
+                  aria-label="Open Home Assistant menu"
+                  title="Open Home Assistant menu"
+                  @click=${() => this.toggleSidebar()}
+                >
+                  <ha-icon icon="mdi:menu"></ha-icon>
+                </button>
+              `
+            : html`<ha-icon class="brand" icon="mdi:tune"></ha-icon>`}
           <h1>Solace</h1>
           ${canReorder
             ? html`
@@ -409,7 +463,7 @@ export class SolacePanel extends LitElement {
                   title="Drag or use arrows to reorder cards"
                 >
                   <ha-icon icon=${this.reorderMode ? "mdi:check" : "mdi:drag"}></ha-icon>
-                  ${this.reorderMode ? "Done ordering" : "Reorder cards"}
+                  <span class="reorder-label">${this.reorderMode ? "Done ordering" : "Reorder cards"}</span>
                 </button>
               `
             : nothing}
