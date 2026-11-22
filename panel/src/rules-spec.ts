@@ -477,6 +477,14 @@ export const HOUSE_AUTOMATIONS: readonly AutomationStrip[] = [
   },
   {
     group: "Lighting & Presence",
+    name: "House Brightness (Google voice)",
+    entityId: "light.solace_house_brightness",
+    trigger: "Google Home via Matter Hub (or any HA light call): brightness, on, off",
+    guard: "Brightness maps 1-255 to House bias -2..+2 stops (half = neutral); the engine keeps following the sun",
+    action: "Writes bias_stops; Off sets every room's Manual level to 0 (manual hold applies); On releases rooms back to Solace",
+  },
+  {
+    group: "Lighting & Presence",
     name: "Away: Stop Nest Music",
     entityId: "automation.away_stop_music_on_nest_speakers",
     trigger: "Away mode turns on, or any Nest speaker/display/All Speakers group starts playing",
