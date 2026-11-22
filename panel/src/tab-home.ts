@@ -35,6 +35,7 @@ const LOCK_ENTITY = "lock.aqara_smart_lock_u200";
 const LOCK_BATTERY = "sensor.aqara_smart_lock_u200_battery";
 const LEAVING_BUTTON = "input_button.leaving_soon";
 const LEAVING_PENDING = "input_boolean.leaving_pending";
+const HUB_MAX_CAMERA = "camera.living_room_nest_hub_max_camera";
 
 const VACUUM = "vacuum.living_room_eufy_omni_c20";
 const VACUUM_BATTERY = "sensor.living_room_eufy_omni_c20_battery";
@@ -1467,15 +1468,16 @@ export class SolTabHome extends LitElement {
 
   private renderCameraCard() {
     if (!this.hass) return nothing;
-    const streaming = this.hass.states["switch.kitchen_kitchen_streaming"]?.state === "on";
-    if (!streaming) return nothing;
-    const camera = this.hass.states["camera.kitchen_kitchen"];
-    if (!camera) return nothing;
+    // Official Google Nest (SDM) has no camera on/off switch, so the card follows Away mode,
+    // matching the old nest_legacy behaviour (camera streamed only while away).
+    if (this.hass.states["input_boolean.away_mode"]?.state !== "on") return nothing;
+    const camera = this.hass.states[HUB_MAX_CAMERA];
+    if (!camera || camera.state === "unavailable") return nothing;
 
     const openCamera = () => {
       this.dispatchEvent(
         new CustomEvent("hass-more-info", {
-          detail: { entityId: "camera.kitchen_kitchen" },
+          detail: { entityId: HUB_MAX_CAMERA },
           bubbles: true,
           composed: true,
         })
@@ -1486,7 +1488,7 @@ export class SolTabHome extends LitElement {
       <div class="card-wrap cam-card">
         <div class="c-head">
           <ha-icon icon="mdi:video" style="color: var(--sol-cyan);"></ha-icon>
-          <span class="c-title">${camera.attributes.friendly_name || "Kitchen Camera"}</span>
+          <span class="c-title">${camera.attributes.friendly_name || "Hub Max Camera"}</span>
           <span class="grow"></span>
           <button
             class="btn-pill"
