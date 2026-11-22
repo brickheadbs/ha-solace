@@ -7,7 +7,6 @@
  *   - Inside (indoor average temperature, room sensors, 24h sparkline — retired Nest HVAC removed)
  *   - Outside (calibrated exterior temperature, solar clamp indicator, lux/elevation)
  *   - Forecast (12h precipitation + 6-day Met Eireann forecast)
- *   - Refrigerator (24h sparkline + 1-5 C safety alarm band, unconditionally visible)
  *   - Running now (Eufy Omni C20 robot vacuum + Pixel Watch smart plug power cycle)
  */
 
@@ -30,7 +29,6 @@ const SPARK_ANCHOR = 0.66;
 const LUX = "sensor.entry_exterior_illuminance";
 const INSIDE_TEMP = "sensor.indoor_temperature_average";
 const OUTSIDE_TEMP = "sensor.entry_exterior_temperature";
-const FRIDGE_TEMP = "sensor.refrigerator_temperature_temperature";
 const WEATHER = "weather.forecast_home";
 
 const LOCK_ENTITY = "lock.aqara_smart_lock_u200";
@@ -66,11 +64,7 @@ const TRACKED = [
   BEDROOM_TEMP,
   BATH_TEMP,
   ENTRY_TEMP,
-  FRIDGE_TEMP,
 ];
-
-const FRIDGE_COLD = 1;
-const FRIDGE_WARM = 5;
 
 const WEATHER_ICON: Record<string, string> = {
   "clear-night": "mdi:weather-night",
@@ -1301,59 +1295,6 @@ export class SolTabHome extends LitElement {
     `;
   }
 
-  /* 6. Refrigerator Card (unconditionally visible) */
-  private renderFridgeCard() {
-    const fridgeTempState = this.hass.states[FRIDGE_TEMP];
-    const currentTemp = parseFloat(fridgeTempState?.state ?? "");
-
-    const tooCold = !isNaN(currentTemp) && currentTemp <= FRIDGE_COLD;
-    const tooWarm = !isNaN(currentTemp) && currentTemp >= FRIDGE_WARM;
-    const alertClass = tooCold ? "alert-cold" : tooWarm ? "alert-warm" : "";
-    const colour = tooCold ? "var(--sol-amber)" : tooWarm ? "#ef5350" : "#81d4fa";
-
-    const spark = this.spark(FRIDGE_TEMP, { minSpan: 2 });
-
-    return html`
-      <div class="card-wrap">
-        <div class="c-head">
-          <ha-icon icon="mdi:fridge" style="color: ${colour};"></ha-icon>
-          <span class="c-title">Refrigerator</span>
-          <span class="grow"></span>
-          ${tooCold || tooWarm
-            ? html`
-                <span class="alert-tag ${alertClass}">
-                  <ha-icon
-                    icon=${tooCold ? "mdi:snowflake-alert" : "mdi:thermometer-alert"}
-                    style="--mdc-icon-size: 15px;"
-                  ></ha-icon>
-                  ${tooCold ? "too cold" : "too warm"}
-                </span>
-              `
-            : html`<span class="c-status">in range</span>`}
-        </div>
-
-        <div class="c-body">
-          <div class="c-main">
-            <div class="big-val ${alertClass}">
-              ${isNaN(currentTemp) ? "—" : currentTemp.toFixed(1)}<span class="unit">°</span>
-            </div>
-          </div>
-          <div class="small-grid c-side">
-            <span class="sg-k">Safe band</span>
-            <span class="sg-v">${FRIDGE_COLD}–${FRIDGE_WARM}°</span>
-            <span class="sg-k">Battery</span>
-            <span class="sg-v">
-              ${this.hass.states["sensor.refrigerator_temperature_battery"]?.state ?? "—"}%
-            </span>
-          </div>
-        </div>
-
-        ${this.renderHighLow(spark, "°")}
-        ${this.renderBand("fridge", spark, colour)}
-      </div>
-    `;
-  }
-
   /* 7. Running Now Card */
   private renderRunningNow() {
     const vacState = this.hass.states[VACUUM]?.state ?? "unavailable";
@@ -1582,9 +1523,6 @@ export class SolTabHome extends LitElement {
       { id: "inside", label: "Inside", render: () => this.renderInsideCard() },
       { id: "outside", label: "Outside", render: () => this.renderOutsideCard() },
       { id: "weather", label: "Forecast", render: () => this.renderWeatherCard() },
-      ...(this.hass.states[FRIDGE_TEMP]
-        ? [{ id: "fridge", label: "Refrigerator", render: () => this.renderFridgeCard() }]
-        : []),
       { id: "running", label: "Running Now", fullSpan: true, render: () => this.renderRunningNow() },
     ];
 

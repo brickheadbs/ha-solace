@@ -476,6 +476,14 @@ export const HOUSE_AUTOMATIONS: readonly AutomationStrip[] = [
     action: "Toggles input_boolean.away_mode (and 5G/6G Flint 4 radio eco sync)",
   },
   {
+    group: "Lighting & Presence",
+    name: "Away: Stop Nest Music",
+    entityId: "automation.away_stop_music_on_nest_speakers",
+    trigger: "Away mode turns on, or any Nest speaker/display/All Speakers group starts playing",
+    guard: "input_boolean.away_mode is on",
+    action: "media_player.media_stop on Kitchen pair, Bedroom pair, Entryway display, Living Room display and All Speakers",
+  },
+  {
     group: "Appliances & Safety",
     name: "Watch Charger Auto-Cutoff",
     entityId: "script.start_charge_cycle_from_button_data",
@@ -485,11 +493,11 @@ export const HOUSE_AUTOMATIONS: readonly AutomationStrip[] = [
   },
   {
     group: "Appliances & Safety",
-    name: "Refrigerator Excursion",
-    entityId: "automation.refrigerator_temperature_out_of_range",
-    trigger: "Fridge <= 1.0 C or >= 5.0 C for 30m",
-    guard: "Debounced against door openings",
-    action: "Flags Home card in amber/red + sends mobile alert",
+    name: "Robot Vacuum Nightly Clean",
+    entityId: "automation.vacuum_nightly_sweep_and_mop_at_23_00",
+    trigger: "23:00 daily",
+    guard: "Eufy Omni C20 docked (C20 has no off-peak charging, so the run is timed to finish and recharge overnight)",
+    action: "Sets Cleaning Mode to Vacuum and mop, waits 5s, then vacuum.start (whole-house auto clean); shown live in Home > Running now",
   },
   {
     group: "Appliances & Safety",
