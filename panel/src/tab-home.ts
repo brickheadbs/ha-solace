@@ -36,6 +36,7 @@ const LOCK_BATTERY = "sensor.aqara_smart_lock_u200_battery";
 const LEAVING_BUTTON = "input_button.leaving_soon";
 const LEAVING_PENDING = "input_boolean.leaving_pending";
 const HUB_MAX_CAMERA = "camera.living_room_nest_hub_max_camera";
+const PERSON_ENTITY = "person.brandon_schuster";
 
 const VACUUM = "vacuum.living_room_eufy_omni_c20";
 const VACUUM_BATTERY = "sensor.living_room_eufy_omni_c20_battery";
@@ -872,6 +873,10 @@ export class SolTabHome extends LitElement {
     const batt = this.hass.states[LOCK_BATTERY]?.state;
     const leavingPending = this.hass.states[LEAVING_PENDING]?.state === "on";
     const awayActive = !!this.snap.world.away;
+    // person.brandon_schuster follows Traccar only (since 2026-11-22), the prime Away signal.
+    const personState = this.hass.states[PERSON_ENTITY]?.state;
+    const personLabel =
+      personState === "home" ? "Home" : personState === "not_home" ? "Out" : personState ?? "—";
     const chargerWatts = parseFloat(
       this.hass.states["sensor.bedroom_smart_plug_power_consumption"]?.state ?? "0"
     );
@@ -921,6 +926,8 @@ export class SolTabHome extends LitElement {
             <span class="sg-v">${batt && batt !== "unavailable" ? `${batt}%` : "—"}</span>
             <span class="sg-k">House presence</span>
             <span class="sg-v">${awayActive ? "Away" : "Home"}</span>
+            <span class="sg-k">You (Traccar)</span>
+            <span class="sg-v">${personLabel}</span>
             <span class="sg-k">Watch plug</span>
             <span class="sg-v">${chargerWatts.toFixed(1)} W</span>
           </div>
