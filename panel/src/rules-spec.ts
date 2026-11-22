@@ -471,7 +471,7 @@ export const HOUSE_AUTOMATIONS: readonly AutomationStrip[] = [
     group: "Lighting & Presence",
     name: "Away Arm / Disarm",
     entityId: "automation.away_arm_on_departure",
-    trigger: "U200 Keypad Lock (30s interior check) OR Traccar person away 3m with U200 locked; re-checks on lock, Wi-Fi leave, vacuum docked 3m, interior clear 2m",
+    trigger: "Traccar person away 1m with U200 locked (lock source is not reported over Matter, so a lock alone cannot tell leaving from returning); re-checks on lock, Wi-Fi leave, vacuum docked 3m, interior clear 2m",
     guard: "Traccar (person.brandon_schuster) is the prime presence metric; phone must be off SchuSecure Wi-Fi; mmWave interior presence is ignored while the Eufy C20 cleans or for 3m after docking (also for the entry-sensor disarm). Disarms on U200 unlock, SchuSecure Wi-Fi return or Traccar home",
     action: "Toggles input_boolean.away_mode (and 5G/6G Flint 4 radio eco sync)",
   },
