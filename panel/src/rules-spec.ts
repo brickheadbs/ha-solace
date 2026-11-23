@@ -501,11 +501,11 @@ export const HOUSE_AUTOMATIONS: readonly AutomationStrip[] = [
   },
   {
     group: "Appliances & Safety",
-    name: "Robot Vacuum Nightly Clean",
+    name: "Robot Vacuum Nightly Clean (per-day plan)",
     entityId: "automation.vacuum_nightly_sweep_and_mop_at_23_00",
-    trigger: "23:00 daily",
-    guard: "Eufy Omni C20 docked (C20 has no off-peak charging, so the run is timed to finish and recharge overnight)",
-    action: "Sets Cleaning Mode to Vacuum and mop, waits 5s, then vacuum.start (whole-house auto clean); shown live in Home > Running now",
+    trigger: "Daily at Robot clean start time (input_datetime.robot_clean_start_time, 01:00)",
+    guard: "Eufy Omni C20 docked, and that day's plan (input_select.robot_clean_<weekday>) is not Off. The day is the calendar day of the run (01:00 Tuesday = Monday night)",
+    action: "Sets Cleaning Mode to the day's plan (Vacuum / Vacuum and mop / Mopping after sweeping / Mop), waits 5s, then vacuum.start (whole-house auto clean); plan edited on the Main dashboard > Nightly clean plan; shown live in Home > Running now",
   },
   {
     group: "Appliances & Safety",
